@@ -351,6 +351,12 @@ class OpenAICompatClient:
                 "chat_json: response_format rejected ({}); retrying without it",
                 exc.response.status_code,
             )
+        except httpx.RequestError as exc:
+            # Network-level failure (timeout, connection refused, ...) — the
+            # retry uses the same endpoint so it won't help here, but we still
+            # fall through to the shared "return {} on total failure" path
+            # below instead of letting this escape uncaught.
+            logger.debug("chat_json: request failed ({}); retrying without response_format", exc)
 
         # Retry without response_format, best-effort extract first JSON block.
         body.pop("response_format", None)
