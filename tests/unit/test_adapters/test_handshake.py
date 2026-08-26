@@ -1,6 +1,11 @@
-"""Tests for the Handshake adapter's card parsing and pagination."""
+"""Tests for the Handshake adapter's card parsing, pagination, and login flow."""
 
 from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
+
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from job_sentinel.adapters.sites.handshake import (
     SEL_EMPLOYER,
@@ -11,6 +16,9 @@ from job_sentinel.adapters.sites.handshake import (
     HandshakeAdapter,
 )
 from job_sentinel.config.settings import ScraperSettings
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class _El:
@@ -65,8 +73,97 @@ class _Page:
         pass
 
 
+class _LoginPage:
+    """Minimal page double for exercising login()'s two branches."""
+
+    def __init__(self, redirect_to_login: bool) -> None:
+        self.url = (
+            "https://app.joinhandshake.com/users/sign_in"
+            if redirect_to_login
+            else "https://app.joinhandshake.com/stu/postings"
+        )
+        self.filled: dict[str, str] = {}
+        self.clicked = False
+        self.waited_urls: list[str] = []
+        self.waited_states: list[str] = []
+
+    def goto(self, url: str, wait_until: str = "") -> None:
+        pass
+
+    def fill(self, selector: str, value: str) -> None:
+        self.filled[selector] = value
+
+    def click(self, selector: str) -> None:
+        self.clicked = True
+        self.url = "https://app.joinhandshake.com/stu/postings"
+
+    def wait_for_url(self, pattern: str, timeout: int = 0) -> None:
+        self.waited_urls.append(pattern)
+
+    def wait_for_load_state(self, state: str, timeout: int = 0) -> None:
+        self.waited_states.append(state)
+
+
 def _adapter() -> HandshakeAdapter:
     return HandshakeAdapter(ScraperSettings())
+
+
+def _stub_settings(monkeypatch: pytest.MonkeyPatch, jobs_url: str) -> None:
+    settings = SimpleNamespace(
+        portal=SimpleNamespace(
+            jobs_url=jobs_url, username="student@utdallas.edu", password="hunter2"
+        )
+    )
+    monkeypatch.setattr("job_sentinel.config.settings.get_settings", lambda: settings)
+
+
+def test_login_submits_credentials_when_redirected_to_sign_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_settings(monkeypatch, "https://app.joinhandshake.com/stu/postings")
+    page = _LoginPage(redirect_to_login=True)
+
+    _adapter().login(page)
+
+    assert page.filled["input[type='email'], input[name='email']"] == "student@utdallas.edu"
+    assert page.filled["input[type='password']"] == "hunter2"
+    assert page.clicked is True
+    assert page.waited_urls == ["*joinhandshake.com/stu*"]
+    assert page.waited_states == ["networkidle"]
+
+
+def test_login_skips_credentials_when_already_authenticated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_settings(monkeypatch, "https://app.joinhandshake.com/stu/postings")
+    page = _LoginPage(redirect_to_login=False)
+
+    _adapter().login(page)
+
+    assert page.filled == {}
+    assert page.clicked is False
+    assert page.waited_states == ["networkidle"]
+
+
+def test_scrape_page_returns_empty_list_when_no_cards_appear() -> None:
+    class _TimeoutPage(_Page):
+        def wait_for_selector(self, selector: str, timeout: int = 0) -> None:
+            raise PlaywrightTimeoutError("timed out waiting for job cards")
+
+    assert _adapter().scrape_page(_TimeoutPage([])) == []
+
+
+def test_scrape_page_skips_card_that_raises_during_parsing() -> None:
+    class _BrokenCard(_Card):
+        def query_selector(self, selector: str):
+            if selector == "a":
+                raise RuntimeError("boom")
+            return super().query_selector(selector)
+
+    good = _Card("/jobs/11111111", "Good Posting", "Acme", "Remote")
+    bad = _BrokenCard("/jobs/22222222", "Bad Posting", "Acme", "Remote")
+    jobs = _adapter().scrape_page(_Page([bad, good]))
+    assert [j.posting_id for j in jobs] == ["11111111"]
 
 
 def test_parses_cards_with_job_ids() -> None:
