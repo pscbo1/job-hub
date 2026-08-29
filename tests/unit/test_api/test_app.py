@@ -66,18 +66,77 @@ def test_jobs_empty_without_db(tmp_path: Path) -> None:
 
 
 def test_jobs_listed_and_status_updated(tmp_path: Path) -> None:
-    _seed_db(tmp_path, JobPosting(posting_id="job-9", title="SWE", employer="ACME"))
+    from job_sentinel.core.models import Job, JobStatus
+    from job_sentinel.db.repository import JobRepository
+
+    db = tmp_path / "j.db"
+    repo = JobRepository(db)
+    stored = repo.upsert_job(
+        Job(source="zhaopin", source_job_id="CC1", title="SWE", company="ACME", location="Beijing")
+    )
+    repo.close()
     client = _client(tmp_path)
 
     jobs = client.get("/api/jobs").json()
-    assert any(j["posting_id"] == "job-9" for j in jobs)
+    assert any(j["id"] == stored.id for j in jobs)
+    assert jobs[0]["status"] is None
 
+    upd = client.patch(f"/api/jobs/{stored.id}", json={"status": "applied"})
+    assert upd.status_code == 200
+    assert upd.json()["status"] == JobStatus.APPLIED.value
+
+    again = client.get("/api/jobs").json()
+    assert again[0]["status"] == "applied"
+
+    cleared = client.patch(f"/api/jobs/{stored.id}", json={"status": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["status"] is None
+
+    bad = client.patch(f"/api/jobs/{stored.id}", json={"status": "under_study"})
+    assert bad.status_code == 422
+
+    missing = client.patch("/api/jobs/ghost", json={"status": "saved"})
+    assert missing.status_code == 404
+
+
+def test_jobs_since_filter(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from job_sentinel.core.models import Job
+    from job_sentinel.db.repository import JobRepository
+
+    repo = JobRepository(tmp_path / "j.db")
+    repo.upsert_job(
+        Job(
+            source="zhaopin",
+            source_job_id="old",
+            title="Old",
+            discovered_at=datetime(2026, 8, 1, tzinfo=UTC),
+        )
+    )
+    repo.upsert_job(
+        Job(
+            source="zhaopin",
+            source_job_id="new",
+            title="New",
+            discovered_at=datetime(2026, 8, 25, tzinfo=UTC),
+        )
+    )
+    repo.close()
+    client = _client(tmp_path)
+    assert len(client.get("/api/jobs").json()) == 2
+    filtered = client.get("/api/jobs", params={"since": "2026-08-20"}).json()
+    assert [j["source_job_id"] for j in filtered] == ["new"]
+    assert client.get("/api/jobs", params={"since": "not-a-date"}).status_code == 422
+
+
+def test_legacy_posting_status_still_works(tmp_path: Path) -> None:
+    _seed_db(tmp_path, JobPosting(posting_id="job-9", title="SWE", employer="ACME"))
+    client = _client(tmp_path)
     upd = client.post("/api/jobs/job-9/status", json={"status": "applied"})
     assert upd.status_code == 200
     assert upd.json()["status"] == "applied"
-
-    missing = client.post("/api/jobs/ghost/status", json={"status": "applied"})
-    assert missing.status_code == 404
+    assert client.get("/api/jobs").json() == []
 
 
 def test_tailor_reports_coverage(tmp_path: Path) -> None:

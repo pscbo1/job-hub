@@ -16,7 +16,7 @@ import {
   getDocuments,
   getJobs,
   getSources,
-  type JobPosting,
+  type HubJob,
   type JobSourceStatus,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -30,17 +30,10 @@ const STAGES: ApplicationStage[] = [
   "archived",
 ];
 
-function daysLeft(deadline: string): number | null {
-  if (!deadline) return null;
-  const t = Date.parse(deadline);
-  if (Number.isNaN(t)) return null;
-  return Math.ceil((t - Date.now()) / 86_400_000);
-}
-
 export default function DashboardPage() {
   const [stats, setStats] = useState<Record<string, number>>({});
   const [apps, setApps] = useState<Application[]>([]);
-  const [jobs, setJobs] = useState<JobPosting[]>([]);
+  const [jobs, setJobs] = useState<HubJob[]>([]);
   const [docs, setDocs] = useState<GeneratedDocument[]>([]);
   const [sources, setSources] = useState<JobSourceStatus[]>([]);
   const [analytics, setAnalytics] = useState<ApplicationAnalytics | null>(null);
@@ -81,11 +74,7 @@ export default function DashboardPage() {
 
   const total = stats.total ?? 0;
   const active = (stats.applied ?? 0) + (stats.interviewing ?? 0);
-  const deadlines = jobs
-    .map((j) => ({ j, d: daysLeft(j.deadline) }))
-    .filter((x) => x.d !== null && x.d >= 0 && x.d <= 21)
-    .sort((a, b) => (a.d ?? 0) - (b.d ?? 0))
-    .slice(0, 6);
+  const deadlines: { j: HubJob; d: number }[] = [];
   const recentApps = [...apps]
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .slice(0, 5);
@@ -241,9 +230,9 @@ export default function DashboardPage() {
           ) : (
             <ul className="mt-3 space-y-2">
               {deadlines.map(({ j, d }) => (
-                <li key={j.posting_id} className="flex items-center justify-between gap-3 text-sm">
+                <li key={j.id} className="flex items-center justify-between gap-3 text-sm">
                   <span className="min-w-0 truncate text-ink">
-                    {j.title} <span className="text-muted">· {j.employer}</span>
+                    {j.title} <span className="text-muted">· {j.company}</span>
                   </span>
                   <span
                     className={cn(

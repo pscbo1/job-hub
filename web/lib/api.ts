@@ -172,9 +172,46 @@ export function getProfile(): Promise<Profile | null> {
   return getJSON<Profile | null>("/api/profile", null);
 }
 
-export function getJobs(limit = 20): Promise<JobPosting[]> {
-  if (demo.DEMO) return Promise.resolve(demo.demoJobs.slice(0, limit));
-  return getJSON<JobPosting[]>(`/api/jobs?limit=${limit}`, []);
+export type HubJobStatus = "saved" | "to_do" | "applied" | "closed" | "reference";
+
+export interface HubJob {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  source: string;
+  job_url: string;
+  published_at: string | null;
+  discovered_at: string;
+  status: HubJobStatus | null;
+  match_score: number | null;
+  salary?: string;
+  description?: string;
+}
+
+export function getJobs(limit = 50, since?: string): Promise<HubJob[]> {
+  if (demo.DEMO) return Promise.resolve(demo.demoHubJobs.slice(0, limit));
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (since) q.set("since", since);
+  return getJSON<HubJob[]>(`/api/jobs?${q.toString()}`, []);
+}
+
+export async function patchHubJobStatus(
+  jobId: string,
+  status: HubJobStatus | null,
+): Promise<HubJob | null> {
+  if (demo.DEMO) return { id: jobId, title: "", company: "", location: "", source: "", job_url: "", published_at: null, discovered_at: "", status, match_score: null };
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as HubJob;
+  } catch {
+    return null;
+  }
 }
 
 export async function tailorResume(jobDescription: string): Promise<TailorResult | null> {

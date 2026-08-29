@@ -1,7 +1,7 @@
 // Minimal offline app-shell cache. Never touches /api/* — local data must always
 // come from the live FastAPI backend, not a stale cache.
-const CACHE_NAME = "sentinel-shell-v1";
-const SHELL_URLS = ["/", "/jobs", "/offline"];
+const CACHE_NAME = "sentinel-shell-v2";
+const SHELL_URLS = ["/", "/offline"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -30,7 +30,7 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (response.ok) {
+        if (response.ok && request.destination !== "document") {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         }

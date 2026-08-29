@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,7 +27,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from job_sentinel.api.chat import ChatMessage, ChatReply
 from job_sentinel.api.chat import answer as chat_answer
@@ -37,7 +38,9 @@ from job_sentinel.core.models import (
     ApplicationStatus,
     DocumentKind,
     GeneratedDocument,
+    Job,
     JobPosting,
+    JobStatus,
 )
 from job_sentinel.documents.match import MatchResult, match_profile_to_job
 from job_sentinel.documents.tailor import KeywordTailor, TailorResult
@@ -106,6 +109,19 @@ class BuildRequest(BaseModel):
 
 class StatusRequest(BaseModel):
     status: ApplicationStatus
+
+
+class HubJobStatusRequest(BaseModel):
+    """V0 Job Pool status. ``null`` clears the field (unset)."""
+
+    status: JobStatus | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _blank_status(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
 
 
 class ChatRequest(BaseModel):
@@ -220,6 +236,24 @@ def _summary(p: Profile) -> ProfileSummary:
         awards=len(p.awards),
         publications=len(p.publications),
     )
+
+
+def _parse_since(value: str | None) -> datetime | None:
+    """Parse ``YYYY-MM-DD`` or ISO datetime as UTC start bound."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            return datetime.fromisoformat(text).replace(tzinfo=UTC)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid since timestamp") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def create_app(
@@ -366,20 +400,35 @@ def create_app(
     def profile_summary() -> ProfileSummary:
         return _summary(load_profile(profile_path))
 
-    @app.get("/api/jobs", response_model=list[JobPosting])
-    def list_jobs(limit: int = 20) -> list[JobPosting]:
+    @app.get("/api/jobs", response_model=list[Job])
+    def list_jobs(limit: int = 50, since: str | None = None) -> list[Job]:
+        """Job Pool: canonical ``jobs`` rows (not legacy ``job_postings``)."""
         from job_sentinel.db.repository import JobRepository
 
-        if not db_path.is_file():
-            return []
+        since_dt = _parse_since(since)
         repo = JobRepository(db_path)
         try:
-            return repo.get_recent_jobs(limit=limit)
+            return repo.list_hub_jobs(limit=limit, since=since_dt)
         finally:
             repo.close()
 
+    @app.patch("/api/jobs/{job_id}", response_model=Job)
+    def patch_hub_job(job_id: str, req: HubJobStatusRequest) -> Job:
+        """Update Job Pool status only. Null clears status."""
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            job = repo.update_hub_job_status(job_id, req.status)
+        finally:
+            repo.close()
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return job
+
     @app.post("/api/jobs/{posting_id}/status", response_model=JobPosting)
     def set_job_status(posting_id: str, req: StatusRequest) -> JobPosting:
+        """Legacy portal ``job_postings`` status (12twenty watcher)."""
         from job_sentinel.db.repository import JobRepository
 
         if not db_path.is_file():

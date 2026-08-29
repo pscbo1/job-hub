@@ -434,6 +434,36 @@ class JobRepository:
         )
         return _hub_job_from_row(dict(rows[0])) if rows else None
 
+    def list_hub_jobs(self, *, limit: int = 100, since: datetime | None = None) -> list[Job]:
+        """Job Pool rows, newest ``discovered_at`` first."""
+        capped = max(1, min(limit, 500))
+        if since is None:
+            rows = self._table(_JOBS_TABLE).rows_where(
+                order_by="discovered_at DESC",
+                limit=capped,
+            )
+        else:
+            rows = self._table(_JOBS_TABLE).rows_where(
+                "discovered_at >= ?",
+                [since.isoformat()],
+                order_by="discovered_at DESC",
+                limit=capped,
+            )
+        return [_hub_job_from_row(dict(r)) for r in rows]
+
+    def update_hub_job_status(self, job_id: str, status: JobStatus | None) -> Job | None:
+        """Set lifecycle status. ``None`` clears it. Does not touch ingest fields."""
+        if self.get_hub_job(job_id) is None:
+            return None
+        self._table(_JOBS_TABLE).update(
+            job_id,
+            {
+                "status": None if status is None else status.value,
+                "updated_at": _now_iso(),
+            },
+        )
+        return self.get_hub_job(job_id)
+
     def find_fingerprint_candidates(
         self,
         fingerprint: str,

@@ -11,6 +11,7 @@ import type {
   Application,
   AuthStatus,
   GeneratedDocument,
+  HubJob,
   JobPosting,
   JobSourceStatus,
   LlmStatus,
@@ -140,6 +141,35 @@ export const demoJobs: JobPosting[] = [
   }),
   job("4", "adzuna", "Platform Engineer", "Datadog", "New York, NY", { salary_text: "$130k–$170k" }),
   job("5", "arbeitnow", "Full-Stack Engineer", "Supabase", "Remote (EU)", { remote: true }),
+];
+
+export const demoHubJobs: HubJob[] = [
+  {
+    id: "demo-hub-1",
+    title: "用户研究专家（骑手生态）",
+    company: "北京三快在线科技有限公司",
+    location: "北京",
+    source: "zhaopin",
+    job_url: "http://www.zhaopin.com/jobdetail/CC383625320J40878294709.htm",
+    published_at: null,
+    discovered_at: "2026-08-25T00:00:00Z",
+    status: null,
+    match_score: null,
+    salary: "面议",
+  },
+  {
+    id: "demo-hub-2",
+    title: "用户产品经理",
+    company: "美团",
+    location: "北京-望京",
+    source: "liepin",
+    job_url: "https://www.liepin.com/job/1985138523.shtml",
+    published_at: null,
+    discovered_at: "2026-08-25T00:00:00Z",
+    status: "saved",
+    match_score: null,
+    salary: "23-50k·15薪",
+  },
 ];
 
 let counter = 1000;
