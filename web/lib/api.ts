@@ -886,6 +886,40 @@ export async function updateSourcesConfig(
   }
 }
 
+export interface IngestResult {
+  raw_inserted: number;
+  jobs_created: number;
+  jobs_updated: number;
+  invalid: number;
+  skipped: number;
+  errors: string[];
+}
+
+/** Import mcp-jobs / collector JSON into jobs_raw then jobs. No UI yet. */
+export async function ingestJobs(payload: unknown): Promise<IngestResult | null> {
+  if (demo.DEMO) {
+    return {
+      raw_inserted: 0,
+      jobs_created: 0,
+      jobs_updated: 0,
+      invalid: 0,
+      skipped: 0,
+      errors: [],
+    };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/ingest/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as IngestResult;
+  } catch {
+    return null;
+  }
+}
+
 /** Search for jobs across enabled (or specified) sources. Results are ephemeral. */
 export async function searchJobs(query: JobQuery): Promise<SearchResponse | null> {
   if (demo.DEMO) return demo.demoSearch;

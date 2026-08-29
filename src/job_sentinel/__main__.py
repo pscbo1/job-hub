@@ -187,6 +187,46 @@ def scrape(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ingest — mcp-jobs export / collector JSON → jobs_raw → jobs
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def ingest(
+    path: Path = typer.Argument(  # noqa: B008
+        ...,
+        exists=True,
+        readable=True,
+        help="mcp-jobs *-raw.json, JSONL, contract JSON, or a directory of those files",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id", help="Optional collection-run id"),
+) -> None:
+    """Import collector output into jobs_raw then upsert normalized jobs."""
+    from job_sentinel.db.repository import JobRepository
+    from job_sentinel.ingestion.mcp_jobs import load_ingest_file
+    from job_sentinel.ingestion.pipeline import ingest_records
+
+    records = load_ingest_file(path)
+    if not records:
+        console.print("[yellow]No collector records found in[/]", path)
+        raise typer.Exit(code=1)
+
+    repo = JobRepository(_DEFAULT_DB)
+    try:
+        result = ingest_records(repo, records, run_id=run_id)
+    finally:
+        repo.close()
+
+    console.print(
+        f"[green]✓ Ingest[/] raw={result.raw_inserted} "
+        f"created={result.jobs_created} updated={result.jobs_updated} "
+        f"invalid={result.invalid}"
+    )
+    for err in result.errors:
+        console.print(f"[yellow]{err}[/]")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # serve — local HTTP API (backend for the web UI)
 # ─────────────────────────────────────────────────────────────────────────────
 

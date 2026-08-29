@@ -395,6 +395,21 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"Posting {posting_id} not found")
         return job
 
+    @app.post("/api/ingest/jobs")
+    def ingest_collector_jobs(payload: dict[str, Any] | list[Any]) -> dict[str, Any]:
+        """Accept mcp-jobs / contract JSON and write jobs_raw then jobs."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.mcp_jobs import parse_ingest_payload
+        from job_sentinel.ingestion.pipeline import ingest_records
+
+        records = parse_ingest_payload(payload)
+        repo = JobRepository(db_path)
+        try:
+            result = ingest_records(repo, records)
+        finally:
+            repo.close()
+        return result.model_dump()
+
     @app.get("/api/stats")
     def db_stats() -> dict[str, int]:
         """Counts per tracking status — the UI twin of `job-sentinel db stats`."""

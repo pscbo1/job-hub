@@ -473,6 +473,13 @@ class JobRepository:
         )
         return [_job_raw_from_row(dict(r)) for r in rows]
 
+    def mark_job_raw_processed(self, raw_id: str, *, job_id: str) -> None:
+        """Link a raw row to the upserted pool job after a successful normalize."""
+        self._table(_JOBS_RAW_TABLE).update(
+            raw_id,
+            {"job_id": job_id, "processed_at": _now_iso(), "validation_state": "valid"},
+        )
+
     # ─────────────────────────────────────────────────────────────────────
     # Read operations
     # ─────────────────────────────────────────────────────────────────────
