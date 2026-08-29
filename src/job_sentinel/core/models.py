@@ -19,6 +19,7 @@ Design note — why Pydantic v2 here instead of plain dataclasses?
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -49,6 +50,33 @@ class ApplicationStatus(StrEnum):
     APPLIED = "applied"  # User marked as applied (/applied command)
     IGNORED = "ignored"  # User dismissed (/ignore command)
     CLOSED = "closed"  # No longer visible on the portal
+
+
+class JobStatus(StrEnum):
+    """V0 Job Pool lifecycle. ``None`` in the DB means unset (new ingest)."""
+
+    SAVED = "saved"
+    TO_DO = "to_do"
+    APPLIED = "applied"
+    CLOSED = "closed"
+    REFERENCE = "reference"
+
+
+def compute_job_fingerprint(company: str, title: str, location: str) -> str:
+    """SHA-1 of normalized ``company|title|location`` (index helper, not unique)."""
+    parts = (
+        " ".join(company.split()).lower(),
+        " ".join(title.split()).lower(),
+        " ".join(location.split()).lower(),
+    )
+    payload = "|".join(parts)
+    return hashlib.sha1(payload.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+def source_job_id_from_canonical_url(canonical_url: str) -> str:
+    """Stable fallback when a source does not provide ``source_job_id``."""
+    digest = hashlib.sha1(canonical_url.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return f"url:{digest}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,6 +191,65 @@ class JobPosting(BaseModel):
         )
 
     model_config = {"frozen": False}  # allow touch() mutations
+
+
+class Job(BaseModel):
+    """Canonical V0 job-pool row (table ``jobs``). Independent of ``JobPosting``."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    source: str = Field(..., min_length=1)
+    source_job_id: str = Field(default="")
+    job_url: str = Field(default="")
+    canonical_url: str = Field(default="")
+    title: str = Field(default="")
+    company: str = Field(default="")
+    location: str = Field(default="")
+    description: str = Field(default="")
+    employment_type: str = Field(default="")
+    salary: str = Field(default="")
+    published_at: datetime | None = Field(default=None)
+    discovered_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    fingerprint: str = Field(default="")
+    status: JobStatus | None = Field(default=None)
+    match_score: float | None = Field(default=None)
+    market: str = Field(default="")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _blank_status_is_none(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    model_config = {"frozen": False}
+
+
+class JobRaw(BaseModel):
+    """Append-only raw ingest row (table ``jobs_raw``)."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    source: str = Field(..., min_length=1)
+    source_job_id: str | None = Field(default=None)
+    source_url: str = Field(default="")
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    validation_state: str = Field(default="valid")
+    validation_reasons: list[str] = Field(default_factory=list)
+    collected_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    processed_at: datetime | None = Field(default=None)
+    job_id: str | None = Field(default=None)
+    run_id: str | None = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("source_job_id", mode="before")
+    @classmethod
+    def _blank_source_job_id(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    model_config = {"frozen": False}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

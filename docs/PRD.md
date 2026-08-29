@@ -1,0 +1,1174 @@
+# Job Hub｜求职信息聚合与执行 Web App
+
+> PRD & Implementation Baseline  
+> Version: V0.1  
+> Date: 2026-08-30  
+> Status: Ready for implementation  
+> Owner: Product Owner  
+> Implementation partner: Cursor
+
+---
+
+## 0. 文档用途
+
+本文件是 Job Hub 的产品与开发基线。产品目标、V0 范围、字段语义、技术边界、验收标准与交付顺序均以本文件为准。
+
+长期维护分工：
+
+- `docs/PRD.md`：产品逻辑、范围、页面、数据模型、技术架构、验收标准。
+- `AGENTS.md`：Cursor 的长期开发规则。
+- Google Sheet `Channel Sheet`：持续变化的渠道清单、搜索配置、验证状态与研究数据。
+- 本地 SQLite：V0 应用运行时数据；通过 repository interface 保留后续 PostgreSQL / Supabase 迁移能力。
+
+需求发生变化时，以当前版本为母版，只修改受影响章节，并同步检查字段、接口、页面、自动化与验收标准。
+
+---
+
+## 1. Product Summary
+
+Job Hub 是一个个人求职信息聚合与执行中心。它把分散在通用招聘平台、垂直渠道、公司官网、ATS、公开分享者和社群中的岗位，汇总成一个低噪音、可筛选、可追踪的 Job Pool。
+
+V0 核心链路：
+
+`Channel → Collection / Manual Import → jobs_raw → Normalize → Dedup → Rule Filter → Job Pool → Return to Source → Status / Next Step / Comment`
+
+V0 完成后，用户可以在一个页面完成四件事：
+
+1. 查看今天或某日期之后新增的岗位。
+2. 按 Market、Channel、Keyword、Status 筛选。
+3. 打开原始岗位页完成申请或沟通。
+4. 保存岗位状态、下一步、备注与 Reference。
+
+AI Match、Agent、完整 Trust Engine、自动投递和多轮沟通管理均作为后续独立模块。
+
+---
+
+## 2. Problem Statement
+
+### 2.1 信息发现
+
+求职信息分散在多个平台。来源具有不同的数据结构、更新时间、登录要求、申请入口和沟通方式。通用平台噪音较高，垂直渠道和公司官网缺少统一聚合。
+
+### 2.2 执行衔接
+
+发现岗位后，还需要判断来源、回到正确入口、记录是否推进以及下一动作。单独的采集脚本、表格和招聘网站无法形成稳定闭环。
+
+### 2.3 当前技术资产
+
+- 已有本地项目 `mcp-jobs`，已完成 BOSS、猎聘、智联的多页采集、去重、筛选和导出尝试。
+- 国内平台采集依赖本机浏览器、登录态或人工打开页面。
+- 已有 `Channel Sheet`，保存渠道、关键词、筛选条件、优先级与技术状态。
+- 已有 Job Hunting 岗位字段与状态语义，可作为迁移和兼容基线。
+
+---
+
+## 3. Goals
+
+### 3.1 V0 Goals
+
+1. 建立 CN / Global 共用的统一 Job 数据结构。
+2. 跑通至少一条真实 CN 采集链与 Manual Import。
+3. 支持规范化、去重、基础规则筛选和来源追溯。
+4. 建立可真实使用的 Job Pool。
+5. 支持回源申请、状态更新、Next Step、Comment 和 Reference。
+6. 采集失败、登录失效和基础来源异常可见。
+7. 保持 collector、pipeline、database 和 web app 松耦合。
+
+### 3.2 V0 Success Definition
+
+用户可以稳定完成：
+
+`发现真实岗位 → 查看新增 → 基础筛选 → 判断是否推进 → 回到原渠道 → 更新状态`
+
+完成该闭环后，V0 即可投入真实求职使用。
+
+---
+
+## 4. Non-goals
+
+以下内容不进入 V0：
+
+- Agent runtime 或自治求职 Agent。
+- AI Match、CV/JD 深度分析和批量评分。
+- Grok Cloud 或其他模型驱动的网页采集主链路。
+- 跨平台自动提交、一键申请、ATS Autofill。
+- 完整 Career Profile、简历版本和材料管理。
+- 独立 Application history、Communication CRM、Recruiter Inbox。
+- 自动发邮件、自动发送平台消息、自动 Follow-up。
+- 完整 Threat Intelligence、Risk Registry 和安全事件系统。
+- Channel Sheet 与数据库实时双向同步。
+- 同时接入全部 CN / Global 渠道。
+- 数据看板、投递漏斗和复杂统计。
+
+---
+
+## 5. Product Principles
+
+1. **Configurable first**：Market、Channel、采集方式、筛选规则和回源动作通过配置扩展。
+2. **Rules before AI**：地点、经验、外包、派遣和排除关键词先用确定性规则处理。
+3. **Raw before normalized**：原始数据与规范化数据分层保存，支持回溯和重新处理。
+4. **Return to source**：V0 将用户送到正确的原始入口完成申请和沟通。
+5. **Actionable first**：前台优先展示能产生下一动作的信息。
+6. **Idempotent automation**：重复运行不会制造大量重复岗位。
+7. **Visible failure**：采集失败、登录失效、验证码和页面变化必须留下状态与原因。
+8. **Human confirmation**：外部提交、发消息、付款和敏感信息操作保留人工确认。
+9. **Replaceable adapters**：每个 collector 可独立替换，平台逻辑不进入核心 pipeline。
+10. **One tracking source**：Web App 正式启用后，岗位状态只维护一份。
+
+---
+
+## 6. User and Usage Context
+
+### 6.1 Primary User
+
+单用户个人工具。V0 不设计团队、多租户、招聘方或管理员角色。
+
+### 6.2 Runtime Context
+
+- 开发：Windows 本地，Cursor。
+- 国内采集：本机 Python / Playwright，复用浏览器登录态。
+- Web App：本地运行；核心闭环稳定后再判断是否部署云端。
+- Database：V0 使用 SQLite WAL；schema 与 migration 纳入 Git。
+- Global public sources：后续通过 API、RSS、ATS adapter 或公开网页 collector 接入。
+
+### 6.3 Access Control
+
+- 本地开发阶段仅监听 localhost。
+- 部署公网前必须增加单用户登录或访问保护。
+- ingestion secret 与平台登录信息只允许出现在本机环境变量中。
+- collector 写入使用独立 ingestion secret，不暴露在浏览器。
+
+---
+
+## 7. V0 Scope
+
+### 7.1 Must Have
+
+| 模块 | V0 要求 |
+|---|---|
+| Market | 支持 `CN` 与 `GLOBAL`，共用 Job schema |
+| Channel | 从 Channel Sheet 手动导入或 seed 已启用渠道 |
+| Collection | 接通至少一条现有 CN collector；保留 Manual Import |
+| Raw Storage | 保存原始 payload、来源、采集时间与 run 信息 |
+| Normalize | 把不同来源映射到统一 Job schema |
+| Dedup | 同一岗位重复采集时只显示一条 Job，并保留多个来源 |
+| Rule Filter | 支持地点、职能、经验、外包/派遣、排除关键词 |
+| Job Pool | 支持 Today、Since Date、Market、Channel、Keyword、Status |
+| Tracking | 支持 Status、Favorite、Next Step、Comment、applied_at |
+| Return to Source | 支持 Open Source 与 Open Apply Page |
+| Reference | 保存不申请但值得学习的岗位和备注 |
+| Trust Gate | 来源可追溯、已知 Channel、基础 URL 检查、Review / Blocked |
+| Failure State | 显示 collector run 的成功、部分成功、失败和原因 |
+| Migration | 能导入现有岗位表的核心字段，不要求长期双写 |
+
+### 7.2 Should Have
+
+- 岗位详情侧栏或详情页。
+- 批量更新 Status。
+- 过滤原因可见。
+- collection run 最近一次状态可见。
+- CSV / JSONL 导入。
+- 响应式桌面界面。
+
+Should Have 不阻塞第一条端到端链路验收。
+
+### 7.3 Later
+
+- AI Match 与可解释评分。
+- Grok / LLM public-web collector adapter。
+- Global ATS adapters：Greenhouse、Lever、Ashby、Workable。
+- RSS、公众号、自托管 WeRSS / WeWe RSS adapter。
+- 独立 applications、communications、match_results。
+- 自动 Channel Sheet 同步。
+- 自动调度、通知和云端 collector。
+- 完整 Trust Engine。
+
+---
+
+## 8. Information Architecture
+
+V0 只建立三个产品表面：
+
+### 8.1 `/jobs`
+
+核心页面。包含：
+
+- Today / Since Date 切换。
+- Market、Channel、Keyword、Status 筛选。
+- 岗位列表或卡片。
+- Job detail drawer。
+- Favorite、Status、Next Step、Comment 编辑。
+- Open Source / Open Apply Page。
+- Manual Import 入口。
+
+### 8.2 `/sources`
+
+轻量来源与运行状态页。包含：
+
+- 已启用 Channel。
+- collection method。
+- last checked / last run。
+- success / partial / failed。
+- 错误原因和恢复提示。
+
+V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人工配置。
+
+### 8.3 `/review`
+
+只显示两类记录：
+
+- 基础 Trust Gate 需要人工确认的来源或岗位。
+- 去重结果存在明显歧义、无法安全自动合并的岗位。
+
+无待处理内容时保持空状态，不制造通知。
+
+---
+
+## 9. Job Pool UX Requirements
+
+### 9.1 Default View
+
+- 默认打开 `Today`。
+- 默认隐藏 `Closed`。
+- 默认排序：`published_at desc`；缺失时使用 `first_seen_at desc`。
+- 默认展示新采集且未关闭的岗位。
+
+### 9.2 Job Card
+
+每张卡片至少显示：
+
+- title
+- company
+- location
+- market
+- published_at 或 first_seen_at
+- primary channel
+- status
+- favorite
+- Next Step 摘要
+- Open Source
+
+### 9.3 Job Detail
+
+至少显示：
+
+- 完整 JD / description
+- requirements 原文或提取结果
+- 所有来源及链接
+- source published time / collected time
+- filter result 与 reasons
+- trust state 与 reasons
+- Status、Favorite、Next Step、Comment、applied_at
+
+### 9.4 Noise Control
+
+V0 不展示 profile views、已读未回、浏览量、收藏量和无明确动作价值的平台信号。
+
+---
+
+## 10. Job Lifecycle
+
+### 10.1 Status
+
+| Status | 语义 |
+|---|---|
+| `saved` | 用户已收入岗位池，尚未决定是否推进 |
+| `to_do` | 已决定推进，下一动作记录在 Next Step |
+| `applied` | 已提交申请，必须记录 applied_at |
+| `closed` | 当前机会不再需要动作，结果与有效信息保留在 Comment |
+| `reference` | 不进入当前申请流程，但值得保留为 JD、公司、岗位或技能参考 |
+
+新进入 Job Pool 的岗位默认 `NULL`（采集写入不赋生命周期状态）。采集过程不得覆盖已设置的 status。
+
+### 10.2 Favorite
+
+Favorite 是独立 boolean，只表达收藏，不承担生命周期语义。
+
+### 10.3 Closing Rule
+
+已投递约 14 天无推进且没有明确 Next Step 的岗位，可由用户触发批量 Closed。V0 不自动执行关闭。
+
+---
+
+## 11. Core User Flows
+
+### 11.1 Discover and Review
+
+1. 用户打开 `/jobs`。
+2. 系统显示 Today 或 Since Date 的新增岗位。
+3. 用户按 Market、Channel、Keyword、Status 过滤。
+4. 用户查看 Job detail 与来源。
+5. 用户更新 Favorite 或 Status，或直接打开原始页面。
+
+### 11.2 Apply
+
+1. 用户把岗位更新为 `To Do`，填写 Next Step。
+2. 用户点击 Open Apply Page 或 Open Source。
+3. 用户在原渠道完成申请。
+4. 用户返回 Job Hub，把状态改为 `Applied`。
+5. 系统自动写入 applied_at；用户可补充 Next Step 与 Comment。
+
+### 11.3 Reference
+
+1. 用户发现一个不准备申请但值得保留的岗位。
+2. 用户把状态改为 `Reference`。
+3. 用户在 Comment 中记录值得保留的 JD、公司、技能或行业信息。
+
+### 11.4 Manual Import
+
+1. 用户粘贴 URL、JD 文本或填写基础字段。
+2. 系统写入 `jobs_raw`。
+3. 系统执行 Normalize、Dedup、Rule Filter、Basic Trust Gate。
+4. 通过的记录进入 Job Pool；异常记录进入 Review。
+
+### 11.5 Collector Run
+
+1. 用户在本机运行现有 collector。
+2. collector 输出 canonical JSONL/JSON，或调用 ingestion endpoint。
+3. Job Hub 为本次运行创建 collection run。
+4. 数据逐条进入 `jobs_raw`，随后进入 pipeline。
+5. 页面显示 created、updated、deduplicated、filtered、review、failed 数量和错误摘要。
+
+---
+
+## 12. Channel Requirements
+
+### 12.1 Channel Registry Fields
+
+| Field | Type | Required | Meaning |
+|---|---|---:|---|
+| id | uuid | yes | 稳定标识 |
+| name | text | yes | 渠道名称 |
+| market | enum | yes | CN / GLOBAL |
+| channel_type | text | yes | platform / ats / career_page / rss / community / manual |
+| base_url | text | no | 渠道主页 |
+| collection_method | enum | yes | api / scrape / browser / manual |
+| application_mode | enum | yes | source / apply_page / email / platform_message / manual |
+| communication_mode | enum | yes | platform / email / contact / none / manual |
+| contact_entry | text | no | 邮箱、联系人或沟通入口 |
+| enabled | boolean | yes | 是否启用 |
+| trust_level | enum | yes | known / review / blocked |
+| verification_status | text | no | 验证状态 |
+| last_checked_at | timestamptz | no | 最后检查时间 |
+| config | jsonb | no | 关键词、地区、频率及渠道特有配置 |
+| notes | text | no | 备注 |
+
+### 12.2 Configuration Source
+
+- Channel Sheet 是人可编辑的配置与研究源。
+- V0 使用一次性或按需脚本把启用渠道导入数据库。
+- Web App 运行中读取数据库 `channels`。
+- V0 不实现数据库回写 Sheet。
+
+---
+
+## 13. Collection Architecture
+
+### 13.1 Runtime Units
+
+#### Job Hub repo
+
+负责：
+
+- Web App
+- database schema 与 migrations
+- ingestion contract
+- Manual Import
+- pipeline
+- Job Pool
+- 状态追踪
+
+#### Existing `mcp-jobs` repo
+
+负责：
+
+- BOSS、猎聘、智联的本机浏览器采集
+- 保留登录态和平台特殊逻辑
+- 把结果转换成 Job Hub ingestion contract
+
+V0 不复制或重写现有 collector。两个 repo 通过文件导入或 authenticated ingestion endpoint 连接。
+
+### 13.2 Collector Adapter Contract
+
+collector 输出的最小结构：
+
+```json
+{
+  "channel_key": "boss",
+  "market": "CN",
+  "source_job_id": "optional-platform-id",
+  "source_url": "https://...",
+  "application_url": "https://...",
+  "title": "职位名称",
+  "company": "公司名称",
+  "location": "地点原文",
+  "description": "JD 原文",
+  "requirements": "要求原文或 null",
+  "published_at": "2026-08-30T00:00:00+08:00",
+  "collected_at": "2026-08-30T09:00:00+08:00",
+  "raw_payload": {}
+}
+```
+
+要求：
+
+- `channel_key`、`market`、`source_url`、`title`、`collected_at` 必填。
+- collector 不负责最终去重与生命周期状态。
+- 解析失败的字段保留 null，原始 payload 保留。
+- 一条记录失败不终止整个 run。
+
+### 13.3 Ingestion Modes
+
+V0 支持：
+
+1. `Manual Import`：表单、JSON、JSONL 或 CSV。
+2. `Local File Import`：从 `mcp-jobs` 导出文件导入。
+3. `Authenticated POST`：collector 调用 `/api/ingest/jobs`。
+
+第一条 vertical slice 优先使用最容易跑通的模式。实现完成后保持同一 canonical contract。
+
+---
+
+## 14. Pipeline Requirements
+
+### 14.1 Pipeline Order
+
+`Validate → Store Raw → Normalize → Resolve Channel → Basic Trust Gate → Dedup → Rule Filter → Upsert Job → Link Sources → Record Run Result`
+
+### 14.2 Validation
+
+- 缺少必填字段：raw record 标记 invalid，并记录原因。
+- URL 无法解析：进入 Review 或 invalid。
+- 时间统一存 UTC，前台按用户时区显示。
+- 原始字符串不覆盖，规范化值另存。
+
+### 14.3 Normalization
+
+至少处理：
+
+- title trim 与空白规范化
+- company 名称 trim 与基础符号规范化
+- location 原文保留，并提取 country / city（可为空）
+- market 标准化为 CN / GLOBAL
+- published_at 与 collected_at 标准化
+- URL canonicalization，移除已知 tracking parameters
+- description 保留纯文本；允许同时保存安全清洗后的 HTML
+
+### 14.4 Dedup
+
+按确定性由高到低执行：
+
+1. 同一 Channel + source_job_id。
+2. canonical source_url。
+3. company_normalized + title_normalized + location_normalized + description_hash。
+4. company + title + location 的近似候选只进入 Review，不自动合并。
+
+去重结果：
+
+- `new_job`：创建 jobs。
+- `existing_job`：更新 last_seen_at，新增或更新 job_sources。
+- `review`：保留两条记录并进入 Review。
+
+### 14.5 Rule Filter
+
+V0 支持：
+
+- fields：title、company、location、description、market、channel。
+- operators：equals、contains、not_contains、in、regex。
+- actions：include、exclude、review。
+- priority：数字越小越先执行。
+
+每次过滤保存：
+
+- filter_state
+- matched_rule_ids
+- filter_reasons
+- filtered_at
+
+被 exclude 的岗位保留在数据库，默认 Job Pool 不显示。
+
+---
+
+## 15. Basic Trust Gate
+
+V0 只实现最小门槛：
+
+1. source_url 可解析。
+2. Channel 已知且 enabled。
+3. URL scheme 为 http / https。
+4. 域名与 Channel 配置明显不一致时进入 Review。
+5. Channel 标记 blocked 时阻止进入默认 Job Pool。
+6. redirect 或 URL 异常无法确认时进入 Review。
+
+状态：
+
+- `known`：进入后续 pipeline。
+- `review`：进入 `/review`，展示具体原因。
+- `blocked`：停止默认展示和自动执行。
+
+V0 不调用付费 Threat Intelligence provider，也不把“未发现异常”表达为安全保证。
+
+---
+
+## 16. Data Model
+
+### 16.1 `markets`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| code | text unique | CN / GLOBAL |
+| name | text | |
+| active | boolean | default true |
+| config | jsonb | market-specific defaults |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+### 16.2 `channels`
+
+字段见 12.1。`name + market` 建立唯一约束或稳定 `channel_key`。
+
+### 16.3 `collection_runs`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| channel_id | uuid FK | |
+| method | text | file / api / manual / browser |
+| status | text | running / success / partial / failed |
+| started_at | timestamptz | |
+| finished_at | timestamptz | nullable |
+| received_count | int | default 0 |
+| created_count | int | default 0 |
+| updated_count | int | default 0 |
+| deduped_count | int | default 0 |
+| excluded_count | int | default 0 |
+| review_count | int | default 0 |
+| failed_count | int | default 0 |
+| error_summary | text | nullable |
+| metadata | jsonb | runtime detail |
+
+### 16.4 `jobs_raw`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| collection_run_id | uuid FK | |
+| channel_id | uuid FK | |
+| source_job_id | text | nullable |
+| source_url | text | required |
+| raw_payload | jsonb | required |
+| validation_state | text | valid / invalid / review |
+| validation_reasons | jsonb | default [] |
+| collected_at | timestamptz | required |
+| processed_at | timestamptz | nullable |
+| created_at | timestamptz | |
+
+### 16.5 `jobs`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| title | text | required |
+| title_normalized | text | required |
+| company | text | nullable |
+| company_normalized | text | nullable |
+| location | text | nullable |
+| location_normalized | text | nullable |
+| country | text | nullable |
+| city | text | nullable |
+| market | text | CN / GLOBAL |
+| description_text | text | nullable |
+| description_html | text | sanitized, nullable |
+| requirements | text | nullable |
+| primary_source_url | text | required |
+| application_url | text | nullable |
+| published_at | timestamptz | nullable |
+| first_seen_at | timestamptz | required |
+| last_seen_at | timestamptz | required |
+| fingerprint | text | indexed |
+| status | text | lifecycle status |
+| favorite | boolean | default false |
+| next_step | text | nullable |
+| comment | text | nullable |
+| applied_at | timestamptz | nullable |
+| filter_state | text | included / excluded / review |
+| filter_reasons | jsonb | default [] |
+| trust_state | text | known / review / blocked |
+| trust_reasons | jsonb | default [] |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+Constraints：
+
+- status ∈ NULL / saved / to_do / applied / closed / reference。
+- status 变为 Applied 且 applied_at 为空时自动写入当前时间。
+- primary_source_url 必须对应至少一条 job_sources。
+
+### 16.6 `job_sources`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| job_id | uuid FK | cascade delete |
+| raw_job_id | uuid FK | nullable |
+| channel_id | uuid FK | |
+| source_job_id | text | nullable |
+| source_url | text | required |
+| canonical_url | text | required |
+| application_url | text | nullable |
+| published_at | timestamptz | nullable |
+| first_seen_at | timestamptz | |
+| last_seen_at | timestamptz | |
+| is_primary | boolean | default false |
+
+唯一约束优先使用：`channel_id + source_job_id`；缺少 source_job_id 时使用 `channel_id + canonical_url`。
+
+### 16.7 `filter_rules`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| market | text | CN / GLOBAL / ALL |
+| name | text | |
+| field | text | |
+| operator | text | |
+| value | jsonb | string or array |
+| action | text | include / exclude / review |
+| reason | text | user-facing explanation |
+| priority | int | |
+| active | boolean | |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+### 16.8 Deferred Tables
+
+V0 不创建或不启用：
+
+- match_results
+- applications
+- communications
+- job_events
+- risk_registry
+- security_events
+- career_profiles
+- materials
+
+---
+
+## 17. API Requirements
+
+### 17.1 Jobs
+
+- `GET /api/jobs`
+  - params：date_mode、since、market、channel、keyword、status、include_closed、page、page_size。
+- `GET /api/jobs/:id`
+  - 返回 job detail、sources、filter reasons、trust reasons。
+- `PATCH /api/jobs/:id`
+  - 仅允许更新 favorite、status、next_step、comment、applied_at。
+
+### 17.2 Ingestion
+
+- `POST /api/ingest/jobs`
+  - collector 批量提交 canonical records。
+  - 需要 ingestion secret。
+  - 返回 run_id 与每条 record 的结果。
+- `POST /api/import/manual`
+  - 接收 URL、JD 文本或基础字段。
+- `POST /api/import/file`
+  - 接收 JSON、JSONL 或 CSV。
+
+### 17.3 Sources and Runs
+
+- `GET /api/channels`
+- `GET /api/collection-runs`
+- `GET /api/collection-runs/:id`
+
+### 17.4 Review
+
+- `GET /api/review`
+- `POST /api/review/:entityType/:id/resolve`
+  - action：approve / keep_separate / block。
+
+---
+
+## 18. Technical Architecture
+
+### 18.1 Open-source Reuse Decision
+
+V0 不从空白脚手架开始。主实现基线采用 [Job Sentinel](https://github.com/harshitwandhare/job-sentinel)，固定到开始开发时确认的 commit，并在独立 `job-hub` repo 中保留上游来源与 MIT License。
+
+采用原因：
+
+- 产品链路已覆盖 source adapter、聚合搜索、岗位池、状态追踪、来源健康和本地 Web UI。
+- 技术结构为 Python / Playwright + FastAPI + Next.js，能直接承接现有 `mcp-jobs`。
+- 本地 SQLite WAL、repository、scheduler、错误隔离与单用户运行方式适合当前 V0。
+- 已有 HLD、LLD、Windows 安装脚本、Docker、类型检查和完整测试基础。
+- AI、简历、Telegram 和通知模块与核心层解耦，可以在 V0 禁用。
+
+主基线的使用方式：**fork and reduce**。保留成熟骨架，删减产品范围，并替换 Job 数据契约、状态语义、筛选规则和数据库 schema。
+
+辅助参考：
+
+- `Gsync/jobsync`：参考 Next.js + shadcn 的 tracking UI、自动发现后的 accept/dismiss 流程、Prisma migration 和端到端测试。
+- `DrJonoG/job_search`：参考多来源 adapter、后台搜索任务、Job Board、来源合并与去重。
+- `CareerPulse`：参考 `last_seen_at`、stale handling、状态时间线和直接申请链接。
+- `OpenPostings`：仅研究 ATS coverage 与接口设计；在确认许可证前不复制代码。
+
+### 18.2 Reuse Map
+
+| Upstream area | V0 action | Job Hub adaptation |
+|---|---|---|
+| `core/models.py` | Replace | 使用本 PRD 的 JobRaw、Job、JobSource、CollectionRun、FilterRule |
+| `adapters/base.py` | Reuse | 保留 login / scrape_page / next_page / bounded pagination 契约 |
+| `adapters/registry.py` | Reuse | Channel key 对应 adapter ID |
+| `sources/base.py` | Reuse | 加入 Market、Channel 与 canonical ingestion fields |
+| `sources/search.py` | Reuse | 继续隔离单来源失败，并返回 counts / source errors |
+| `db/repository.py` | Replace interface, reuse patterns | 使用自己的 schema、幂等 migration、WAL 与 human-state preservation |
+| `api/app.py` / `api/ops.py` | Reduce and adapt | 只保留 jobs、sources、runs、review、manual import、ingestion |
+| `web/` | Reduce and adapt | 保留 Next.js、typed API client、测试与 jobs UI 骨架 |
+| source health / run state | Reuse | 映射到 collection_runs 与 `/sources` |
+| scheduler | Optional V0 | 第一条链路可手动触发；稳定后启用 |
+| auth | Keep available | localhost 默认关闭；公网运行时启用 |
+| Telegram / email notifier | Disable | 不进入 V0 |
+| profile / documents / LLM / chat | Disable | 不进入 V0 |
+| application CRM | Disable | V0 使用 Job 上的 Status / Next Step / Comment |
+
+### 18.3 Fixed V0 Stack
+
+- Repository：独立本地 repo `job-hub`，基于 Job Sentinel 的固定 commit 建立。
+- Core language：Python 3.11+。
+- Backend：FastAPI。
+- Browser collection：Playwright / Chromium。
+- Frontend：Next.js App Router + TypeScript + Tailwind。
+- Database：SQLite WAL。
+- Repository / migration：保留可替换 repository interface；schema migration 幂等并纳入 Git。
+- Python package manager：`uv`。
+- Runtime validation：Pydantic。
+- Scheduling：APScheduler，第一条链路允许手动触发。
+- HTTP / retry：HTTPX + Tenacity。
+- Tests：pytest、mypy、ruff；前端 Vitest；最小 Playwright E2E。
+- Deployment：V0 本地运行。PostgreSQL / Supabase 与云端部署后置。
+- Domestic collectors：现有 Python / Playwright `mcp-jobs`。
+
+### 18.4 Component Boundary
+
+```text
+mcp-jobs / Manual Import
+        ↓ canonical ingestion contract
+FastAPI / Job Hub API
+        ↓
+jobs_raw → normalize → trust gate → dedup → rule filter
+        ↓
+SQLite jobs + job_sources + collection_runs
+        ↓
+Next.js /jobs → return to source → tracking updates
+```
+
+### 18.5 Suggested Repo Structure
+
+```text
+job-hub/
+├─ AGENTS.md
+├─ LICENSE
+├─ UPSTREAM.md
+├─ docs/
+│  └─ PRD.md
+├─ src/job_hub/
+│  ├─ core/
+│  ├─ adapters/
+│  ├─ sources/
+│  ├─ ingestion/
+│  ├─ pipeline/
+│  ├─ db/
+│  ├─ api/
+│  └─ config/
+├─ web/
+│  ├─ app/
+│  │  ├─ jobs/
+│  │  ├─ sources/
+│  │  └─ review/
+│  ├─ components/
+│  └─ lib/
+├─ scripts/
+│  ├─ import_channels.py
+│  └─ import_legacy_jobs.py
+├─ migrations/
+├─ tests/
+│  ├─ fixtures/
+│  ├─ unit/
+│  ├─ integration/
+│  └─ e2e/
+├─ pyproject.toml
+├─ uv.lock
+├─ .env.example
+└─ README.md
+```
+
+### 18.6 Environment Variables
+
+`.env.example` 至少声明：
+
+```text
+JOB_HUB_DB_PATH=data/job_hub.db
+INGESTION_SECRET=
+APP_TIMEZONE=Asia/Shanghai
+AUTH_MODE=off
+LOG_LEVEL=INFO
+```
+
+真实 secret 不得提交 Git。
+
+### 18.7 Upstream and License Rules
+
+- Job Sentinel 与 JobSync 的 MIT 代码可直接复用，必须保留原许可证和版权声明。
+- DrJonoG/job_search 的 Apache-2.0 代码复用时保留 LICENSE / NOTICE，并标记修改。
+- 每次复制代码记录来源 repo、commit、原路径和本地路径，集中写入 `UPSTREAM.md`。
+- 未显示明确许可证的仓库只用于研究交互和架构。
+- 优先复用完整模块与测试，避免复制无法追踪的零散片段。
+
+### 18.8 Database Evolution
+
+V0 使用 SQLite，减少基础设施和部署变量。所有业务代码通过 `JobRepository` interface 访问数据，避免路由和 UI 直接写 SQL。
+
+出现以下需求时再评估 PostgreSQL / Supabase：
+
+- 需要离开本机访问。
+- 需要稳定云端定时采集。
+- 需要多个写入进程或多设备同步。
+- SQLite 的并发或部署方式形成真实限制。
+
+迁移时保留本 PRD 的逻辑 schema，并新增 PostgreSQL repository implementation。
+
+### 18.9 AI and Agent Boundary
+
+- V0 不启动 Agent。
+- V0 不要求模型 API。
+- pipeline 通过独立 service interface 预留后续 matcher/collector adapter。
+- Grok Cloud 只作为未来公开网页与官网信息补充来源，不承接国内登录平台主链路。
+
+---
+
+## 19. Legacy Data Migration
+
+### 19.1 Fields to Preserve
+
+现有岗位表至少映射：
+
+| Legacy | Job Hub |
+|---|---|
+| Name | title |
+| Link | primary_source_url |
+| Market | market |
+| Location | location |
+| Status | status |
+| Next Step | next_step |
+| Comment | comment |
+
+### 19.2 Migration Rule
+
+1. 先导出旧表。
+2. 运行 dry run，生成字段错误与重复报告。
+3. 导入测试数据库。
+4. 核对总数、状态分布与随机样本。
+5. 核对通过后启用 Web App 作为唯一维护入口。
+6. 旧表改为只读历史备份。
+
+V0 开发期间不删除旧表。
+
+---
+
+## 20. Failure Handling
+
+### 20.1 Collector Failure
+
+- run 标记 partial 或 failed。
+- 保存 channel、时间、错误类型与简短原因。
+- 已成功写入的记录保留。
+- 支持重新运行，同一数据不重复创建 Job。
+
+### 20.2 Login / CAPTCHA
+
+- 标记 `requires_user_action`。
+- 页面显示“需要在本机重新登录”或“需要人工完成验证码”。
+- 系统不尝试绕过验证码。
+
+### 20.3 Parser Change
+
+- 原始 payload 保留。
+- normalization 失败记录可重跑。
+- collector 版本或 parser version 写入 run metadata。
+
+### 20.4 Database / API Error
+
+- 客户端显示明确失败状态。
+- mutation 不做假成功。
+- 批量 ingestion 返回逐条结果。
+
+---
+
+## 21. Non-functional Requirements
+
+### 21.1 Reliability
+
+- ingestion 与 upsert 幂等。
+- 单条错误不终止整个批次。
+- 所有批次有 run id。
+
+### 21.2 Performance
+
+- 1,000 条以内 Job Pool 首屏目标在本地或正常网络下 2 秒内可交互。
+- 列表使用分页或 cursor pagination。
+- 常用字段建立索引：market、status、published_at、first_seen_at、channel_id、fingerprint。
+
+### 21.3 Security
+
+- 数据库管理凭据与 ingestion secret 只在后端或本机进程中使用。
+- ingestion endpoint 校验 secret。
+- JD HTML 渲染前清洗 script、iframe、form 与事件属性。
+- 外部链接使用安全新窗口设置。
+- 公网部署启用访问控制。
+
+### 21.4 Privacy
+
+- V0 不保存完整简历、身份证件、银行卡信息或平台账号密码。
+- 浏览器登录态留在本机 collector 环境。
+
+### 21.5 Observability
+
+- collection run 有结构化结果。
+- pipeline 每阶段保留 reason 或 state。
+- 页面可以看到最近失败来源。
+
+### 21.6 Maintainability
+
+- 数据库变更通过 migration。
+- source-specific logic 只放 adapter。
+- 业务规则有单元测试。
+- PRD、AGENTS.md 与代码一起版本控制。
+
+---
+
+## 22. Delivery Plan
+
+### Slice 0｜Project Baseline
+
+交付：
+
+- 记录 Job Sentinel 上游 repo 与固定 commit。
+- 在空的 `job-hub` 文件夹中建立 fork-derived 工作树。
+- 保留 MIT License，并创建 `UPSTREAM.md`。
+- 验证原始 FastAPI + Next.js Web UI 能在 Windows 本地运行。
+- 禁用 Telegram、profile、documents、LLM、chat 和完整 application CRM。
+- 加入 PRD、AGENTS.md、README、`.env.example`。
+- 用本 PRD 的 schema 替换核心 model 与 repository migration。
+
+完成标准：精简后的应用能本地启动，SQLite migration 可重复执行，现有上游测试中的保留模块继续通过。
+
+### Slice 1｜Manual Vertical Slice
+
+交付：
+
+- Manual Import。
+- jobs_raw。
+- Normalize、Dedup、Rule Filter。
+- `/jobs` 列表、Today / Since Date、Open Source。
+
+完成标准：一条真实岗位能从 Manual Import 进入 `/jobs`，重复导入不产生重复 Job。
+
+### Slice 2｜Existing CN Collector
+
+交付：
+
+- 固定 canonical ingestion contract。
+- `mcp-jobs` 输出适配。
+- collection runs 与错误状态。
+- 至少接通 BOSS / 猎聘 / 智联中的一条真实链路。
+
+完成标准：真实采集结果能完整进入 `/jobs`，登录失效或采集失败可见。
+
+### Slice 3｜Tracking Loop
+
+交付：
+
+- Favorite。
+- Status。
+- Next Step。
+- Comment。
+- applied_at。
+- Reference。
+- Open Apply Page。
+
+完成标准：真实岗位能完成“查看 → 回源 → 更新状态”的闭环。
+
+### Slice 4｜Stabilize and Optional Deploy
+
+交付：
+
+- 基础 Review。
+- 最小端到端测试。
+- 旧岗位表 dry-run migration。
+- 公网部署前的单用户访问保护。
+
+完成标准：V0 Acceptance Criteria 全部通过。部署只在本地闭环稳定后进行。
+
+---
+
+## 23. Acceptance Criteria
+
+### AC1｜Manual Import
+
+Given 用户输入一个真实岗位 URL 与 JD，  
+When 系统完成导入，  
+Then 记录进入 jobs_raw 与 jobs，并能在 `/jobs` 查看。
+
+### AC2｜CN Collector
+
+Given 本机 collector 已取得真实岗位，  
+When collector 通过文件或 API 提交，  
+Then 系统创建 collection run，并把有效岗位加入 Job Pool。
+
+### AC3｜Idempotency
+
+Given 同一批岗位被重复导入，  
+When pipeline 再次运行，  
+Then Job Pool 不出现明显重复岗位，last_seen_at 与 sources 正确更新。
+
+### AC4｜Multiple Sources
+
+Given 同一岗位来自两个来源，  
+When Dedup 完成，  
+Then Job Pool 显示一条 Job，详情中保留两个来源。
+
+### AC5｜Rule Filter
+
+Given 岗位命中明确排除规则，  
+When Rule Filter 运行，  
+Then 岗位不进入默认视图，并保存过滤原因。
+
+### AC6｜Date and Core Filters
+
+Given 数据库包含多个日期和渠道的岗位，  
+When 用户选择 Today 或 Since Date，  
+Then 结果时间范围正确，并可继续按 Market、Channel、Keyword、Status 筛选。
+
+### AC7｜Tracking
+
+Given 用户打开一个岗位，  
+When 用户更新 Status、Favorite、Next Step 或 Comment，  
+Then 刷新页面后数据保持一致。
+
+### AC8｜Applied
+
+Given 用户把岗位状态更新为 Applied，  
+When applied_at 为空，  
+Then 系统自动写入当前时间。
+
+### AC9｜Return to Source
+
+Given Job 存在来源或申请链接，  
+When 用户点击 Open Source / Open Apply Page，  
+Then 系统打开对应原始入口。
+
+### AC10｜Failure Visibility
+
+Given collector 登录失效、验证码出现或 parser 失败，  
+When run 结束，  
+Then `/sources` 显示失败状态和可理解的原因，已成功记录仍然保留。
+
+### AC11｜Basic Trust Gate
+
+Given URL 与已知 Channel 域名明显不一致，  
+When Trust Gate 运行，  
+Then 记录进入 Review，并显示具体原因。
+
+### AC12｜Legacy Compatibility
+
+Given 现有岗位表包含历史与进行中的岗位，  
+When migration dry run 执行，  
+Then Name、Link、Market、Location、Status、Next Step、Comment 均有明确映射，错误与重复记录有报告。
+
+---
+
+## 24. V0 Exit Criteria
+
+以下条件全部满足即可停止 V0 开发并进入真实使用：
+
+1. Manual Import 端到端跑通。
+2. 至少一条真实 CN collector 端到端跑通。
+3. Today / Since Date 与五项核心筛选可用。
+4. 重复运行不产生明显重复 Job。
+5. Open Source、Status、Favorite、Next Step、Comment、applied_at 可用。
+6. Reference 可用。
+7. 失败状态可见。
+8. V0 测试通过。
+
+Global source、AI、Agent、Grok、完整 Trust Engine、自动投递和复杂追踪不影响 V0 完成判断。
+
+---
+
+## 25. Risks and Mitigation
+
+| Risk | V0 Response |
+|---|---|
+| 国内平台登录态不稳定 | collector 留在本机；失败可见；Manual Import 兜底 |
+| CAPTCHA / 反自动化 | 请求人工完成；不绕过 |
+| 页面结构变化 | 保留 raw payload、parser version 与可重跑记录 |
+| 跨渠道误合并 | 高置信规则自动合并；模糊候选进入 Review |
+| 漏合并 | 保留多个 Job；后续人工或规则修正 |
+| Channel Sheet 同步复杂 | V0 使用 seed / 手动刷新 |
+| 范围扩张 | 以 V0 Exit Criteria 为停止标准 |
+| 云端部署暴露私人数据 | 部署前增加单用户访问保护 |
+| 外部服务成本或绑定 | AI/Grok 保持可替换 adapter，V0 不依赖 |
+
+---
+
+## 26. Open Questions
+
+这些问题不阻塞 Slice 0–2：
+
+1. V0 稳定后优先接入哪一类 Global source。
+2. Channel Sheet 后续采用手动刷新、定时导入或 API 同步。
+3. AI Match 的职业标准、输出结构与模型选择。
+4. 是否需要独立 Application history。
+5. 国内 inbound recruiter 的技术可行性。
+6. 出现远程访问需求后采用哪种云端部署与单用户访问方式。
+
+---
+
+## 27. Reference Implementations
+
+1. [harshitwandhare/job-sentinel](https://github.com/harshitwandhare/job-sentinel)：V0 主实现基线；复用 adapter、source aggregation、FastAPI、Next.js UI、SQLite repository、source health 与测试结构。
+2. [Job Sentinel HLD](https://github.com/harshitwandhare/job-sentinel/blob/main/docs/design/HLD.md)：组件边界、运行方式、并发、失败恢复与技术选择。
+3. [Job Sentinel LLD](https://github.com/harshitwandhare/job-sentinel/blob/main/docs/design/LLD.md)：models、adapter contract、repository、upsert 和 scrape-cycle 细节。
+4. [Gsync/jobsync](https://github.com/Gsync/jobsync)：参考成熟 tracking UI、discovery review、Prisma migration 与 E2E。
+5. [DrJonoG/job_search](https://github.com/DrJonoG/job_search)：参考多来源 adapter、后台搜索、Job Board 与来源合并。
+6. [tcpsyn/CareerPulse](https://github.com/tcpsyn/CareerPulse)：参考 freshness、stale handling、状态时间线与直接申请链接。
+7. [Masterjx9/OpenPostings](https://github.com/Masterjx9/OpenPostings)：研究 ATS coverage；许可证确认前不复制代码。
+8. [Cursor Rules](https://cursor.com/docs/rules)：项目规则与 `AGENTS.md` 使用方式。
+9. [Cursor Cloud Agents](https://cursor.com/docs/cloud-agent)：后续远程 repo 与 Cloud Agent 的运行边界。
+
+---
+
+## 28. Change Control
+
+每次改动先归入一个类型：
+
+- Product Goal
+- Scope
+- Functional Requirement
+- UX
+- Data Model
+- Technical Constraint
+- Safety
+- Acceptance Criteria
+- Open Question
+
+局部修改后必须检查：
+
+- 是否造成重复或字段重叠。
+- 是否改变现有 Status 语义。
+- 是否破坏 collector contract。
+- 是否需要 migration。
+- 是否改变 V0 Exit Criteria。
+- 是否把 Later 内容带入当前实现。

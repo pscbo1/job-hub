@@ -33,7 +33,12 @@ from job_sentinel.core.models import (
     ApplicationStatus,
     DocumentKind,
     GeneratedDocument,
+    Job,
     JobPosting,
+    JobRaw,
+    JobStatus,
+    compute_job_fingerprint,
+    source_job_id_from_canonical_url,
 )
 
 if TYPE_CHECKING:
@@ -41,11 +46,16 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
 _DOC_TABLE = "generated_documents"
+_JOBS_TABLE = "jobs"
+_JOBS_RAW_TABLE = "jobs_raw"
+_FORBIDDEN_JOB_COLUMNS = frozenset(
+    {"favorite", "next_step", "comment", "applied_at", "filter_state", "filter_reasons"}
+)
 
 
 class JobRepository:
@@ -130,6 +140,7 @@ class JobRepository:
 
         self._ensure_applications_table()
         self._ensure_documents_table()
+        self._ensure_v0_tables()
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -184,6 +195,81 @@ class JobRepository:
             self._table(_DOC_TABLE).create_index(["created_at"], if_not_exists=True)
             logger.debug("generated_documents table created")
 
+    def _ensure_v0_tables(self) -> None:
+        self._ensure_jobs_table()
+        self._ensure_jobs_raw_table()
+
+    def _ensure_jobs_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                source_job_id TEXT NOT NULL,
+                job_url TEXT NOT NULL DEFAULT '',
+                canonical_url TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                company TEXT NOT NULL DEFAULT '',
+                location TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                employment_type TEXT NOT NULL DEFAULT '',
+                salary TEXT NOT NULL DEFAULT '',
+                published_at TEXT,
+                discovered_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                fingerprint TEXT NOT NULL DEFAULT '',
+                status TEXT DEFAULT NULL,
+                match_score REAL,
+                market TEXT NOT NULL DEFAULT '',
+                CHECK (
+                    status IS NULL
+                    OR status IN ('saved', 'to_do', 'applied', 'closed', 'reference')
+                )
+            )
+            """
+        )
+        jobs = self._table(_JOBS_TABLE)
+        extra = {col.name for col in jobs.columns} & _FORBIDDEN_JOB_COLUMNS
+        if extra:
+            jobs.transform(drop=extra)
+            logger.debug("Dropped non-V0 columns from jobs: {}", extra)
+
+        jobs.create_index(["source", "source_job_id"], unique=True, if_not_exists=True)
+        for col in (
+            "discovered_at",
+            "published_at",
+            "status",
+            "source",
+            "fingerprint",
+            "canonical_url",
+        ):
+            jobs.create_index([col], if_not_exists=True)
+
+    def _ensure_jobs_raw_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs_raw (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                source_job_id TEXT,
+                source_url TEXT NOT NULL DEFAULT '',
+                raw_payload TEXT NOT NULL DEFAULT '{}',
+                validation_state TEXT NOT NULL DEFAULT 'valid',
+                validation_reasons TEXT NOT NULL DEFAULT '[]',
+                collected_at TEXT NOT NULL,
+                processed_at TEXT,
+                job_id TEXT,
+                run_id TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        raw = self._table(_JOBS_RAW_TABLE)
+        raw.create_index(["source", "source_job_id"], if_not_exists=True)
+        raw.create_index(["collected_at"], if_not_exists=True)
+        raw.create_index(["job_id"], if_not_exists=True)
+
     def _get_meta(self, key: str) -> str | None:
         rows = list(self._table(_META_TABLE).rows_where("key = ?", [key]))
         return rows[0]["value"] if rows else None
@@ -197,6 +283,8 @@ class JobRepository:
             # Idempotent — only creates tables when they don't already exist.
             self._ensure_applications_table()
             self._ensure_documents_table()
+        if from_version < 3:
+            self._ensure_v0_tables()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -253,6 +341,137 @@ class JobRepository:
     def mark_seen(self, posting_id: str) -> None:
         """Convenience: mark posting as SEEN after alert is sent."""
         self.update_status(posting_id, ApplicationStatus.SEEN)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # V0 jobs / jobs_raw
+    # ─────────────────────────────────────────────────────────────────────
+
+    def upsert_job(self, job: Job) -> Job:
+        """
+        Insert or update a canonical job.
+
+        Dedup: (1) ``(source, source_job_id)`` (2) non-empty ``canonical_url``.
+        Fingerprint is never used to merge. Ingest fields only on update —
+        ``status``, ``match_score``, and ``discovered_at`` are preserved.
+        """
+        source_job_id = job.source_job_id.strip() or source_job_id_from_canonical_url(
+            job.canonical_url
+        )
+        fingerprint = job.fingerprint or compute_job_fingerprint(
+            job.company, job.title, job.location
+        )
+        existing = self.get_job_by_source_key(job.source, source_job_id)
+        if existing is None:
+            existing = self.get_job_by_canonical_url(job.canonical_url)
+
+        if existing is None:
+            prepared = job.model_copy(
+                update={"source_job_id": source_job_id, "fingerprint": fingerprint}
+            )
+            self._table(_JOBS_TABLE).insert(_hub_job_to_row(prepared))
+            stored = self.get_hub_job(prepared.id)
+            if stored is None:
+                msg = f"insert of job {prepared.id} did not persist"
+                raise RuntimeError(msg)
+            logger.debug("Inserted pool job | id={} source={}", stored.id, stored.source)
+            return stored
+
+        now = _now_iso()
+        ingest = {
+            "job_url": job.job_url,
+            "canonical_url": job.canonical_url,
+            "title": job.title,
+            "company": job.company,
+            "location": job.location,
+            "description": job.description,
+            "employment_type": job.employment_type,
+            "salary": job.salary,
+            "published_at": _optional_iso(job.published_at),
+            "last_seen_at": now,
+            "updated_at": now,
+            "fingerprint": fingerprint,
+            "market": job.market,
+        }
+        self._table(_JOBS_TABLE).update(existing.id, ingest)
+        stored = self.get_hub_job(existing.id)
+        if stored is None:
+            msg = f"update of job {existing.id} did not persist"
+            raise RuntimeError(msg)
+        logger.debug("Updated pool job | id={} source={}", stored.id, stored.source)
+        return stored
+
+    def get_hub_job(self, job_id: str) -> Job | None:
+        """Fetch a canonical ``jobs`` row by id."""
+        try:
+            row = self._table(_JOBS_TABLE).get(job_id)
+            return _hub_job_from_row(dict(row))
+        except sqlite_utils.db.NotFoundError:
+            return None
+
+    def get_job_by_source_key(self, source: str, source_job_id: str) -> Job | None:
+        """Lookup by UNIQUE ``(source, source_job_id)``."""
+        rows = list(
+            self._table(_JOBS_TABLE).rows_where(
+                "source = ? AND source_job_id = ?",
+                [source, source_job_id],
+                limit=1,
+            )
+        )
+        return _hub_job_from_row(dict(rows[0])) if rows else None
+
+    def get_job_by_canonical_url(self, canonical_url: str) -> Job | None:
+        """Oldest job with this non-empty canonical URL (merge target)."""
+        url = canonical_url.strip()
+        if not url:
+            return None
+        rows = list(
+            self._table(_JOBS_TABLE).rows_where(
+                "canonical_url = ?",
+                [url],
+                order_by="discovered_at ASC",
+                limit=1,
+            )
+        )
+        return _hub_job_from_row(dict(rows[0])) if rows else None
+
+    def find_fingerprint_candidates(
+        self,
+        fingerprint: str,
+        *,
+        exclude_id: str | None = None,
+    ) -> list[str]:
+        """Return job ids sharing a fingerprint. Does not merge."""
+        if not fingerprint:
+            return []
+        if exclude_id:
+            rows = self._table(_JOBS_TABLE).rows_where(
+                "fingerprint = ? AND id != ?",
+                [fingerprint, exclude_id],
+            )
+        else:
+            rows = self._table(_JOBS_TABLE).rows_where("fingerprint = ?", [fingerprint])
+        return [str(row["id"]) for row in rows]
+
+    def insert_job_raw(self, raw: JobRaw) -> JobRaw:
+        """Append a ``jobs_raw`` row (never upsert)."""
+        self._table(_JOBS_RAW_TABLE).insert(_job_raw_to_row(raw))
+        logger.debug("Inserted jobs_raw | id={} source={}", raw.id, raw.source)
+        return raw
+
+    def get_job_raw(self, raw_id: str) -> JobRaw | None:
+        try:
+            row = self._table(_JOBS_RAW_TABLE).get(raw_id)
+            return _job_raw_from_row(dict(row))
+        except sqlite_utils.db.NotFoundError:
+            return None
+
+    def list_job_raw_by_source_key(self, source: str, source_job_id: str) -> list[JobRaw]:
+        rows = self._table(_JOBS_RAW_TABLE).rows_where(
+            "source = ? AND source_job_id = ?",
+            [source, source_job_id],
+            order_by="collected_at ASC",
+        )
+        return [_job_raw_from_row(dict(r)) for r in rows]
 
     # ─────────────────────────────────────────────────────────────────────
     # Read operations
@@ -661,4 +880,109 @@ def _doc_from_row(row: dict[str, Any]) -> GeneratedDocument:
         posting_id=row.get("posting_id") or None,
         created_at=_parse_dt(row.get("created_at", "")),
         raw_data=json.loads(row.get("raw_data") or "{}"),
+    )
+
+
+# ── V0 Job / JobRaw helpers ───────────────────────────────────────────────────
+
+
+def _optional_iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _parse_optional_dt(value: object) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def _hub_job_to_row(job: Job) -> dict[str, Any]:
+    return {
+        "id": job.id,
+        "source": job.source,
+        "source_job_id": job.source_job_id,
+        "job_url": job.job_url,
+        "canonical_url": job.canonical_url,
+        "title": job.title,
+        "company": job.company,
+        "location": job.location,
+        "description": job.description,
+        "employment_type": job.employment_type,
+        "salary": job.salary,
+        "published_at": _optional_iso(job.published_at),
+        "discovered_at": job.discovered_at.isoformat(),
+        "last_seen_at": job.last_seen_at.isoformat(),
+        "updated_at": job.updated_at.isoformat(),
+        "fingerprint": job.fingerprint,
+        "status": job.status.value if job.status is not None else None,
+        "match_score": job.match_score,
+        "market": job.market,
+    }
+
+
+def _hub_job_from_row(row: dict[str, Any]) -> Job:
+    raw_status = row.get("status")
+    status: JobStatus | None = JobStatus(raw_status) if raw_status else None
+    score = row.get("match_score")
+    return Job(
+        id=row["id"],
+        source=row.get("source", ""),
+        source_job_id=row.get("source_job_id", ""),
+        job_url=row.get("job_url", ""),
+        canonical_url=row.get("canonical_url", ""),
+        title=row.get("title", ""),
+        company=row.get("company", ""),
+        location=row.get("location", ""),
+        description=row.get("description", ""),
+        employment_type=row.get("employment_type", ""),
+        salary=row.get("salary", ""),
+        published_at=_parse_optional_dt(row.get("published_at")),
+        discovered_at=_parse_dt(row.get("discovered_at", "")),
+        last_seen_at=_parse_dt(row.get("last_seen_at", "")),
+        updated_at=_parse_dt(row.get("updated_at", "")),
+        fingerprint=row.get("fingerprint", ""),
+        status=status,
+        match_score=float(score) if score is not None else None,
+        market=row.get("market", ""),
+    )
+
+
+def _job_raw_to_row(raw: JobRaw) -> dict[str, Any]:
+    return {
+        "id": raw.id,
+        "source": raw.source,
+        "source_job_id": raw.source_job_id,
+        "source_url": raw.source_url,
+        "raw_payload": json.dumps(raw.raw_payload),
+        "validation_state": raw.validation_state,
+        "validation_reasons": json.dumps(raw.validation_reasons),
+        "collected_at": raw.collected_at.isoformat(),
+        "processed_at": _optional_iso(raw.processed_at),
+        "job_id": raw.job_id,
+        "run_id": raw.run_id,
+        "created_at": raw.created_at.isoformat(),
+    }
+
+
+def _job_raw_from_row(row: dict[str, Any]) -> JobRaw:
+    payload = row.get("raw_payload") or "{}"
+    reasons = row.get("validation_reasons") or "[]"
+    parsed_payload = json.loads(payload) if isinstance(payload, str) else payload
+    parsed_reasons = json.loads(reasons) if isinstance(reasons, str) else reasons
+    return JobRaw(
+        id=row["id"],
+        source=row.get("source", ""),
+        source_job_id=row.get("source_job_id"),
+        source_url=row.get("source_url", ""),
+        raw_payload=parsed_payload if isinstance(parsed_payload, dict) else {},
+        validation_state=row.get("validation_state", "valid"),
+        validation_reasons=parsed_reasons if isinstance(parsed_reasons, list) else [],
+        collected_at=_parse_dt(row.get("collected_at", "")),
+        processed_at=_parse_optional_dt(row.get("processed_at")),
+        job_id=row.get("job_id") or None,
+        run_id=row.get("run_id") or None,
+        created_at=_parse_dt(row.get("created_at", "")),
     )
