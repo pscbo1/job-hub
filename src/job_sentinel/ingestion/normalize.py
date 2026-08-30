@@ -86,6 +86,12 @@ def source_job_id_from_url(source: str, url: str) -> str:
             idx = path.lower().index(marker) + len(marker)
             token = path[idx:].split("/")[0]
             return token.split(".")[0]
+    if source == "linkedin":
+        path = urlsplit(url).path.rstrip("/")
+        digits = path.rsplit("/", 1)[-1]
+        if "-" in digits:
+            digits = digits.rsplit("-", 1)[-1]
+        return digits if digits.isdigit() and len(digits) >= 6 else ""
     return ""
 
 

@@ -94,7 +94,7 @@ def test_registry_runnable_ids() -> None:
         "tencent",
         "hiring_cafe",
     } <= ids
-    assert "linkedin" not in ids
+    assert "linkedin" in ids
     assert "fao" not in ids
 
 

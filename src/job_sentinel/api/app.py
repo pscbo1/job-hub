@@ -131,6 +131,8 @@ class CollectJobsRequest(BaseModel):
     location: str = ""
     sources: list[str] = Field(min_length=1)
     max_results: int = Field(default=100, ge=1, le=200)
+    remote: bool | None = None
+    date_posted_days: int | None = Field(default=None, ge=1, le=365)
     exclude_outsourcing: bool = True
     exclude_part_time: bool = True
     exclude_internship: bool = True
@@ -540,6 +542,8 @@ def create_app(
                 location=req.location,
                 source_ids=req.sources,
                 max_results=req.max_results,
+                remote=req.remote,
+                date_posted_days=req.date_posted_days,
                 filter_settings=FilterSettings(
                     exclude_outsourcing=req.exclude_outsourcing,
                     exclude_part_time=req.exclude_part_time,

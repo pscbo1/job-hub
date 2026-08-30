@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 def test_listed_sources_have_groups_and_omit_unrunnable() -> None:
     listed = list_collect_sources()
     ids = {s.id for s in listed}
-    assert "linkedin" not in ids
+    assert "linkedin" in ids
     assert "fao" not in ids
     by_group: dict[str, list[str]] = {}
     for spec in listed:
@@ -38,7 +38,7 @@ def test_collect_sources_api_includes_source_group(tmp_path: Path) -> None:
         assert item.get("runnable") is not False
     groups = {s["id"]: s["source_group"] for s in sources}
     assert groups["zhaopin"] == "platform"
-    assert "linkedin" not in groups
+    assert groups["linkedin"] == "platform"
     if "impactpool" in groups:
         assert groups["impactpool"] == "vertical"
     if "dimagi" in groups:

@@ -126,6 +126,18 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         market="GLOBAL",
         notes="Public SSR job island on hiring.cafe — keyword filter is client-side",
     ),
+    CollectSource(
+        id="linkedin",
+        label="LinkedIn",
+        kind="platform",
+        collector_id="linkedin",
+        integration="public_html",
+        market="GLOBAL",
+        notes=(
+            "Public guest job HTML (undocumented /jobs-guest endpoints). "
+            "No login or cookies. Keyword, location, date posted, and remote only."
+        ),
+    ),
 )
 
 

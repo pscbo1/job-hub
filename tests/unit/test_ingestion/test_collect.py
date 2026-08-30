@@ -190,7 +190,7 @@ def test_collect_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ids = {s["id"] for s in listed.json()["sources"]}
     assert {"zhaopin", "liepin", "boss"} <= ids
     assert "dimagi" in ids
-    assert "linkedin" not in ids
+    assert "linkedin" in ids
 
     resp = client.post(
         "/api/collect/jobs",

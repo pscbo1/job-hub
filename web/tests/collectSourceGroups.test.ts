@@ -15,11 +15,13 @@ const catalog = [
   { id: "liepin", kind: "platform" as const, enabled: true, runnable: true },
   { id: "boss", kind: "platform" as const, enabled: true, runnable: true },
   { id: "hiring_cafe", kind: "platform" as const, enabled: true, runnable: true },
+  { id: "linkedin", kind: "platform" as const, enabled: true, runnable: true },
   { id: "impactpool", kind: "vertical" as const, enabled: true, runnable: true },
   { id: "dimagi", kind: "career_page" as const, enabled: true, runnable: true },
   { id: "automattic", kind: "career_page" as const, enabled: true, runnable: true },
+  { id: "palantir", kind: "career_page" as const, enabled: true, runnable: true },
   { id: "tencent", kind: "career_page" as const, enabled: true, runnable: true },
-  { id: "linkedin", kind: "platform" as const, enabled: true, runnable: false },
+  { id: "unwired", kind: "platform" as const, enabled: true, runnable: false },
   { id: "fao", kind: "career_page" as const, enabled: false, runnable: true },
 ];
 
@@ -43,10 +45,16 @@ describe("bucketCollectSources", () => {
       "liepin",
       "boss",
       "hiring_cafe",
+      "linkedin",
     ]);
     expect(buckets[1].sources.map((s) => s.id)).toEqual(["impactpool"]);
-    expect(buckets[2].sources.map((s) => s.id)).toEqual(["dimagi", "automattic", "tencent"]);
-    expect(buckets.flatMap((b) => b.sources.map((s) => s.id))).not.toContain("linkedin");
+    expect(buckets[2].sources.map((s) => s.id)).toEqual([
+      "dimagi",
+      "automattic",
+      "palantir",
+      "tencent",
+    ]);
+    expect(buckets.flatMap((b) => b.sources.map((s) => s.id))).not.toContain("unwired");
     expect(buckets.flatMap((b) => b.sources.map((s) => s.id))).not.toContain("fao");
   });
 });

@@ -51,6 +51,8 @@ def collect_and_ingest(
     run_id: str | None = None,
     max_results: int = 100,
     filter_settings: FilterSettings | None = None,
+    remote: bool | None = None,
+    date_posted_days: int | None = None,
 ) -> CollectOutcome:
     """Validate sources, collect records, ingest into jobs_raw then jobs."""
     started = datetime.now(tz=UTC)
@@ -107,6 +109,8 @@ def collect_and_ingest(
             records=records,
             source_results=source_results,
             errors=errors,
+            remote=remote,
+            date_posted_days=date_posted_days,
         )
 
     ingest = ingest_records(
@@ -190,10 +194,17 @@ def _run_adapter(
     records: list[CollectorRecord],
     source_results: list[dict[str, Any]],
     errors: list[str],
+    remote: bool | None = None,
+    date_posted_days: int | None = None,
 ) -> None:
     try:
         found = collect_adapter_records(
-            spec, keywords=keyword, location=location, max_results=capped
+            spec,
+            keywords=keyword,
+            location=location,
+            max_results=capped,
+            remote=remote,
+            date_posted_days=date_posted_days,
         )
     except (AdapterError, ValueError) as exc:
         logger.warning("adapter {} failed: {}", spec.id, exc)

@@ -1082,8 +1082,10 @@ export function getCollectSources(): Promise<{ sources: CollectSource[] } | null
         { id: "impactpool", label: "Impactpool", kind: "vertical", collector_id: "impactpool", integration: "public_html", notes: "", enabled: true },
         { id: "dimagi", label: "Dimagi Careers", kind: "career_page", collector_id: "dimagi", integration: "ats_board", notes: "", enabled: true },
         { id: "automattic", label: "Automattic Careers", kind: "career_page", collector_id: "automattic", integration: "ats_board", notes: "", enabled: true },
+        { id: "palantir", label: "Palantir Careers", kind: "career_page", collector_id: "palantir", integration: "ats_board", notes: "", enabled: true },
         { id: "tencent", label: "Tencent Careers", kind: "career_page", collector_id: "tencent", integration: "http_json", notes: "", enabled: true },
         { id: "hiring_cafe", label: "HiringCafe", kind: "platform", collector_id: "hiring_cafe", integration: "ssr_json", notes: "", enabled: true },
+        { id: "linkedin", label: "LinkedIn", kind: "platform", collector_id: "linkedin", integration: "public_html", notes: "guest HTML", enabled: true },
       ],
     });
   }
@@ -1096,6 +1098,8 @@ export async function collectJobs(body: {
   location: string;
   sources: string[];
   max_results: number;
+  remote?: boolean | null;
+  date_posted_days?: number | null;
   exclude_outsourcing: boolean;
   exclude_part_time: boolean;
   exclude_internship: boolean;

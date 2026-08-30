@@ -237,6 +237,12 @@ def collect(
         help="Comma-separated source ids (zhaopin, liepin, boss, dimagi, …)",
     ),
     max_results: int = typer.Option(100, "--max-results", "-n", min=1, max=200),
+    remote: bool | None = typer.Option(
+        None, "--remote/--no-remote", help="Remote-only / on-site (LinkedIn guest filter)"
+    ),
+    date_posted_days: int | None = typer.Option(
+        None, "--date-posted-days", help="Posted within N days (LinkedIn f_TPR)"
+    ),
 ) -> None:
     """Collect from configured sources into jobs_raw then jobs (same path as Search)."""
     from job_sentinel.db.repository import JobRepository
@@ -251,6 +257,8 @@ def collect(
             location=location,
             source_ids=source_ids,
             max_results=max_results,
+            remote=remote,
+            date_posted_days=date_posted_days,
         )
     finally:
         repo.close()
