@@ -1,0 +1,37 @@
+# Company careers collected through the shared ATS board adapter (ats_board).
+# New Greenhouse / Lever / Ashby companies: add a row. Do not add collector code.
+#
+# Required: id, company
+# Board identity: ats + slug, or careers_url on a known host
+#   greenhouse: https://boards.greenhouse.io/{slug} or job-boards.greenhouse.io/{slug}
+#   lever:      https://jobs.lever.co/{slug}
+#   ashby:      https://jobs.ashbyhq.com/{slug}
+#
+# Taleo / Oracle Recruiting Cloud: not runnable. No public job-board API; the
+# career section uses a session-bound undocumented searchjobs POST plus HTML
+# detail pages. RSS is optional, default-off, and capped at 10 jobs.
+
+companies:
+  - id: dimagi
+    company: Dimagi
+    ats: greenhouse
+    slug: dimagi
+    careers_url: https://job-boards.greenhouse.io/dimagi
+    market: GLOBAL
+    notes: Greenhouse public board API
+
+  - id: automattic
+    company: Automattic
+    ats: greenhouse
+    slug: automatticcareers
+    careers_url: https://automattic.com/work-with-us/
+    market: GLOBAL
+    notes: Greenhouse board token is automatticcareers
+
+  - id: palantir
+    company: Palantir
+    ats: lever
+    slug: palantir
+    careers_url: https://jobs.lever.co/palantir
+    market: GLOBAL
+    notes: Lever public postings JSON

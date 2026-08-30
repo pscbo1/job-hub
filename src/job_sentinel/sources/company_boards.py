@@ -8,6 +8,9 @@ Supported ATS platforms (no auth, publicly accessible):
   - Lever:      https://api.lever.co/v0/postings/{slug}?mode=json
   - Ashby:      https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true
 
+New companies for Job Hub collect belong in ingestion/company_ats.yaml.
+This module remains the CLI / JobSource wrapper around the shared client.
+
 Usage — standalone helper:
     from job_sentinel.sources.company_boards import fetch_company_board
     jobs = fetch_company_board(ats="greenhouse", slug="stripe")
@@ -21,145 +24,40 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 from loguru import logger
 
+from job_sentinel.ingestion.ats_board_client import (
+    SUPPORTED_ATS,
+    AtsFetchError,
+    AtsJob,
+    UnsupportedAtsError,
+    fetch_ats_jobs,
+    log_fetch_failure,
+)
 from job_sentinel.sources.base import JobPosting, JobQuery, JobSource
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Supported ATS slugs
-# ─────────────────────────────────────────────────────────────────────────────
-
-SUPPORTED_ATS = frozenset({"greenhouse", "lever", "ashby"})
+__all__ = ["SUPPORTED_ATS", "CompanyBoardSource", "fetch_company_board"]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Per-ATS parsers
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _parse_greenhouse(data: dict[str, Any], slug: str) -> list[JobPosting]:
-    jobs: list[JobPosting] = []
-    for item in data.get("jobs") or []:
-        loc = item.get("location") or {}
-        departments = item.get("departments") or [{}]
-        dept = departments[0].get("name", "") if departments else ""
-
-        posting = _build(
-            source_id="company_board",
-            native_id=f"greenhouse:{slug}:{item.get('id', '')}",
-            title=item.get("title", ""),
-            employer=slug,
-            location=loc.get("name", "") if isinstance(loc, dict) else str(loc),
-            job_type=dept,
-            posted_date=item.get("updated_at", ""),
-            apply_url=item.get("absolute_url", ""),
-            description_snippet=(item.get("content") or "")[:350],
-            extra={"ats": "greenhouse", "company_slug": slug},
-        )
-        jobs.append(posting)
-    return jobs
-
-
-def _parse_lever(data: list[Any], slug: str) -> list[JobPosting]:
-    jobs: list[JobPosting] = []
-    for item in data:
-        categories = item.get("categories") or {}
-        posting = _build(
-            source_id="company_board",
-            native_id=f"lever:{slug}:{item.get('id', '')}",
-            title=item.get("text", ""),
-            employer=slug,
-            location=categories.get("location", "") if isinstance(categories, dict) else "",
-            job_type=categories.get("team", "") if isinstance(categories, dict) else "",
-            posted_date=str(item.get("createdAt", "")),
-            apply_url=item.get("hostedUrl", ""),
-            description_snippet=(item.get("descriptionPlain") or "")[:350],
-            extra={"ats": "lever", "company_slug": slug},
-        )
-        jobs.append(posting)
-    return jobs
-
-
-def _parse_ashby(data: dict[str, Any], slug: str) -> list[JobPosting]:
-    jobs: list[JobPosting] = []
-    for item in data.get("jobPostings") or []:
-        # Compensation block (optional, only when includeCompensation=true)
-        comp = item.get("compensation") or {}
-        salary_text = ""
-        if comp:
-            lo = comp.get("minValue")
-            hi = comp.get("maxValue")
-            curr = comp.get("currency", "")
-            interval = comp.get("interval", "")
-            if lo or hi:
-                lo_str = f"{lo:,}" if lo else "?"
-                hi_str = f"{hi:,}" if hi else "?"
-                salary_text = f"{curr} {lo_str}–{hi_str} {interval}".strip()
-
-        posting = _build(
-            source_id="company_board",
-            native_id=f"ashby:{slug}:{item.get('id', '')}",
-            title=item.get("title", ""),
-            employer=slug,
-            location=item.get("locationName", "") or item.get("location", ""),
-            job_type=item.get("employmentType", ""),
-            posted_date=item.get("publishedDate", ""),
-            apply_url=item.get("jobPostingUrl", ""),
-            description_snippet=(item.get("descriptionPlain") or "")[:350],
-            salary_text=salary_text,
-            is_remote=bool(item.get("isRemote", False)),
-            extra={"ats": "ashby", "company_slug": slug},
-        )
-        jobs.append(posting)
-    return jobs
-
-
-def _build(
-    *,
-    source_id: str,
-    native_id: str,
-    title: str,
-    employer: str,
-    location: str = "",
-    job_type: str = "",
-    posted_date: str = "",
-    apply_url: str = "",
-    description_snippet: str = "",
-    salary_text: str = "",
-    is_remote: bool = False,
-    extra: dict[str, Any] | None = None,
-) -> JobPosting:
-    """Shared posting builder (mirrors JobSource._posting logic)."""
+def _to_posting(job: AtsJob) -> JobPosting:
     from job_sentinel.core.models import ApplicationStatus
 
-    raw: dict[str, Any] = {}
-    if salary_text:
-        raw["salary_text"] = salary_text
-    if is_remote:
-        raw["is_remote"] = True
-    if extra:
-        raw.update(extra)
-
+    snippet = job.description[:350] if job.description else ""
+    raw: dict[str, Any] = dict(job.extra)
     return JobPosting(
-        posting_id=f"{source_id}:{native_id}",
-        title=title or "Untitled Position",
-        employer=employer or "",
-        location=location or "",
-        job_type=job_type or "",
-        posted_date=posted_date or "",
+        posting_id=f"company_board:{job.ats}:{job.slug}:{job.native_id}",
+        title=job.title or "Untitled Position",
+        employer=job.company or "",
+        location=job.location or "",
+        job_type=job.department or "",
+        posted_date=job.posted_at or "",
         deadline="",
-        description_snippet=description_snippet[:350] if description_snippet else "",
-        portal_url=apply_url or "",
+        description_snippet=snippet,
+        portal_url=job.apply_url or "",
         status=ApplicationStatus.NEW,
-        source_adapter=source_id,
+        source_adapter="company_board",
         raw_data=raw,
     )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public helper
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def fetch_company_board(ats: str, slug: str) -> list[JobPosting]:
@@ -183,37 +81,17 @@ def fetch_company_board(ats: str, slug: str) -> list[JobPosting]:
     ValueError
         If *ats* is not one of the supported platforms.
     """
-    ats = ats.strip().lower()
-    if ats not in SUPPORTED_ATS:
-        msg = f"Unsupported ATS: {ats!r}. Supported: {sorted(SUPPORTED_ATS)}"
-        raise ValueError(msg)
-
-    if ats == "greenhouse":
-        url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
-    elif ats == "lever":
-        url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
-    else:  # ashby
-        url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
-
     try:
-        with httpx.Client(timeout=10.0, follow_redirects=True) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as exc:
-        logger.warning("company_boards: fetch failed ats={} slug={} — {}", ats, slug, exc)
+        jobs = fetch_ats_jobs(ats, slug)
+    except UnsupportedAtsError as exc:
+        raise ValueError(str(exc)) from exc
+    except (ValueError, AtsFetchError) as exc:
+        if isinstance(exc, ValueError) and "Need a supported ATS" in str(exc):
+            msg = f"Unsupported ATS: {ats.strip().lower()!r}. Supported: {sorted(SUPPORTED_ATS)}"
+            raise ValueError(msg) from exc
+        log_fetch_failure(ats, slug, exc)
         return []
-
-    if ats == "greenhouse":
-        return _parse_greenhouse(data, slug)
-    if ats == "lever":
-        return _parse_lever(data, slug)
-    return _parse_ashby(data, slug)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# JobSource wrapper
-# ─────────────────────────────────────────────────────────────────────────────
+    return [_to_posting(job) for job in jobs]
 
 
 class CompanyBoardSource(JobSource):

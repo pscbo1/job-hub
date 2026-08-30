@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 import respx
 
+from job_sentinel.ingestion.adapters import AdapterError
 from job_sentinel.ingestion.adapters.ats_board import collect_ats_board
 from job_sentinel.ingestion.adapters.hiring_cafe import collect_hiring_cafe
 from job_sentinel.ingestion.adapters.impactpool import collect_impactpool
@@ -88,6 +90,7 @@ def test_registry_runnable_ids() -> None:
         "impactpool",
         "dimagi",
         "automattic",
+        "palantir",
         "tencent",
         "hiring_cafe",
     } <= ids
@@ -111,6 +114,49 @@ def test_ats_board_maps_greenhouse() -> None:
     assert rec.source_url.endswith("/8141380")
     assert rec.company == "Dimagi"
     assert rec.title == "Software Engineer"
+    assert rec.description == "CommCare platform engineering."
+    assert rec.application_url.endswith("/8141380")
+
+
+@respx.mock
+def test_ats_board_maps_lever() -> None:
+    respx.get("https://api.lever.co/v0/postings/palantir?mode=json").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "lever-1",
+                    "text": "Product Engineer",
+                    "hostedUrl": "https://jobs.lever.co/palantir/lever-1",
+                    "categories": {"location": "Remote", "team": "Product"},
+                    "createdAt": 1717200000000,
+                    "descriptionPlain": "Build issue tracking for teams.",
+                }
+            ],
+        )
+    )
+    spec = get_collect_source("palantir")
+    assert spec is not None
+    recs = collect_ats_board(spec, keywords="engineer", location="", max_results=10)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec.channel_key == "palantir"
+    assert rec.company == "Palantir"
+    assert rec.source_job_id == "lever-1"
+    assert rec.source_url == "https://jobs.lever.co/palantir/lever-1"
+    assert rec.location == "Remote"
+    assert "issue tracking" in rec.description
+
+
+@respx.mock
+def test_ats_board_http_error_is_adapter_error() -> None:
+    respx.get("https://boards-api.greenhouse.io/v1/boards/dimagi/jobs?content=true").mock(
+        return_value=httpx.Response(503)
+    )
+    spec = get_collect_source("dimagi")
+    assert spec is not None
+    with pytest.raises(AdapterError, match="ats_board failed"):
+        collect_ats_board(spec, keywords="engineer", location="", max_results=10)
 
 
 @respx.mock

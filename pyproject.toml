@@ -118,6 +118,9 @@ Changelog     = "https://github.com/harshitwandhare/job-sentinel/blob/main/CHANG
 [tool.hatch.build.targets.wheel]
 packages = ["src/job_sentinel"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/job_sentinel/ingestion/company_ats.yaml" = "job_sentinel/ingestion/company_ats.yaml"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Transitive dependency overrides (security fixes not yet picked up by direct deps)
 # ─────────────────────────────────────────────────────────────────────────────
