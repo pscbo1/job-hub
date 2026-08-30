@@ -104,6 +104,45 @@ def test_ashby_parsing() -> None:
     assert job.raw_data.get("ats") == "ashby"
 
 
+@respx.mock
+def test_workday_parsing() -> None:
+    ext = "/job/Remote/Role_R-9"
+    respx.post("https://redhat.wd5.myworkdayjobs.com/wday/cxs/redhat/Jobs/jobs").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "total": 1,
+                "jobPostings": [
+                    {
+                        "title": "Software Engineer",
+                        "externalPath": ext,
+                        "locationsText": "Remote",
+                        "bulletFields": ["R-9"],
+                    }
+                ],
+            },
+        )
+    )
+    respx.get(f"https://redhat.wd5.myworkdayjobs.com/wday/cxs/redhat/Jobs{ext}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jobPostingInfo": {
+                    "title": "Software Engineer",
+                    "location": "Remote",
+                    "jobReqId": "R-9",
+                    "jobDescription": "<p>Build Linux products.</p>",
+                    "externalUrl": f"https://redhat.wd5.myworkdayjobs.com/Jobs{ext}",
+                }
+            },
+        )
+    )
+    jobs = fetch_company_board("workday", "redhat.wd5.myworkdayjobs.com/Jobs")
+    assert len(jobs) == 1
+    assert jobs[0].title == "Software Engineer"
+    assert jobs[0].raw_data.get("ats") == "workday"
+
+
 def test_unsupported_ats_raises() -> None:
     with pytest.raises(ValueError, match="Unsupported ATS"):
         fetch_company_board("unknown", "slug")
@@ -123,3 +162,4 @@ def test_supported_ats_constants() -> None:
     assert "greenhouse" in SUPPORTED_ATS
     assert "lever" in SUPPORTED_ATS
     assert "ashby" in SUPPORTED_ATS
+    assert "workday" in SUPPORTED_ATS

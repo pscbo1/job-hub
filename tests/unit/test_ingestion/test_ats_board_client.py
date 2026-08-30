@@ -29,6 +29,22 @@ def test_parse_greenhouse_and_lever_urls() -> None:
     )
     assert parse_careers_url("https://jobs.lever.co/linear/abc-123") == ("lever", "linear")
     assert parse_careers_url("https://jobs.ashbyhq.com/notion") == ("ashby", "notion")
+    assert parse_careers_url("https://redhat.wd5.myworkdayjobs.com/en-US/Jobs") == (
+        "workday",
+        "redhat.wd5.myworkdayjobs.com/Jobs",
+    )
+    assert parse_careers_url(
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US/Role_JR1"
+    ) == ("workday", "nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite")
+
+
+def test_parse_icims_url_is_detected_not_fetched() -> None:
+    assert parse_careers_url("https://careers-healthedge.icims.com/jobs/8314/job") == (
+        "icims",
+        "healthedge",
+    )
+    with pytest.raises(UnsupportedAtsError, match="no public job-board API"):
+        resolve_board(careers_url="https://careers-healthedge.icims.com/jobs/search")
 
 
 def test_parse_taleo_url_is_detected_not_fetched() -> None:
@@ -46,7 +62,9 @@ def test_resolve_board_from_url_only() -> None:
 
 def test_unsupported_ats_constant() -> None:
     assert "greenhouse" in SUPPORTED_ATS
+    assert "workday" in SUPPORTED_ATS
     assert "taleo" not in SUPPORTED_ATS
+    assert "icims" not in SUPPORTED_ATS
 
 
 @respx.mock
@@ -86,6 +104,52 @@ def test_fetch_ats_jobs_raises_on_http_error() -> None:
         fetch_ats_jobs("greenhouse", "badco")
 
 
+@respx.mock
+def test_fetch_workday_list_and_detail() -> None:
+    ext = "/job/Remote-US-NC/Platform-Engineer_R-1"
+    respx.post("https://redhat.wd5.myworkdayjobs.com/wday/cxs/redhat/Jobs/jobs").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "total": 1,
+                "jobPostings": [
+                    {
+                        "title": "Platform Engineer",
+                        "externalPath": ext,
+                        "locationsText": "2 Locations",
+                        "postedOn": "Posted Today",
+                        "bulletFields": ["R-1"],
+                    }
+                ],
+            },
+        )
+    )
+    respx.get(f"https://redhat.wd5.myworkdayjobs.com/wday/cxs/redhat/Jobs{ext}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jobPostingInfo": {
+                    "title": "Platform Engineer",
+                    "location": "Remote US NC",
+                    "jobReqId": "R-1",
+                    "startDate": "2026-08-01",
+                    "jobDescription": "<p>Open source platforms and Linux engineering.</p>",
+                    "externalUrl": f"https://redhat.wd5.myworkdayjobs.com/Jobs{ext}",
+                }
+            },
+        )
+    )
+    jobs = fetch_ats_jobs("workday", "redhat.wd5.myworkdayjobs.com/Jobs")
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job.title == "Platform Engineer"
+    assert job.company == "redhat"
+    assert job.location == "Remote US NC"
+    assert job.native_id == "R-1"
+    assert "Linux engineering" in job.description
+    assert job.apply_url.endswith("/Platform-Engineer_R-1")
+
+
 def test_load_company_ats_yaml_tmp(tmp_path) -> None:
     path = tmp_path / "company_ats.yaml"
     path.write_text(
@@ -110,6 +174,26 @@ def test_load_company_ats_yaml_tmp(tmp_path) -> None:
     assert specs[0].ats == "lever"
     assert specs[0].slug == "acme"
     assert specs[0].company == "Acme"
+
+
+def test_load_company_ats_rejects_icims(tmp_path) -> None:
+    path = tmp_path / "company_ats.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "companies": [
+                    {
+                        "id": "healthedge",
+                        "company": "HealthEdge",
+                        "careers_url": "https://careers-healthedge.icims.com/jobs/search",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no public job-board API"):
+        load_company_ats_sources(path)
 
 
 def test_load_company_ats_rejects_taleo(tmp_path) -> None:

@@ -91,6 +91,7 @@ def test_registry_runnable_ids() -> None:
         "dimagi",
         "automattic",
         "palantir",
+        "redhat",
         "tencent",
         "hiring_cafe",
     } <= ids
@@ -168,6 +169,53 @@ def test_ats_board_keyword_filter() -> None:
     assert spec is not None
     recs = collect_ats_board(spec, keywords="intern chef", location="", max_results=10)
     assert recs == []
+
+
+@respx.mock
+def test_ats_board_maps_workday() -> None:
+    ext = "/job/Remote-US-NC/Platform-Engineer_R-1"
+    respx.post("https://redhat.wd5.myworkdayjobs.com/wday/cxs/redhat/Jobs/jobs").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "total": 1,
+                "jobPostings": [
+                    {
+                        "title": "Platform Engineer",
+                        "externalPath": ext,
+                        "locationsText": "Remote US NC",
+                        "bulletFields": ["R-1"],
+                    }
+                ],
+            },
+        )
+    )
+    respx.get(f"https://redhat.wd5.myworkdayjobs.com/wday/cxs/redhat/Jobs{ext}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jobPostingInfo": {
+                    "title": "Platform Engineer",
+                    "location": "Remote US NC",
+                    "jobReqId": "R-1",
+                    "startDate": "2026-08-01",
+                    "jobDescription": "<p>Linux platform engineering for partners.</p>",
+                    "externalUrl": f"https://redhat.wd5.myworkdayjobs.com/Jobs{ext}",
+                }
+            },
+        )
+    )
+    spec = get_collect_source("redhat")
+    assert spec is not None
+    recs = collect_ats_board(spec, keywords="engineer", location="", max_results=10)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec.channel_key == "redhat"
+    assert rec.company == "Red Hat"
+    assert rec.source_job_id == "R-1"
+    assert rec.location == "Remote US NC"
+    assert rec.source_url.endswith("/Platform-Engineer_R-1")
+    assert "Linux platform" in rec.description
 
 
 @respx.mock

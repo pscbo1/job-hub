@@ -7,6 +7,8 @@ Supported ATS platforms (no auth, publicly accessible):
   - Greenhouse: https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true
   - Lever:      https://api.lever.co/v0/postings/{slug}?mode=json
   - Ashby:      https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true
+  - Workday:    POST https://{host}/wday/cxs/{tenant}/{site}/jobs
+                (slug = {host}/{site}; undocumented CXS used by the public careers SPA)
 
 New companies for Job Hub collect belong in ingestion/company_ats.yaml.
 This module remains the CLI / JobSource wrapper around the shared client.
@@ -67,7 +69,7 @@ def fetch_company_board(ats: str, slug: str) -> list[JobPosting]:
     Parameters
     ----------
     ats:
-        One of "greenhouse", "lever", or "ashby".
+        One of "greenhouse", "lever", "ashby", or "workday".
     slug:
         The company slug as used on the ATS (e.g. "stripe", "linear").
 

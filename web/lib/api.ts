@@ -1083,6 +1083,7 @@ export function getCollectSources(): Promise<{ sources: CollectSource[] } | null
         { id: "dimagi", label: "Dimagi Careers", kind: "career_page", collector_id: "dimagi", integration: "ats_board", notes: "", enabled: true },
         { id: "automattic", label: "Automattic Careers", kind: "career_page", collector_id: "automattic", integration: "ats_board", notes: "", enabled: true },
         { id: "palantir", label: "Palantir Careers", kind: "career_page", collector_id: "palantir", integration: "ats_board", notes: "", enabled: true },
+        { id: "redhat", label: "Red Hat Careers", kind: "career_page", collector_id: "redhat", integration: "ats_board", notes: "", enabled: true },
         { id: "tencent", label: "Tencent Careers", kind: "career_page", collector_id: "tencent", integration: "http_json", notes: "", enabled: true },
         { id: "hiring_cafe", label: "HiringCafe", kind: "platform", collector_id: "hiring_cafe", integration: "ssr_json", notes: "", enabled: true },
         { id: "linkedin", label: "LinkedIn", kind: "platform", collector_id: "linkedin", integration: "public_html", notes: "guest HTML", enabled: true },

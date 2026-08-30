@@ -1,4 +1,4 @@
-"""Collect a company career page via the shared Greenhouse/Lever/Ashby client."""
+"""Collect a company career page via the shared public ATS board client."""
 
 from __future__ import annotations
 
@@ -36,7 +36,12 @@ def collect_ats_board(
             slug=spec.slug or "",
             careers_url=spec.careers_url or "",
         )
-        postings = fetch_ats_jobs(ats, slug)
+        postings = fetch_ats_jobs(
+            ats,
+            slug,
+            search_text=keywords,
+            limit=max_results,
+        )
     except UnsupportedAtsError as exc:
         raise AdapterError(f"{spec.id}: {exc}") from exc
     except (ValueError, AtsFetchError) as exc:

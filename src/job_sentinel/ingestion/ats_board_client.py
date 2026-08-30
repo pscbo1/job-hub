@@ -1,15 +1,17 @@
-"""Shared public ATS board client (Greenhouse, Lever, Ashby).
+"""Shared public ATS board client (Greenhouse, Lever, Ashby, Workday).
 
 Company-specific collection does not live here. Callers pass ``ats`` + ``slug``
-(or a careers URL that encodes them). Taleo is recognized so we can refuse it
-with a stable reason instead of scraping a session-bound private endpoint.
+(or a careers URL that encodes them). Taleo and iCIMS are recognized so we
+can refuse them with a stable reason instead of scraping session-bound or
+HTML-only career portals.
 """
 
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -17,7 +19,10 @@ from loguru import logger
 
 from job_sentinel.core.text import strip_html
 
-SUPPORTED_ATS = frozenset({"greenhouse", "lever", "ashby"})
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+SUPPORTED_ATS = frozenset({"greenhouse", "lever", "ashby", "workday"})
 
 TALEO_UNSUPPORTED_REASON = (
     "Oracle Taleo (and Oracle Recruiting Cloud career sites) have no public "
@@ -29,9 +34,20 @@ TALEO_UNSUPPORTED_REASON = (
     "use that workaround."
 )
 
+ICIMS_UNSUPPORTED_REASON = (
+    "iCIMS has no public job-board API. The Talent Cloud / Job Portal APIs at "
+    "api.icims.com require a numeric customer id and partner credentials. The "
+    "optimized XML feed is for approved job boards only. Career sites "
+    "({careers,jobs}-*.icims.com) render HTML listings; mode=rss still returns "
+    "HTML, and there is no stable anonymous JSON list. Full JDs are schema.org "
+    "JSON-LD on per-job HTML (often iframe). Tenants vary (classic iframe vs JS "
+    "shell vs bot wall). Job Hub does not scrape that surface."
+)
+
 UNSUPPORTED_ATS: dict[str, str] = {
     "taleo": TALEO_UNSUPPORTED_REASON,
     "oracle_recruiting": TALEO_UNSUPPORTED_REASON,
+    "icims": ICIMS_UNSUPPORTED_REASON,
 }
 
 _TIMEOUT = 20.0
@@ -62,9 +78,14 @@ class AtsJob:
 
 
 class _AtsCodec(Protocol):
-    def list_url(self, slug: str) -> str: ...
-
-    def parse(self, payload: Any, slug: str) -> list[AtsJob]: ...
+    def fetch(
+        self,
+        client: httpx.Client,
+        slug: str,
+        *,
+        search_text: str,
+        limit: int | None,
+    ) -> list[AtsJob]: ...
 
 
 def parse_careers_url(url: str) -> tuple[str, str] | None:
@@ -96,6 +117,18 @@ def parse_careers_url(url: str) -> tuple[str, str] | None:
     if host == "jobs.ashbyhq.com" and parts:
         return "ashby", parts[0].lower()
 
+    wd = _parse_workday_board(host, parsed.path)
+    if wd:
+        return "workday", wd
+
+    if host.endswith(".icims.com"):
+        tenant = host.split(".")[0]
+        for prefix in ("careers-", "jobs-"):
+            if tenant.lower().startswith(prefix):
+                tenant = tenant[len(prefix) :]
+                break
+        return "icims", tenant or host.split(".")[0]
+
     if host.endswith(".taleo.net"):
         return "taleo", host.split(".")[0]
 
@@ -118,36 +151,106 @@ def resolve_board(*, ats: str = "", slug: str = "", careers_url: str = "") -> tu
         raise UnsupportedAtsError(UNSUPPORTED_ATS[ats_key])
     if ats_key not in SUPPORTED_ATS or not slug_key:
         msg = (
-            "Need a supported ATS (greenhouse, lever, ashby) and slug, "
+            "Need a supported ATS (greenhouse, lever, ashby, workday) and slug, "
             "or a careers URL on boards.greenhouse.io / jobs.lever.co / "
-            "jobs.ashbyhq.com"
+            "jobs.ashbyhq.com / *.myworkdayjobs.com"
         )
         raise ValueError(msg)
     return ats_key, slug_key
 
 
-def fetch_ats_jobs(ats: str, slug: str) -> list[AtsJob]:
-    """Fetch every current posting from a public board. Raises on HTTP failure."""
+def fetch_ats_jobs(
+    ats: str,
+    slug: str,
+    *,
+    search_text: str = "",
+    limit: int | None = None,
+) -> list[AtsJob]:
+    """Fetch current postings from a public board. Raises on HTTP failure."""
     ats_key, slug_key = resolve_board(ats=ats, slug=slug)
     codec = _CODECS[ats_key]
-    url = codec.list_url(slug_key)
     try:
         with httpx.Client(
             timeout=_TIMEOUT,
             follow_redirects=True,
             headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
         ) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            payload: Any = resp.json()
+            return codec.fetch(client, slug_key, search_text=search_text, limit=limit)
     except Exception as exc:
+        if isinstance(exc, AtsFetchError):
+            raise
         raise AtsFetchError(f"{ats_key}/{slug_key}: {exc}") from exc
-    return codec.parse(payload, slug_key)
+
+
+def _workday_site_from_path(path: str) -> str:
+    parts = [p for p in path.strip("/").split("/") if p]
+    if parts and re.fullmatch(r"[a-z]{2}(?:-[A-Za-z]{2})?", parts[0]):
+        parts = parts[1:]
+    if not parts or parts[0].lower() == "job":
+        return ""
+    return parts[0]
+
+
+def _parse_workday_board(host: str, path: str) -> str | None:
+    labels = host.split(".")
+    if len(labels) < 3 or labels[-2] != "myworkdayjobs":
+        return None
+    if len(labels) >= 4 and not re.fullmatch(r"wd\d+", labels[1], re.I):
+        return None
+    if len(labels) not in {3, 4}:
+        return None
+    site = _workday_site_from_path(path)
+    if not site:
+        return None
+    return f"{host}/{site}"
+
+
+def _split_workday_slug(slug: str) -> tuple[str, str, str]:
+    """Return ``(host, tenant, site)`` from ``host/site`` or a careers URL."""
+    text = slug.strip()
+    if "://" in text:
+        parsed = urlparse(text)
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        packed = _parse_workday_board(host, parsed.path)
+        if not packed:
+            raise ValueError(f"Not a Workday careers URL: {slug}")
+        text = packed
+    host, _, site = text.partition("/")
+    host = host.lower()
+    site = site.split("/")[0]
+    if not host or not site:
+        raise ValueError(f"Workday slug must be host/site (got {slug!r})")
+    tenant = host.split(".")[0]
+    return host, tenant, site
+
+
+def _json_get(
+    client: httpx.Client,
+    url: str,
+    parse: Callable[[Any, str], list[AtsJob]],
+    slug: str,
+) -> list[AtsJob]:
+    resp = client.get(url)
+    resp.raise_for_status()
+    return parse(resp.json(), slug)
 
 
 class _GreenhouseCodec:
     def list_url(self, slug: str) -> str:
         return f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+
+    def fetch(
+        self,
+        client: httpx.Client,
+        slug: str,
+        *,
+        search_text: str,
+        limit: int | None,
+    ) -> list[AtsJob]:
+        _ = (search_text, limit)
+        return _json_get(client, self.list_url(slug), self.parse, slug)
 
     def parse(self, payload: Any, slug: str) -> list[AtsJob]:
         if not isinstance(payload, dict):
@@ -185,6 +288,17 @@ class _GreenhouseCodec:
 class _LeverCodec:
     def list_url(self, slug: str) -> str:
         return f"https://api.lever.co/v0/postings/{slug}?mode=json"
+
+    def fetch(
+        self,
+        client: httpx.Client,
+        slug: str,
+        *,
+        search_text: str,
+        limit: int | None,
+    ) -> list[AtsJob]:
+        _ = (search_text, limit)
+        return _json_get(client, self.list_url(slug), self.parse, slug)
 
     def parse(self, payload: Any, slug: str) -> list[AtsJob]:
         if not isinstance(payload, list):
@@ -233,6 +347,17 @@ class _LeverCodec:
 class _AshbyCodec:
     def list_url(self, slug: str) -> str:
         return f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
+
+    def fetch(
+        self,
+        client: httpx.Client,
+        slug: str,
+        *,
+        search_text: str,
+        limit: int | None,
+    ) -> list[AtsJob]:
+        _ = (search_text, limit)
+        return _json_get(client, self.list_url(slug), self.parse, slug)
 
     def parse(self, payload: Any, slug: str) -> list[AtsJob]:
         if not isinstance(payload, dict):
@@ -283,10 +408,114 @@ def _ashby_salary(comp: object) -> str:
     return f"{curr} {lo_str}–{hi_str} {interval}".strip()
 
 
+_WORKDAY_PAGE = 20
+_WORKDAY_MAX_PAGES = 15
+
+
+class _WorkdayCodec:
+    def fetch(
+        self,
+        client: httpx.Client,
+        slug: str,
+        *,
+        search_text: str,
+        limit: int | None,
+    ) -> list[AtsJob]:
+        host, tenant, site = _split_workday_slug(slug)
+        list_url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
+        cap = limit if limit is not None and limit > 0 else _WORKDAY_PAGE * _WORKDAY_MAX_PAGES
+        jobs: list[AtsJob] = []
+        offset = 0
+        total = 1
+        pages = 0
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        while offset < total and len(jobs) < cap and pages < _WORKDAY_MAX_PAGES:
+            resp = client.post(
+                list_url,
+                json={
+                    "appliedFacets": {},
+                    "limit": _WORKDAY_PAGE,
+                    "offset": offset,
+                    "searchText": search_text.strip(),
+                },
+                headers=headers,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            if not isinstance(payload, dict):
+                break
+            total = int(payload.get("total") or 0)
+            rows = payload.get("jobPostings") or []
+            if not isinstance(rows, list) or not rows:
+                break
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                jobs.append(self._hydrate(client, host, tenant, site, slug, item))
+                if len(jobs) >= cap:
+                    break
+            offset += _WORKDAY_PAGE
+            pages += 1
+        return jobs
+
+    def _hydrate(
+        self,
+        client: httpx.Client,
+        host: str,
+        tenant: str,
+        site: str,
+        slug: str,
+        item: dict[str, Any],
+    ) -> AtsJob:
+        ext = str(item.get("externalPath") or "")
+        title = str(item.get("title") or "")
+        location = str(item.get("locationsText") or "")
+        native = ""
+        bullets = item.get("bulletFields") or []
+        if isinstance(bullets, list) and bullets:
+            native = str(bullets[0] or "")
+        apply_url = f"https://{host}/{site}{ext}" if ext else f"https://{host}/{site}"
+        desc = ""
+        posted = str(item.get("postedOn") or "")
+        if ext:
+            durl = f"https://{host}/wday/cxs/{tenant}/{site}{ext}"
+            dpayload: Any = {}
+            try:
+                dresp = client.get(durl, headers={"Accept": "application/json"})
+                dresp.raise_for_status()
+                dpayload = dresp.json()
+            except Exception as exc:
+                logger.warning("workday detail failed {} — {}", durl, exc)
+            info = dpayload.get("jobPostingInfo") if isinstance(dpayload, dict) else {}
+            if isinstance(info, dict):
+                title = str(info.get("title") or title)
+                location = str(info.get("location") or location)
+                native = str(info.get("jobReqId") or info.get("id") or native)
+                posted = str(info.get("startDate") or posted)
+                desc = str(info.get("jobDescription") or "")
+                ext_url = str(info.get("externalUrl") or "")
+                if ext_url:
+                    apply_url = ext_url
+        return AtsJob(
+            ats="workday",
+            slug=slug,
+            native_id=native,
+            title=title,
+            location=location,
+            company=tenant,
+            department="",
+            posted_at=posted,
+            apply_url=apply_url,
+            description=desc,
+            extra={"ats": "workday", "company_slug": slug, "external_path": ext},
+        )
+
+
 _CODECS: dict[str, _AtsCodec] = {
     "greenhouse": _GreenhouseCodec(),
     "lever": _LeverCodec(),
     "ashby": _AshbyCodec(),
+    "workday": _WorkdayCodec(),
 }
 
 

@@ -1,15 +1,17 @@
 # Company careers collected through the shared ATS board adapter (ats_board).
-# New Greenhouse / Lever / Ashby companies: add a row. Do not add collector code.
+# New Greenhouse / Lever / Ashby / Workday companies: add a row. Do not add
+# collector code.
 #
 # Required: id, company
 # Board identity: ats + slug, or careers_url on a known host
 #   greenhouse: https://boards.greenhouse.io/{slug} or job-boards.greenhouse.io/{slug}
 #   lever:      https://jobs.lever.co/{slug}
 #   ashby:      https://jobs.ashbyhq.com/{slug}
+#   workday:    https://{tenant}.wd{N}.myworkdayjobs.com/{site}
+#               slug is {host}/{site} (site is case-sensitive)
 #
-# Taleo / Oracle Recruiting Cloud: not runnable. No public job-board API; the
-# career section uses a session-bound undocumented searchjobs POST plus HTML
-# detail pages. RSS is optional, default-off, and capped at 10 jobs.
+# Taleo / Oracle Recruiting Cloud: not runnable. No public job-board API.
+# iCIMS: not runnable. Partner API + HTML career portals only.
 
 companies:
   - id: dimagi
@@ -35,3 +37,11 @@ companies:
     careers_url: https://jobs.lever.co/palantir
     market: GLOBAL
     notes: Lever public postings JSON
+
+  - id: redhat
+    company: Red Hat
+    ats: workday
+    slug: redhat.wd5.myworkdayjobs.com/Jobs
+    careers_url: https://redhat.wd5.myworkdayjobs.com/Jobs
+    market: GLOBAL
+    notes: Workday CXS JSON (undocumented, unauthenticated)

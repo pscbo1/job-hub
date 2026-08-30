@@ -3,7 +3,7 @@
 Each source declares how it is collected. Search lists only runnable sources.
 Job Pool and the ingest pipeline stay unchanged — adapters emit CollectorRecord.
 
-Greenhouse / Lever / Ashby company careers live in ``company_ats.yaml``.
+Greenhouse / Lever / Ashby / Workday company careers live in ``company_ats.yaml``.
 """
 
 from __future__ import annotations
