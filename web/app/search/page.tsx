@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { CollectSourceGroups } from "@/components/CollectSourceGroups";
+import { CollectToast } from "@/components/CollectToast";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
 import { Button } from "@/components/ui/button";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
@@ -12,10 +13,22 @@ import {
   collectJobs,
   getCollectSources,
   getFilterSettings,
+  getJobs,
   saveFilterSettings,
   type CollectOutcome,
   type CollectSource,
 } from "@/lib/api";
+import {
+  buildCollectToast,
+  COLLECT_TOAST_MS,
+  collectQueryFilters,
+  failedSourceLabels,
+  formatCollectPlan,
+  formatCollectResult,
+  formatPoolTotal,
+  shouldShowPoolTotal,
+  type CollectToastContent,
+} from "@/lib/collectCopy";
 import {
   initialSourceSelection,
   isSelectableCollectSource,
@@ -57,6 +70,8 @@ export default function SearchPage() {
   const [catalog, setCatalog] = useState<CollectSource[]>([]);
   const [keywords, setKeywords] = useState("");
   const [location, setLocation] = useState("");
+  const [remoteOnly, setRemoteOnly] = useState(false);
+  const [datePostedDays, setDatePostedDays] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [maxResults, setMaxResults] = useState(100);
   const [excludeOutsourcing, setExcludeOutsourcing] = useState(true);
@@ -67,6 +82,8 @@ export default function SearchPage() {
   const [running, setRunning] = useState(false);
   const [refiltering, setRefiltering] = useState(false);
   const [outcome, setOutcome] = useState<CollectOutcome | null>(null);
+  const [poolTotal, setPoolTotal] = useState<number | null>(null);
+  const [toast, setToast] = useState<CollectToastContent | null>(null);
   const [message, setMessage] = useState("");
   const keywordsRef = useRef<HTMLInputElement>(null);
 
@@ -84,6 +101,12 @@ export default function SearchPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), COLLECT_TOAST_MS);
+    return () => window.clearTimeout(id);
+  }, [toast]);
 
   useEffect(() => {
     Promise.all([getCollectSources(), getFilterSettings()])
@@ -142,11 +165,14 @@ export default function SearchPage() {
     setRunning(true);
     setMessage("");
     setOutcome(null);
+    setPoolTotal(null);
+    setToast(null);
     const r = await collectJobs({
       keywords: kw,
       location: location.trim(),
       sources: [...selected],
       max_results: maxResults,
+      ...collectQueryFilters(remoteOnly, datePostedDays),
       exclude_outsourcing: excludeOutsourcing,
       exclude_part_time: excludePartTime,
       exclude_internship: excludeInternship,
@@ -154,11 +180,37 @@ export default function SearchPage() {
       excluded_companies: excludedCompanies,
     });
     setRunning(false);
+    const labelsById = Object.fromEntries(catalog.map((s) => [s.id, s.label]));
     if (r === null) {
       setMessage("Couldn't reach the local API. Run `job-sentinel serve`.");
+      setToast(buildCollectToast({
+        status: "unreachable",
+        created: 0,
+        updated: 0,
+        excluded: 0,
+        poolTotal: null,
+        failedLabels: [],
+        othersContinued: false,
+      }));
       return;
     }
     setOutcome(r);
+    const pool = await getJobs(500, undefined, "included");
+    const nextTotal = shouldShowPoolTotal(pool.length, r.jobs_created) ? pool.length : null;
+    if (nextTotal != null) {
+      setPoolTotal(nextTotal);
+    }
+    setToast(
+      buildCollectToast({
+        status: r.status,
+        created: r.jobs_created,
+        updated: r.jobs_updated,
+        excluded: r.excluded ?? 0,
+        poolTotal: nextTotal,
+        failedLabels: failedSourceLabels(r.source_results, labelsById),
+        othersContinued: r.source_results.some((s) => Boolean(s.succeeded)),
+      }),
+    );
   }
 
   async function refilterStored() {
@@ -208,8 +260,8 @@ export default function SearchPage() {
       <header className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight text-ink">Collect Jobs</h1>
         <p className="mt-1 text-sm text-muted">
-          Collect new jobs from external sources into Job Pool. Browse and filter collected jobs
-          on Job Pool — this page does not search the local pool.
+          Search selected sources and add matching jobs to your Job Pool. Browse and filter them
+          on Job Pool — this page does not search jobs you already collected.
         </p>
       </header>
 
@@ -240,6 +292,32 @@ export default function SearchPage() {
             value={location}
             onChange={(e) => setLocation(e.target.value)}
           />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+            <label className="flex items-center gap-2 text-ink">
+              <input
+                type="checkbox"
+                checked={remoteOnly}
+                onChange={(e) => setRemoteOnly(e.target.checked)}
+              />
+              Remote
+            </label>
+            <label className="flex items-center gap-2 text-ink">
+              Posted
+              <select
+                value={datePostedDays}
+                onChange={(e) => setDatePostedDays(e.target.value)}
+                className="rounded-lg border border-line bg-surface px-2 py-1 text-sm text-ink"
+              >
+                <option value="">Any time</option>
+                <option value="1">Past 24 hours</option>
+                <option value="7">Past week</option>
+                <option value="30">Past month</option>
+              </select>
+            </label>
+          </div>
+          <p className="text-[11px] text-muted">
+            Remote and posted date are sent to sources that support them (LinkedIn guest search).
+          </p>
 
           <div>
             <p className="mb-2 text-sm font-medium text-ink">Sources</p>
@@ -286,7 +364,7 @@ export default function SearchPage() {
               />
             </div>
             <p className="mt-1 text-[11px] text-muted">
-              Passed to mcp-jobs. Collectors paginate until this cap or the source runs out.
+              Cap per source. Collection stops at this number or when that source has no more jobs.
             </p>
           </div>
 
@@ -339,7 +417,8 @@ export default function SearchPage() {
               />
             </label>
             <p className="mt-1 text-[11px] text-muted">
-              Excluded jobs stay in jobs_raw and jobs. Changing rules re-filters without scraping.
+              Matching jobs stay stored and appear under Excluded. Changing rules re-filters without
+              collecting again.
             </p>
             <button
               type="button"
@@ -351,7 +430,22 @@ export default function SearchPage() {
             </button>
           </div>
 
-          <Button type="submit" disabled={!canRun} className="w-full">
+          <p className="text-xs text-muted">{formatCollectPlan(selected.size, maxResults)}</p>
+          {!keywords.trim() && (
+            <p className="text-xs text-muted">Enter keywords to collect.</p>
+          )}
+          <Button
+            type="submit"
+            disabled={!canRun}
+            className="w-full"
+            title={
+              canRun
+                ? undefined
+                : selected.size === 0
+                  ? "Select at least one source"
+                  : "Enter keywords to collect"
+            }
+          >
             {running ? "Collecting…" : "Collect Jobs"}
           </Button>
         </form>
@@ -361,11 +455,14 @@ export default function SearchPage() {
 
       {running && !outcome && (
         <Card className="mt-4">
-          <CardSub>Running mcp-jobs, then writing jobs_raw → jobs. This can take a few minutes.</CardSub>
+          <CardSub>Searching selected sources. This can take a few minutes.</CardSub>
         </Card>
       )}
 
-      {outcome && <CollectResultCard outcome={outcome} poolHref={poolHref} />}
+      {outcome && (
+        <CollectResultCard outcome={outcome} poolHref={poolHref} poolTotal={poolTotal} />
+      )}
+      {toast && <CollectToast title={toast.title} lines={toast.lines} />}
     </div>
   );
 }
@@ -373,9 +470,11 @@ export default function SearchPage() {
 function CollectResultCard({
   outcome,
   poolHref,
+  poolTotal,
 }: {
   outcome: CollectOutcome;
   poolHref: string;
+  poolTotal: number | null;
 }) {
   const tone =
     outcome.status === "completed"
@@ -394,13 +493,10 @@ function CollectResultCard({
     <Card className="mt-4 space-y-3">
       <CardTitle className={tone}>{label}</CardTitle>
       {outcome.message && outcome.message !== label && <CardSub>{outcome.message}</CardSub>}
-      <ul className="space-y-1 text-sm text-ink">
-        <li>New jobs added: {outcome.jobs_created}</li>
-        <li>Updated existing jobs: {outcome.jobs_updated}</li>
-        <li>Raw records stored: {outcome.raw_inserted}</li>
-        <li>Excluded from Job Pool: {outcome.excluded ?? 0}</li>
-        {outcome.max_results != null && <li>Max results requested: {outcome.max_results}</li>}
-      </ul>
+      <p className="text-sm text-ink">
+        {formatCollectResult(outcome.jobs_created, outcome.jobs_updated, outcome.excluded ?? 0)}
+      </p>
+      {poolTotal != null && <p className="text-sm text-muted">{formatPoolTotal(poolTotal)}</p>}
       {outcome.source_results.length > 0 && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
           {outcome.source_results.map((s) => (
