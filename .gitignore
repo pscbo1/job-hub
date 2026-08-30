@@ -22,6 +22,7 @@ MANIFEST
 .uv/
 venv/
 env/
+.python312/
 .python-version
 
 # ─── Testing ──────────────────────────────────────────────────────────────────

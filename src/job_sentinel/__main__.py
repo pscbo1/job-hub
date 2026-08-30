@@ -226,6 +226,47 @@ def ingest(
         console.print(f"[yellow]{err}[/]")
 
 
+@app.command()
+def collect(
+    keywords: str = typer.Option(..., "--keywords", "-k", help="Search keywords for mcp-jobs"),
+    location: str = typer.Option("", "--location", "-l", help="City / location (optional)"),
+    sources: str = typer.Option(
+        "zhaopin,liepin",
+        "--sources",
+        "-s",
+        help="Comma-separated source ids: zhaopin, liepin, boss",
+    ),
+) -> None:
+    """Collect from mcp-jobs into jobs_raw then jobs (same path as the Search page)."""
+    from job_sentinel.db.repository import JobRepository
+    from job_sentinel.ingestion.collect import collect_and_ingest
+
+    source_ids = [part.strip() for part in sources.split(",") if part.strip()]
+    repo = JobRepository(_DEFAULT_DB)
+    try:
+        outcome = collect_and_ingest(
+            repo,
+            keywords=keywords,
+            location=location,
+            source_ids=source_ids,
+        )
+    finally:
+        repo.close()
+
+    color = "green" if outcome.status == "completed" else "yellow"
+    if outcome.status == "failed":
+        color = "red"
+    console.print(
+        f"[{color}]{outcome.status}[/] {outcome.message} | "
+        f"created={outcome.jobs_created} updated={outcome.jobs_updated} "
+        f"raw={outcome.raw_inserted}"
+    )
+    for err in outcome.errors:
+        console.print(f"[yellow]{err}[/]")
+    if outcome.status == "failed":
+        raise typer.Exit(code=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # serve — local HTTP API (backend for the web UI)
 # ─────────────────────────────────────────────────────────────────────────────

@@ -932,7 +932,81 @@ export interface IngestResult {
   errors: string[];
 }
 
-/** Import mcp-jobs / collector JSON into jobs_raw then jobs. No UI yet. */
+export interface CollectSource {
+  id: string;
+  label: string;
+  kind: "platform" | "career_page" | "vertical";
+  collector_id: string;
+  notes: string;
+  enabled: boolean;
+}
+
+export type CollectStatus = "completed" | "failed" | "partial";
+
+export interface CollectOutcome {
+  status: CollectStatus;
+  jobs_created: number;
+  jobs_updated: number;
+  raw_inserted: number;
+  invalid: number;
+  source_results: Array<{
+    name?: string;
+    succeeded?: boolean;
+    jobCount?: number;
+    errors?: string[];
+    [key: string]: unknown;
+  }>;
+  errors: string[];
+  since: string;
+  message: string;
+}
+
+export function getCollectSources(): Promise<{ sources: CollectSource[] } | null> {
+  if (demo.DEMO) {
+    return Promise.resolve({
+      sources: [
+        { id: "zhaopin", label: "Zhaopin", kind: "platform", collector_id: "zhaopin", notes: "", enabled: true },
+        { id: "liepin", label: "Liepin", kind: "platform", collector_id: "liepin", notes: "", enabled: true },
+        { id: "boss", label: "Boss", kind: "platform", collector_id: "boss", notes: "local Chrome login", enabled: true },
+      ],
+    });
+  }
+  return getJSON<{ sources: CollectSource[] } | null>("/api/collect/sources", null);
+}
+
+/** Run mcp-jobs for the selected sources, then ingest into Job Pool. */
+export async function collectJobs(body: {
+  keywords: string;
+  location: string;
+  sources: string[];
+}): Promise<CollectOutcome | null> {
+  if (demo.DEMO) {
+    return {
+      status: "completed",
+      jobs_created: 0,
+      jobs_updated: 0,
+      raw_inserted: 0,
+      invalid: 0,
+      source_results: [],
+      errors: [],
+      since: new Date().toISOString().slice(0, 10),
+      message: "Demo mode — collection is not run",
+    };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/collect/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CollectOutcome;
+  } catch {
+    return null;
+  }
+}
+
+/** Import mcp-jobs / collector JSON into jobs_raw then jobs. */
 export async function ingestJobs(payload: unknown): Promise<IngestResult | null> {
   if (demo.DEMO) {
     return {

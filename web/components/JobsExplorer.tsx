@@ -8,6 +8,11 @@ import { JobActions } from "@/components/JobActions";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import type { HubJob, HubJobStatus } from "@/lib/api";
+import {
+  DISCOVERED_RANGE_OPTIONS,
+  jobsPoolHref,
+  type DiscoveredRange,
+} from "@/lib/discoveredRange";
 import { cn, externalUrl } from "@/lib/utils";
 
 const STATUSES: HubJobStatus[] = ["saved", "to_do", "applied", "closed", "reference"];
@@ -49,10 +54,12 @@ function Monogram({ name }: { name: string }) {
 
 export function JobsExplorer({
   jobs,
-  since = "",
+  range = "7d",
+  customSince = "",
 }: {
   jobs: HubJob[];
-  since?: string;
+  range?: DiscoveredRange;
+  customSince?: string;
 }) {
   const router = useRouter();
   const reduced = useReducedMotion();
@@ -97,11 +104,12 @@ export function JobsExplorer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, query, filter, sort, overrides]);
 
-  function setSince(value: string) {
-    const params = new URLSearchParams();
-    if (value) params.set("since", value);
-    const qs = params.toString();
-    router.push(qs ? `/jobs?${qs}` : "/jobs");
+  function setRange(next: DiscoveredRange) {
+    router.push(jobsPoolHref(next, next === "custom" ? customSince : ""));
+  }
+
+  function setCustomSince(value: string) {
+    router.push(jobsPoolHref("custom", value));
   }
 
   return (
@@ -131,15 +139,27 @@ export function JobsExplorer({
             />
           </div>
           <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
-            Discovered since
-            <input
-              type="date"
-              value={since}
-              onChange={(e) => setSince(e.target.value)}
-              aria-label="Jobs discovered on or after this date"
-              className="h-10 rounded-lg border border-line bg-surface px-2 text-sm text-ink"
+            Discovered
+            <PopoverSelect
+              value={range}
+              onChange={(v) => setRange(v as DiscoveredRange)}
+              aria-label="Discovered date range"
+              className="w-40"
+              options={DISCOVERED_RANGE_OPTIONS}
             />
           </label>
+          {range === "custom" && (
+            <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
+              On or after
+              <input
+                type="date"
+                value={customSince}
+                onChange={(e) => setCustomSince(e.target.value)}
+                aria-label="Jobs discovered on or after this date"
+                className="h-10 rounded-lg border border-line bg-surface px-2 text-sm text-ink"
+              />
+            </label>
+          )}
           <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
             Sort
             <PopoverSelect
@@ -181,7 +201,7 @@ export function JobsExplorer({
           <CardTitle>Nothing matches</CardTitle>
           <CardSub className="mt-2">
             {jobs.length === 0
-              ? "No jobs in the pool yet. Import mcp-jobs output with job-sentinel ingest."
+              ? "No jobs in the pool yet. Collect from Search, or import with job-sentinel ingest."
               : "Try a different search, date, or status filter."}
           </CardSub>
         </Card>

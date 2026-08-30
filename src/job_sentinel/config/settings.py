@@ -464,6 +464,27 @@ class Settings(BaseSettings):
         default=_REPO_ROOT / "data" / "jobs.db",
         description="SQLite database file path",
     )
+    mcp_jobs_root: Path = Field(
+        default=_REPO_ROOT.parent / "mcp-jobs",
+        description="Local mcp-jobs clone used by Search/Collect (not vendored into Job Hub)",
+    )
+    mcp_jobs_node: str = Field(
+        default="node",
+        description="Node executable used to run the mcp-jobs collect CLI",
+    )
+    mcp_jobs_timeout_seconds: int = Field(
+        default=600,
+        ge=30,
+        description="Seconds to wait for one mcp-jobs collection run",
+    )
+    mcp_jobs_page_from: int = Field(default=1, ge=1, description="mcp-jobs start page")
+    mcp_jobs_page_to: int = Field(default=1, ge=1, description="mcp-jobs end page (V0: one page)")
+    mcp_jobs_max_jobs: int = Field(
+        default=40,
+        ge=1,
+        le=200,
+        description="Cap unique jobs requested from mcp-jobs per run",
+    )
     session_path: Path = Field(
         default=_REPO_ROOT / "data" / "session.json",
         description="Saved Playwright storage state (cookies) from `job-sentinel login`",

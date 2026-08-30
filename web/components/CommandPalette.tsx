@@ -48,7 +48,7 @@ interface Item {
 const ITEMS: Item[] = [
   { label: "Home", hint: "Landing page", icon: Home, href: "/", group: "Navigate" },
   { label: "Dashboard", hint: "Pipeline, deadlines, activity", icon: LayoutDashboard, href: "/dashboard", group: "Navigate", keywords: "overview funnel stats home" },
-  { label: "Search", hint: "Find jobs across the web", icon: Search, href: "/search", group: "Navigate", keywords: "find jobs remote adzuna remoteok aggregate" },
+  { label: "Search", hint: "Collect jobs from Zhaopin, Liepin, Boss", icon: Search, href: "/search", group: "Navigate", keywords: "collect zhaopin liepin boss mcp-jobs" },
   { label: "Chat", hint: "Ask Sentinel about your jobs", icon: MessageSquare, href: "/chat", group: "Navigate" },
   { label: "Profile", hint: "Your résumé, rendered live", icon: FileText, href: "/profile", group: "Navigate" },
   { label: "Studio", hint: "Tailor + score against a job description", icon: Wand2, href: "/studio", group: "Navigate" },

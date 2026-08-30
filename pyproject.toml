@@ -157,6 +157,7 @@ dev = [
 target-version = "py311"
 line-length    = 100
 src            = ["src", "tests"]
+extend-exclude = [".python312"]
 
 [tool.ruff.lint]
 select = [

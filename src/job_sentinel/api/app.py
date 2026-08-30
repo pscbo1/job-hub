@@ -124,6 +124,26 @@ class HubJobStatusRequest(BaseModel):
         return v
 
 
+class CollectJobsRequest(BaseModel):
+    """Search page → mcp-jobs collection criteria."""
+
+    keywords: str = Field(min_length=1)
+    location: str = ""
+    sources: list[str] = Field(min_length=1)
+
+    @field_validator("keywords", "location", mode="before")
+    @classmethod
+    def _strip_text(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def _clean_sources(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [str(item).strip() for item in v if str(item).strip()]
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
 
@@ -274,7 +294,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=_LOCAL_ORIGIN_REGEX,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -443,6 +463,31 @@ def create_app(
         if job is None:  # pragma: no cover - defensive
             raise HTTPException(status_code=404, detail=f"Posting {posting_id} not found")
         return job
+
+    @app.get("/api/collect/sources")
+    def list_collect_sources() -> dict[str, Any]:
+        """Selectable collection sources for Search. Later kinds append here."""
+        from job_sentinel.ingestion.collect_sources import list_collect_sources as list_sources
+
+        return {"sources": [s.model_dump() for s in list_sources()]}
+
+    @app.post("/api/collect/jobs")
+    def collect_jobs(req: CollectJobsRequest) -> dict[str, Any]:
+        """Run mcp-jobs with UI criteria, then ingest into jobs_raw / jobs."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.collect import collect_and_ingest
+
+        repo = JobRepository(db_path)
+        try:
+            outcome = collect_and_ingest(
+                repo,
+                keywords=req.keywords,
+                location=req.location,
+                source_ids=req.sources,
+            )
+        finally:
+            repo.close()
+        return outcome.model_dump()
 
     @app.post("/api/ingest/jobs")
     def ingest_collector_jobs(payload: dict[str, Any] | list[Any]) -> dict[str, Any]:

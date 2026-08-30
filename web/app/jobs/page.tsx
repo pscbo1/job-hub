@@ -1,16 +1,20 @@
 import { JobsExplorer } from "@/components/JobsExplorer";
 import { getJobs } from "@/lib/api";
+import { resolveDiscoveredFilter } from "@/lib/discoveredRange";
 
 export const dynamic = "force-dynamic";
 
 export default async function JobsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ since?: string }>;
+  searchParams: Promise<{ since?: string; range?: string }>;
 }) {
   const params = await searchParams;
-  const since = params.since?.trim() ?? "";
-  const jobs = await getJobs(200, since || undefined);
+  const filter = resolveDiscoveredFilter({
+    range: params.range,
+    since: params.since,
+  });
+  const jobs = await getJobs(200, filter.since);
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-5 py-12">
@@ -21,7 +25,7 @@ export default async function JobsPage({
         </p>
       </div>
 
-      <JobsExplorer jobs={jobs} since={since} />
+      <JobsExplorer jobs={jobs} range={filter.range} customSince={filter.customSince} />
     </div>
   );
 }

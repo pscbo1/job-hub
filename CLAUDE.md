@@ -19,6 +19,7 @@ cd web; npm run dev | build | typecheck            # no eslint configured
 CLI commands: `run` (scheduler+bot), `scrape` (one cycle, default --dry-run), `login`
 (manual portal login → data/session.json), `session` (headless validity check), `serve`
 (FastAPI), `web` (API + Next.js together), `adapters`, `db stats|list`,
+`ingest <path>`, `collect` (mcp-jobs → jobs_raw → jobs),
 `resume init|import <pdf>|show|build|cover|doctor`,
 `apps list|add|stage|note|rm`, `docs list|rm`,
 `sources list|search|company`, `users add|list|remove`.
@@ -87,6 +88,8 @@ scripts/           check_licenses.py (CI); diagnose_*.py are untracked one-off d
   surface; `web/lib/api.ts` is the single typed client. API routes today:
   - `profile` CRUD + import-resume, `profile/summary`
   - `jobs` + `jobs/{id}/status`, `stats`
+  - `collect/sources` (GET), `collect/jobs` (POST — mcp-jobs → ingest)
+  - `ingest/jobs` (POST)
   - `ops/{status,login,session/check,scrape,watcher/start,watcher/stop}`
   - `llm/status`, `llm/config` (GET/PUT), `llm/test`
   - `match` (POST — ATS + semantic + LLM blend)
