@@ -175,3 +175,69 @@ def test_manual_dismiss_and_undismiss_preserve_status_and_raw(tmp_path: Path) ->
         assert any(j.id == job.id for j in repo.list_hub_jobs(filter_state="included"))
     finally:
         repo.close()
+
+
+def test_hide_company_refilter_hides_matches_preserves_status(tmp_path: Path) -> None:
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        rules = FilterSettings(
+            exclude_outsourcing=False,
+            exclude_part_time=False,
+            exclude_internship=False,
+        )
+        save_filter_settings(repo, rules)
+        keep = repo.upsert_job(
+            _job(
+                source_job_id="other",
+                company="别的公司",
+                title="产品经理",
+                status=JobStatus.SAVED,
+            )
+        )
+        hide_a = repo.upsert_job(
+            _job(source_job_id="a", company="科锐国际", title="招聘顾问", status=JobStatus.TO_DO)
+        )
+        hide_b = repo.upsert_job(
+            _job(
+                source_job_id="b",
+                company="科锐国际人力资源股份有限公司",
+                title="猎头",
+                status=JobStatus.APPLIED,
+            )
+        )
+        repo.insert_job_raw(JobRaw(source="zhaopin", source_job_id="a", job_id=hide_a.id))
+        repo.insert_job_raw(JobRaw(source="zhaopin", source_job_id="b", job_id=hide_b.id))
+        raw_count = repo._db["jobs_raw"].count
+
+        hidden = FilterSettings(
+            exclude_outsourcing=False,
+            exclude_part_time=False,
+            exclude_internship=False,
+            excluded_companies=["科锐国际"],
+        )
+        save_filter_settings(repo, hidden)
+        result = reapply_filters(repo, hidden)
+        assert result.excluded == 2
+        assert result.included == 1
+        assert repo._db["jobs_raw"].count == raw_count
+
+        pool = {j.id: j for j in repo.list_hub_jobs(filter_state="included")}
+        assert keep.id in pool
+        assert hide_a.id not in pool
+        assert hide_b.id not in pool
+        excluded = {j.id: j for j in repo.list_hub_jobs(filter_state="excluded")}
+        assert excluded[hide_a.id].filter_reasons == ["excluded_company"]
+        assert excluded[hide_b.id].filter_reasons == ["excluded_company"]
+        assert excluded[hide_a.id].status == JobStatus.TO_DO
+        assert excluded[hide_b.id].status == JobStatus.APPLIED
+        assert excluded[hide_a.id].discovered_at == hide_a.discovered_at
+
+        save_filter_settings(repo, rules)
+        restored = reapply_filters(repo, rules)
+        assert restored.included == 3
+        again = repo.get_hub_job(hide_a.id)
+        assert again is not None
+        assert again.filter_state == FILTER_STATE_INCLUDED
+        assert again.status == JobStatus.TO_DO
+    finally:
+        repo.close()

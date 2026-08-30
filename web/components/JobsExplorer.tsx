@@ -5,6 +5,12 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { JobActions } from "@/components/JobActions";
+import {
+  JobPoolActionMenu,
+  JobPoolUndoToast,
+  useDismissOutside,
+  useJobPoolActions,
+} from "@/components/JobPoolActions";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import type { HubJob, HubJobStatus } from "@/lib/api";
@@ -17,6 +23,10 @@ import {
 import { cn, externalUrl } from "@/lib/utils";
 
 const STATUSES: HubJobStatus[] = ["saved", "to_do", "applied", "closed", "reference"];
+
+function statusChipLabel(key: string): string {
+  return key === "unset" ? "No status" : key;
+}
 
 const ACCENT: Record<string, string> = {
   unset: "bg-stone-300",
@@ -41,18 +51,6 @@ function FactRow({ label, value }: { label: string; value?: string | number | nu
   );
 }
 
-function Monogram({ name }: { name: string }) {
-  const letter = (name.trim()[0] ?? "?").toUpperCase();
-  return (
-    <div
-      aria-hidden="true"
-      className="grid h-11 w-11 shrink-0 select-none place-items-center rounded-xl border border-line bg-bg font-semibold text-muted"
-    >
-      {letter}
-    </div>
-  );
-}
-
 export function JobsExplorer({
   jobs,
   range = "7d",
@@ -72,6 +70,9 @@ export function JobsExplorer({
   const [filter, setFilter] = useState<string>("all");
   const [sort, setSort] = useState<"newest" | "published">("newest");
   const [overrides, setOverrides] = useState<Record<string, HubJobStatus | null>>({});
+  const poolActions = useJobPoolActions();
+  const closeMenu = () => poolActions.setMenu(null);
+  const menuRef = useDismissOutside(!!poolActions.menu, closeMenu);
 
   const statusOf = (j: HubJob): HubJobStatus | null =>
     Object.prototype.hasOwnProperty.call(overrides, j.id) ? overrides[j.id] : j.status;
@@ -105,9 +106,19 @@ export function JobsExplorer({
     } else {
       sorted.sort((a, b) => b.discovered_at.localeCompare(a.discovered_at));
     }
-    return sorted;
+    if (pool === "excluded") return sorted;
+    return sorted.filter((j) => !poolActions.isHidden(j));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs, query, filter, sort, overrides]);
+  }, [
+    jobs,
+    query,
+    filter,
+    sort,
+    overrides,
+    pool,
+    poolActions.hiddenIds,
+    poolActions.hiddenCompanies,
+  ]);
 
   function setRange(next: DiscoveredRange) {
     router.push(jobsPoolHref(next, next === "custom" ? customSince : "", pool));
@@ -208,7 +219,7 @@ export function JobsExplorer({
                   : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
               )}
             >
-              {s}
+              {statusChipLabel(s)}
               <span className={cn("ml-1.5 tabular-nums", filter === s ? "text-white/60" : "text-muted/60")}>
                 {counts[s] ?? 0}
               </span>
@@ -241,39 +252,55 @@ export function JobsExplorer({
                 exit={reduced ? undefined : { opacity: 0, scale: 0.98 }}
                 transition={{ duration: 0.3, delay: Math.min(idx * 0.03, 0.3) }}
               >
-                <Card className="group relative overflow-hidden pl-6">
+                <Card
+                  className="group relative overflow-hidden pl-6"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    poolActions.openMenu(j, e.clientX, e.clientY);
+                  }}
+                >
                   <span
                     aria-hidden="true"
                     className={cn("absolute inset-y-0 left-0 w-1", ACCENT[st ?? "unset"] ?? "bg-stone-300")}
                   />
-                  <div className="flex min-w-0 gap-3.5 pb-3">
-                    <Monogram name={j.company || j.title} />
-                    <div className="min-w-0 flex-1">
-                      <CardTitle className="leading-snug">{j.title}</CardTitle>
-                      <CardSub className="mt-0.5">
-                        {[j.company, j.location, j.source].filter(Boolean).join(" · ")}
-                      </CardSub>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <span className="text-[11px] text-muted">Discovered {dayStamp(j.discovered_at)}</span>
-                        {j.published_at && (
-                          <span className="text-[11px] text-muted">Published {dayStamp(j.published_at)}</span>
-                        )}
-                        {j.salary && (
-                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                            {j.salary}
-                          </span>
-                        )}
-                        {typeof j.match_score === "number" && (
-                          <span className="text-[11px] text-muted">
-                            Match {(j.match_score * 100).toFixed(0)}%
-                          </span>
-                        )}
-                        {pool === "excluded" && (j.filter_reasons?.length ?? 0) > 0 && (
-                          <span className="text-[11px] text-amber-700">
-                            {j.filter_reasons?.join(", ")}
-                          </span>
-                        )}
-                      </div>
+                  <button
+                    type="button"
+                    aria-label={`Actions for ${j.title}`}
+                    aria-haspopup="menu"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      poolActions.openMenu(j, rect.right - 8, rect.bottom + 4);
+                    }}
+                    className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-ink/[0.06] hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
+                  >
+                    ···
+                  </button>
+                  <div className="min-w-0 pb-3 pr-8">
+                    <CardTitle className="leading-snug">{j.title}</CardTitle>
+                    <CardSub className="mt-0.5">
+                      {[j.company, j.location, j.source].filter(Boolean).join(" · ")}
+                    </CardSub>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] text-muted">Discovered {dayStamp(j.discovered_at)}</span>
+                      {j.published_at && (
+                        <span className="text-[11px] text-muted">Published {dayStamp(j.published_at)}</span>
+                      )}
+                      {j.salary && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                          {j.salary}
+                        </span>
+                      )}
+                      {typeof j.match_score === "number" && (
+                        <span className="text-[11px] text-muted">
+                          Match {(j.match_score * 100).toFixed(0)}%
+                        </span>
+                      )}
+                      {pool === "excluded" && (j.filter_reasons?.length ?? 0) > 0 && (
+                        <span className="text-[11px] text-amber-700">
+                          {j.filter_reasons?.join(", ")}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -317,6 +344,23 @@ export function JobsExplorer({
             );
           })}
         </AnimatePresence>
+      )}
+
+      {poolActions.menu && (
+        <JobPoolActionMenu
+          menu={poolActions.menu}
+          busy={poolActions.busy}
+          menuRef={menuRef}
+          onDismiss={poolActions.dismiss}
+          onHideCompany={poolActions.hideCompany}
+        />
+      )}
+      {poolActions.toast && (
+        <JobPoolUndoToast
+          message={poolActions.toast.message}
+          busy={poolActions.busy}
+          onUndo={() => void poolActions.undo()}
+        />
       )}
     </div>
   );
