@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import sqlite_utils
 from loguru import logger
+from pydantic import ValidationError
 
 from job_sentinel.core.models import (
     Application,
@@ -40,19 +41,23 @@ from job_sentinel.core.models import (
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
 )
+from job_sentinel.sponsorship.models import SponsorshipInfo
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
 _DOC_TABLE = "generated_documents"
 _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
+_SPONSOR_EMPLOYERS = "sponsor_employers"
+_SPONSOR_SYNC = "sponsor_registry_sync"
 _FORBIDDEN_JOB_COLUMNS = frozenset({"favorite", "next_step", "comment", "applied_at"})
 
 
@@ -196,6 +201,7 @@ class JobRepository:
     def _ensure_v0_tables(self) -> None:
         self._ensure_jobs_table()
         self._ensure_jobs_raw_table()
+        self._ensure_sponsorship_tables()
 
     def _ensure_jobs_table(self) -> None:
         self._db.execute(
@@ -236,6 +242,7 @@ class JobRepository:
             logger.debug("Dropped non-V0 columns from jobs: {}", extra)
 
         self._ensure_job_filter_columns()
+        self._ensure_job_sponsorship_column()
         jobs.create_index(["source", "source_job_id"], unique=True, if_not_exists=True)
         for col in (
             "discovered_at",
@@ -259,6 +266,43 @@ class JobRepository:
             self._db.execute(
                 "ALTER TABLE jobs ADD COLUMN filter_reasons TEXT NOT NULL DEFAULT '[]'"
             )
+
+    def _ensure_job_sponsorship_column(self) -> None:
+        names = {col.name for col in self._table(_JOBS_TABLE).columns}
+        if "sponsorship" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN sponsorship TEXT NOT NULL DEFAULT '{}'")
+
+    def _ensure_sponsorship_tables(self) -> None:
+        self._ensure_job_sponsorship_column()
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sponsor_employers (
+                country TEXT NOT NULL,
+                registry_id TEXT NOT NULL,
+                name_raw TEXT NOT NULL,
+                employer_id TEXT NOT NULL DEFAULT '',
+                visa_route TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sponsor_registry_sync (
+                registry_id TEXT PRIMARY KEY,
+                country TEXT NOT NULL,
+                registry_name TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
+                downloaded_url TEXT NOT NULL DEFAULT '',
+                fetched_at TEXT NOT NULL DEFAULT '',
+                row_count INTEGER NOT NULL DEFAULT 0,
+                error TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        emp = self._table(_SPONSOR_EMPLOYERS)
+        emp.create_index(["registry_id"], if_not_exists=True)
+        emp.create_index(["country"], if_not_exists=True)
 
     def _ensure_jobs_raw_table(self) -> None:
         self._db.execute(
@@ -308,6 +352,8 @@ class JobRepository:
         if from_version < 4:
             self._ensure_jobs_table()
             self._ensure_job_filter_columns()
+        if from_version < 5:
+            self._ensure_sponsorship_tables()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -463,12 +509,25 @@ class JobRepository:
         limit: int = 100,
         since: datetime | None = None,
         filter_state: str = "included",
+        market_values: Sequence[str] | None = None,
+        empty_market_sources: Sequence[str] | None = None,
+        sources: Sequence[str] | None = None,
+        posted_since: datetime | None = None,
+        country: str | None = None,
+        remote: bool | None = None,
     ) -> list[Job]:
         """Job Pool rows, newest ``discovered_at`` first.
 
         ``filter_state``: ``included`` (default pool), ``excluded``, or ``all``.
+        Market / source / posted date are SQL filters. Country and remote are
+        applied after location normalization so ISO mapping stays in one place.
         """
-        capped = max(1, min(limit, 500))
+        scan_limit = max(1, min(limit, 500))
+        needs_scan = bool(
+            (country and country.strip().lower() not in {"", "all"}) or remote is not None
+        )
+        if needs_scan:
+            scan_limit = max(scan_limit, 2000)
         clauses: list[str] = []
         params: list[str] = []
         if since is not None:
@@ -482,14 +541,34 @@ class JobRepository:
             clauses.append(
                 "(filter_state IS NULL OR filter_state = '' OR filter_state = 'included')"
             )
+        if market_values:
+            market_clause, market_params = _market_sql(market_values, empty_market_sources)
+            clauses.append(market_clause)
+            params.extend(market_params)
+        if sources:
+            keys = [s.strip().lower() for s in sources if s.strip()]
+            if keys:
+                placeholders = ",".join("?" * len(keys))
+                clauses.append(f"lower(source) IN ({placeholders})")
+                params.extend(keys)
+        if posted_since is not None:
+            clauses.append("published_at IS NOT NULL AND published_at >= ?")
+            params.append(posted_since.isoformat())
         where = " AND ".join(clauses) if clauses else "1=1"
         rows = self._table(_JOBS_TABLE).rows_where(
             where,
             params,
             order_by="discovered_at DESC",
-            limit=capped,
+            limit=scan_limit,
         )
-        return [_hub_job_from_row(dict(r)) for r in rows]
+        jobs = [_hub_job_from_row(dict(r)) for r in rows]
+        if country and country.strip().lower() not in {"", "all"}:
+            jobs = [j for j in jobs if _job_matches_country(j, country)]
+        if remote is True:
+            jobs = [j for j in jobs if j.is_remote]
+        elif remote is False:
+            jobs = [j for j in jobs if not j.is_remote]
+        return jobs[: max(1, min(limit, 500))]
 
     def list_all_hub_jobs(self) -> list[Job]:
         """Every canonical job, for reversible re-filtering."""
@@ -526,6 +605,16 @@ class JobRepository:
                 "status": None if status is None else status.value,
                 "updated_at": _now_iso(),
             },
+        )
+        return self.get_hub_job(job_id)
+
+    def update_hub_job_sponsorship(self, job_id: str, info: SponsorshipInfo) -> Job | None:
+        """Store sponsorship enrichment. Does not touch status or ingest fields."""
+        if self.get_hub_job(job_id) is None:
+            return None
+        self._table(_JOBS_TABLE).update(
+            job_id,
+            {"sponsorship": json.dumps(info.as_store())},
         )
         return self.get_hub_job(job_id)
 
@@ -1002,8 +1091,60 @@ def _parse_json_list(value: object) -> list[str]:
     return []
 
 
+def _parse_sponsorship(value: object) -> SponsorshipInfo:
+    if isinstance(value, SponsorshipInfo):
+        return value
+    if isinstance(value, dict):
+        try:
+            return SponsorshipInfo.model_validate(value)
+        except (ValidationError, TypeError, ValueError):
+            return SponsorshipInfo()
+    if not value:
+        return SponsorshipInfo()
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return SponsorshipInfo()
+    if isinstance(parsed, dict):
+        try:
+            return SponsorshipInfo.model_validate(parsed)
+        except (ValidationError, TypeError, ValueError):
+            return SponsorshipInfo()
+    return SponsorshipInfo()
+
+
 def _optional_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _market_sql(
+    market_values: Sequence[str],
+    empty_market_sources: Sequence[str] | None,
+) -> tuple[str, list[str]]:
+    values = [v.strip().upper() for v in market_values if v.strip()]
+    if not values:
+        return ("1=1", [])
+    placeholders = ",".join("?" * len(values))
+    market_part = f"upper(market) IN ({placeholders})"
+    params = list(values)
+    sources = [s.strip().lower() for s in (empty_market_sources or []) if s.strip()]
+    if not sources:
+        return (market_part, params)
+    src_ph = ",".join("?" * len(sources))
+    clause = f"({market_part} OR ((market IS NULL OR market = '') AND lower(source) IN ({src_ph})))"
+    params.extend(sources)
+    return (clause, params)
+
+
+def _job_matches_country(job: Job, selected: str) -> bool:
+    from job_sentinel.geo.country import matches_country_filter
+
+    if matches_country_filter(job.country, selected):
+        return True
+    sponsor = job.sponsorship.country if job.sponsorship is not None else None
+    if sponsor:
+        return matches_country_filter(sponsor, selected)
+    return False
 
 
 def _parse_optional_dt(value: object) -> datetime | None:
@@ -1038,13 +1179,19 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "market": job.market,
         "filter_state": job.filter_state or "included",
         "filter_reasons": json.dumps(list(job.filter_reasons)),
+        "sponsorship": json.dumps(job.sponsorship.as_store()),
     }
 
 
 def _hub_job_from_row(row: dict[str, Any]) -> Job:
+    from job_sentinel.geo.country import normalize_location
+
     raw_status = row.get("status")
     status: JobStatus | None = JobStatus(raw_status) if raw_status else None
     score = row.get("match_score")
+    location = row.get("location", "") or ""
+    employment = row.get("employment_type", "") or ""
+    geo = normalize_location(str(location), str(employment))
     return Job(
         id=row["id"],
         source=row.get("source", ""),
@@ -1053,9 +1200,9 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         canonical_url=row.get("canonical_url", ""),
         title=row.get("title", ""),
         company=row.get("company", ""),
-        location=row.get("location", ""),
+        location=location,
         description=row.get("description", ""),
-        employment_type=row.get("employment_type", ""),
+        employment_type=employment,
         salary=row.get("salary", ""),
         published_at=_parse_optional_dt(row.get("published_at")),
         discovered_at=_parse_dt(row.get("discovered_at", "")),
@@ -1067,6 +1214,10 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         market=row.get("market", ""),
         filter_state=str(row.get("filter_state") or "included"),
         filter_reasons=_parse_json_list(row.get("filter_reasons")),
+        sponsorship=_parse_sponsorship(row.get("sponsorship")),
+        country=geo.code,
+        country_name=geo.name,
+        is_remote=geo.is_remote,
     )
 
 

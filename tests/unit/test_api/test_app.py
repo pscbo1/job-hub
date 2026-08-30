@@ -243,3 +243,113 @@ def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
     assert back.json()["status"] == "saved"
     visible = client.get("/api/jobs").json()
     assert visible[0]["id"] == job.id
+
+
+def test_jobs_market_country_and_no_cross_market_leak(tmp_path: Path) -> None:
+    from job_sentinel.core.models import Job
+    from job_sentinel.db.repository import JobRepository
+
+    repo = JobRepository(tmp_path / "j.db")
+    repo.upsert_job(
+        Job(
+            source="zhaopin",
+            source_job_id="cn1",
+            title="后端",
+            location="北京",
+            market="CN",
+        )
+    )
+    repo.upsert_job(
+        Job(
+            source="linkedin",
+            source_job_id="uk1",
+            title="SWE",
+            location="London, UK",
+            market="GLOBAL",
+        )
+    )
+    repo.upsert_job(
+        Job(
+            source="linkedin",
+            source_job_id="us1",
+            title="SWE US",
+            location="United States",
+            market="GLOBAL",
+        )
+    )
+    repo.upsert_job(
+        Job(
+            source="linkedin",
+            source_job_id="rem1",
+            title="Remote unknown",
+            location="Remote",
+            market="GLOBAL",
+        )
+    )
+    repo.upsert_job(
+        Job(
+            source="palantir",
+            source_job_id="p-cn",
+            title="FE China",
+            location="Beijing, China",
+            market="global",
+        )
+    )
+    repo.upsert_job(
+        Job(
+            source="palantir",
+            source_job_id="p-uk",
+            title="FE UK",
+            location="London, UK",
+            market="global",
+        )
+    )
+    repo.close()
+    client = _client(tmp_path)
+
+    cn = client.get("/api/jobs", params={"market": "cn"}).json()
+    assert {j["source_job_id"] for j in cn} == {"cn1"}
+    en = client.get("/api/jobs", params={"market": "en"}).json()
+    assert {j["source_job_id"] for j in en} == {"uk1", "us1", "rem1", "p-cn", "p-uk"}
+
+    uk = client.get("/api/jobs", params={"market": "en", "country": "GB"}).json()
+    assert {j["source_job_id"] for j in uk} == {"uk1", "p-uk"}
+    unknown = client.get("/api/jobs", params={"market": "en", "country": "XX"}).json()
+    assert {j["source_job_id"] for j in unknown} == {"rem1"}
+    us = client.get("/api/jobs", params={"market": "en", "country": "US"}).json()
+    assert {j["source_job_id"] for j in us} == {"us1"}
+    assert client.get("/api/jobs", params={"market": "jp"}).status_code == 422
+
+    repo = JobRepository(tmp_path / "j.db")
+    repo.upsert_job(Job(source="zhaopin", source_job_id="legacy", title="旧", market=""))
+    repo.close()
+    legacy_cn = client.get("/api/jobs", params={"market": "cn"}).json()
+    assert "legacy" in {j["source_job_id"] for j in legacy_cn}
+    legacy_en = client.get("/api/jobs", params={"market": "en"}).json()
+    assert "legacy" not in {j["source_job_id"] for j in legacy_en}
+
+
+def test_collect_sources_market_query(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    cn_ids = {
+        s["id"]
+        for s in client.get("/api/collect/sources", params={"market": "cn"}).json()["sources"]
+    }
+    en_ids = {
+        s["id"]
+        for s in client.get("/api/collect/sources", params={"market": "en"}).json()["sources"]
+    }
+    assert "zhaopin" in cn_ids
+    assert "dimagi" in cn_ids
+    assert "linkedin" not in cn_ids
+    assert "linkedin" in en_ids
+    assert "dimagi" in en_ids
+    assert "zhaopin" not in en_ids
+    global_ids = {
+        s["id"]
+        for s in client.get("/api/collect/sources", params={"market": "global"}).json()["sources"]
+    }
+    assert "dimagi" in global_ids
+    assert "linkedin" not in global_ids
+    assert "zhaopin" not in global_ids
+    assert client.get("/api/collect/sources", params={"market": "jp"}).status_code == 422

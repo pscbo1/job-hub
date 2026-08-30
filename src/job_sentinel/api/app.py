@@ -19,7 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -138,6 +138,7 @@ class CollectJobsRequest(BaseModel):
     exclude_internship: bool = True
     custom_keywords: str = ""
     excluded_companies: str = ""
+    market: str = ""
 
     @field_validator("keywords", "location", "custom_keywords", "excluded_companies", mode="before")
     @classmethod
@@ -293,6 +294,32 @@ def _parse_since(value: str | None) -> datetime | None:
     return parsed
 
 
+def _parse_market_param(value: str | None) -> str | None:
+    from job_sentinel.markets import parse_market_id
+
+    if value is None or not value.strip():
+        return None
+    mid = parse_market_id(value)
+    if mid is None:
+        raise HTTPException(status_code=422, detail="Unknown market")
+    return mid
+
+
+def _parse_source_list(value: str | None) -> list[str] | None:
+    if value is None or not value.strip():
+        return None
+    items = [part.strip() for part in value.split(",") if part.strip()]
+    return items or None
+
+
+def _posted_since(days: int | None) -> datetime | None:
+    if days is None:
+        return None
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=422, detail="posted_days must be between 1 and 365")
+    return datetime.now(tz=UTC) - timedelta(days=days)
+
+
 def create_app(
     profile_path: Path | None = None,
     db_path: Path | None = None,
@@ -442,9 +469,22 @@ def create_app(
         limit: int = 50,
         since: str | None = None,
         filter_state: str = "included",
+        market: str | None = None,
+        country: str | None = None,
+        sources: str | None = None,
+        remote: bool | None = None,
+        posted_days: int | None = None,
     ) -> list[Job]:
         """Job Pool: canonical ``jobs`` rows (not legacy ``job_postings``)."""
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.collect_sources import list_collect_sources as list_cs
+        from job_sentinel.markets import (
+            SourceMarket,
+            job_in_market_view,
+            parse_market_id,
+            parse_source_market,
+            source_in_view,
+        )
 
         state = filter_state.strip().lower()
         if state not in {"included", "excluded", "all"}:
@@ -452,11 +492,42 @@ def create_app(
                 status_code=422, detail="filter_state must be included, excluded, or all"
             )
         since_dt = _parse_since(since)
+        mid = _parse_market_param(market)
+        source_filter = _parse_source_list(sources)
+        specs = list_cs(enabled_only=False)
+        registry: dict[str, SourceMarket] = {}
+        for spec in specs:
+            sm = parse_source_market(spec.market)
+            if sm is not None:
+                registry[spec.id] = sm
+        view_sources: list[str] | None = None
+        view_id = parse_market_id(mid) if mid else None
+        if view_id is not None:
+            view_sources = [s.id for s in specs if source_in_view(s.market, view_id)]
+        if view_sources is not None:
+            allowed = set(view_sources)
+            if source_filter:
+                view_sources = [s for s in source_filter if s in allowed]
+            if not view_sources:
+                view_sources = ["__no_such_source__"]
+        elif source_filter:
+            view_sources = source_filter
         repo = JobRepository(db_path)
         try:
-            return repo.list_hub_jobs(limit=limit, since=since_dt, filter_state=state)
+            jobs = repo.list_hub_jobs(
+                limit=limit,
+                since=since_dt,
+                filter_state=state,
+                sources=view_sources,
+                posted_since=_posted_since(posted_days),
+                country=country,
+                remote=remote,
+            )
         finally:
             repo.close()
+        if view_id is not None:
+            jobs = [j for j in jobs if job_in_market_view(j, view_id, registry)]
+        return jobs
 
     @app.patch("/api/jobs/{job_id}", response_model=Job)
     def patch_hub_job(job_id: str, req: HubJobStatusRequest) -> Job:
@@ -521,11 +592,16 @@ def create_app(
         return job
 
     @app.get("/api/collect/sources")
-    def list_collect_sources() -> dict[str, Any]:
+    def list_collect_sources(market: str | None = None) -> dict[str, Any]:
         """Selectable collection sources for Search. Later kinds append here."""
         from job_sentinel.ingestion.collect_sources import list_collect_sources as list_sources
 
-        return {"sources": [s.model_dump() for s in list_sources()]}
+        mid = _parse_market_param(market)
+        try:
+            listed = list_sources(market=mid)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"sources": [s.model_dump() for s in listed]}
 
     @app.post("/api/collect/jobs")
     def collect_jobs(req: CollectJobsRequest) -> dict[str, Any]:
@@ -544,6 +620,7 @@ def create_app(
                 max_results=req.max_results,
                 remote=req.remote,
                 date_posted_days=req.date_posted_days,
+                market=req.market or None,
                 filter_settings=FilterSettings(
                     exclude_outsourcing=req.exclude_outsourcing,
                     exclude_part_time=req.exclude_part_time,

@@ -1,5 +1,7 @@
 /** Job Pool discovered_at presets. Filtering still uses the existing ``since`` query. */
 
+import type { MarketId } from "@/lib/markets";
+
 export type DiscoveredRange = "7d" | "30d" | "90d" | "all" | "custom";
 
 export const DISCOVERED_RANGE_OPTIONS: { value: DiscoveredRange; label: string }[] = [
@@ -59,14 +61,48 @@ export function resolveDiscoveredFilter(
 
 export type PoolView = "included" | "excluded";
 
-export function jobsPoolHref(
-  range: DiscoveredRange,
-  customSince = "",
-  pool: PoolView = "included",
-): string {
+export function jobsPoolHref(input: {
+  market: MarketId;
+  range: DiscoveredRange;
+  customSince?: string;
+  pool?: PoolView;
+  country?: string;
+  remote?: boolean;
+  postedDays?: string;
+  sources?: string[];
+}): string {
   const params = new URLSearchParams();
-  params.set("range", range);
-  if (range === "custom" && customSince) params.set("since", customSince);
-  if (pool === "excluded") params.set("pool", "excluded");
-  return `/jobs?${params.toString()}`;
+  params.set("range", input.range);
+  if (input.range === "custom" && input.customSince) params.set("since", input.customSince);
+  if (input.pool === "excluded") params.set("pool", "excluded");
+  if (input.country && input.country !== "all") params.set("country", input.country);
+  if (input.remote) params.set("remote", "true");
+  if (input.postedDays) params.set("posted", input.postedDays);
+  if (input.sources && input.sources.length > 0) params.set("sources", input.sources.join(","));
+  return `/${input.market}/jobs?${params.toString()}`;
+}
+
+export function parseCountryParam(raw: string | undefined): string {
+  const v = raw?.trim() ?? "";
+  if (!v || v.toLowerCase() === "all") return "";
+  if (v.toLowerCase() === "unknown" || v.toLowerCase() === "global") return "XX";
+  if (v.toUpperCase() === "UK") return "GB";
+  return v.toUpperCase();
+}
+
+export function parseSourcesParam(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function parsePostedParam(raw: string | undefined): string {
+  if (raw === "1" || raw === "7" || raw === "30") return raw;
+  return "";
+}
+
+export function parseRemoteParam(raw: string | undefined): boolean {
+  return raw === "true" || raw === "1";
 }

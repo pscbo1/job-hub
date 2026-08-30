@@ -21,6 +21,9 @@ from job_sentinel.ingestion.normalize import (
     normalize_record,
     validation_reasons,
 )
+from job_sentinel.sponsorship.enrich import enrich_and_store
+from job_sentinel.sponsorship.registry.index import SponsorIndex
+from job_sentinel.sponsorship.registry.store import load_index
 
 if TYPE_CHECKING:
     from job_sentinel.db.repository import JobRepository
@@ -40,9 +43,21 @@ def ingest_records(
     """
     result = IngestResult()
     settings = load_filter_settings(repo)
+    try:
+        sponsor_index = load_index(repo)
+    except Exception as exc:
+        logger.warning("Sponsor registry index unavailable: {}", exc)
+        sponsor_index = SponsorIndex()
     for record in records:
         try:
-            _ingest_one(repo, record, run_id=run_id, result=result, settings=settings)
+            _ingest_one(
+                repo,
+                record,
+                run_id=run_id,
+                result=result,
+                settings=settings,
+                sponsor_index=sponsor_index,
+            )
         except Exception as exc:
             logger.warning("Ingest skipped one record: {}", exc)
             result.errors.append(str(exc))
@@ -56,6 +71,7 @@ def _ingest_one(
     run_id: str | None,
     result: IngestResult,
     settings: FilterSettings,
+    sponsor_index: SponsorIndex,
 ) -> None:
     source = canonicalize_source(record.channel_key) or record.channel_key
     reasons = validation_reasons(record)
@@ -86,6 +102,10 @@ def _ingest_one(
         existing = repo.get_job_by_canonical_url(canonical)
     created = existing is None
     stored = repo.upsert_job(job)
+    try:
+        stored = enrich_and_store(repo, stored, sponsor_index)
+    except Exception as exc:
+        logger.warning("Sponsorship enrichment failed after ingest: {}", exc)
     repo.mark_job_raw_processed(raw.id, job_id=stored.id)
     decision = apply_filter_to_job(repo, stored, settings)
     if decision.filter_state == FILTER_STATE_EXCLUDED:

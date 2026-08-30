@@ -8,6 +8,7 @@
  */
 
 import * as demo from "@/lib/demo";
+import { parseMarketId, sourceInMarket } from "@/lib/markets";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -189,18 +190,61 @@ export interface HubJob {
   description?: string;
   filter_state?: string;
   filter_reasons?: string[];
+  market?: string;
+  country?: string;
+  country_name?: string;
+  is_remote?: boolean;
+  sponsorship?: SponsorshipInfo | null;
+}
+
+export type SponsorshipStatus = "explicit_yes" | "explicit_no" | "employer_eligible" | "unknown";
+
+export interface SponsorshipEvidence {
+  kind: string;
+  rule?: string;
+  snippet?: string;
+  country?: string | null;
+  registry_name?: string | null;
+  registry_source?: string | null;
+  matched_name?: string | null;
+  matched_id?: string | null;
+}
+
+export interface SponsorshipInfo {
+  status: SponsorshipStatus;
+  country?: string | null;
+  registry_match?: boolean;
+  registry_name?: string | null;
+  visa_route?: string | null;
+  relocation_support?: boolean | null;
+  evidence?: SponsorshipEvidence[];
+  confidence?: number;
 }
 
 export type PoolFilterState = "included" | "excluded" | "all";
+
+export interface JobsListQuery {
+  market?: string;
+  country?: string;
+  sources?: string[];
+  remote?: boolean;
+  postedDays?: number | string;
+}
 
 export function getJobs(
   limit = 50,
   since?: string,
   filterState: PoolFilterState = "included",
+  query: JobsListQuery = {},
 ): Promise<HubJob[]> {
   if (demo.DEMO) return Promise.resolve(demo.demoHubJobs.slice(0, limit));
   const q = new URLSearchParams({ limit: String(limit), filter_state: filterState });
   if (since) q.set("since", since);
+  if (query.market) q.set("market", query.market);
+  if (query.country && query.country !== "all") q.set("country", query.country);
+  if (query.sources && query.sources.length > 0) q.set("sources", query.sources.join(","));
+  if (query.remote) q.set("remote", "true");
+  if (query.postedDays) q.set("posted_days", String(query.postedDays));
   return getJSON<HubJob[]>(`/api/jobs?${q.toString()}`, []);
 }
 
@@ -1072,25 +1116,31 @@ export async function saveFilterSettings(
   }
 }
 
-export function getCollectSources(): Promise<{ sources: CollectSource[] } | null> {
+export function getCollectSources(market?: string): Promise<{ sources: CollectSource[] } | null> {
   if (demo.DEMO) {
-    return Promise.resolve({
-      sources: [
-        { id: "zhaopin", label: "Zhaopin", kind: "platform", collector_id: "zhaopin", integration: "mcp_jobs", notes: "", enabled: true },
-        { id: "liepin", label: "Liepin", kind: "platform", collector_id: "liepin", integration: "mcp_jobs", notes: "", enabled: true },
-        { id: "boss", label: "Boss", kind: "platform", collector_id: "boss", integration: "mcp_jobs", notes: "local Chrome login", enabled: true },
-        { id: "impactpool", label: "Impactpool", kind: "vertical", collector_id: "impactpool", integration: "public_html", notes: "", enabled: true },
-        { id: "dimagi", label: "Dimagi Careers", kind: "career_page", collector_id: "dimagi", integration: "ats_board", notes: "", enabled: true },
-        { id: "automattic", label: "Automattic Careers", kind: "career_page", collector_id: "automattic", integration: "ats_board", notes: "", enabled: true },
-        { id: "palantir", label: "Palantir Careers", kind: "career_page", collector_id: "palantir", integration: "ats_board", notes: "", enabled: true },
-        { id: "redhat", label: "Red Hat Careers", kind: "career_page", collector_id: "redhat", integration: "ats_board", notes: "", enabled: true },
-        { id: "tencent", label: "Tencent Careers", kind: "career_page", collector_id: "tencent", integration: "http_json", notes: "", enabled: true },
-        { id: "hiring_cafe", label: "HiringCafe", kind: "platform", collector_id: "hiring_cafe", integration: "ssr_json", notes: "", enabled: true },
-        { id: "linkedin", label: "LinkedIn", kind: "platform", collector_id: "linkedin", integration: "public_html", notes: "guest HTML", enabled: true },
-      ],
-    });
+    const all: CollectSource[] = [
+      { id: "zhaopin", label: "Zhaopin", kind: "platform", collector_id: "zhaopin", integration: "mcp_jobs", market: "cn", notes: "", enabled: true },
+      { id: "liepin", label: "Liepin", kind: "platform", collector_id: "liepin", integration: "mcp_jobs", market: "cn", notes: "", enabled: true },
+      { id: "boss", label: "Boss", kind: "platform", collector_id: "boss", integration: "mcp_jobs", market: "cn", notes: "local Chrome login", enabled: true },
+      { id: "impactpool", label: "Impactpool", kind: "vertical", collector_id: "impactpool", integration: "public_html", market: "en", notes: "", enabled: true },
+      { id: "dimagi", label: "Dimagi Careers", kind: "career_page", collector_id: "dimagi", integration: "ats_board", market: "global", notes: "", enabled: true },
+      { id: "automattic", label: "Automattic Careers", kind: "career_page", collector_id: "automattic", integration: "ats_board", market: "global", notes: "", enabled: true },
+      { id: "palantir", label: "Palantir Careers", kind: "career_page", collector_id: "palantir", integration: "ats_board", market: "global", notes: "", enabled: true },
+      { id: "redhat", label: "Red Hat Careers", kind: "career_page", collector_id: "redhat", integration: "ats_board", market: "global", notes: "", enabled: true },
+      { id: "tencent", label: "Tencent Careers", kind: "career_page", collector_id: "tencent", integration: "http_json", market: "cn", notes: "", enabled: true },
+      { id: "hiring_cafe", label: "HiringCafe", kind: "platform", collector_id: "hiring_cafe", integration: "ssr_json", market: "en", notes: "", enabled: true },
+      { id: "linkedin", label: "LinkedIn", kind: "platform", collector_id: "linkedin", integration: "public_html", market: "en", notes: "guest HTML", enabled: true },
+    ];
+    const filtered = market
+      ? all.filter((s) => {
+          const view = parseMarketId(market);
+          return view != null && sourceInMarket(s.market, view);
+        })
+      : all;
+    return Promise.resolve({ sources: filtered });
   }
-  return getJSON<{ sources: CollectSource[] } | null>("/api/collect/sources", null);
+  const q = market ? `?market=${encodeURIComponent(market)}` : "";
+  return getJSON<{ sources: CollectSource[] } | null>(`/api/collect/sources${q}`, null);
 }
 
 /** Run mcp-jobs for the selected sources, then ingest into Job Pool. */
@@ -1106,6 +1156,7 @@ export async function collectJobs(body: {
   exclude_internship: boolean;
   custom_keywords: string;
   excluded_companies: string;
+  market?: string;
 }): Promise<CollectOutcome | null> {
   if (demo.DEMO) {
     return {

@@ -7,11 +7,13 @@ import { useEffect, useRef, useState } from "react";
 
 import { OPEN_EVENT } from "@/components/CommandPalette";
 import { getAuthStatus, type AuthStatus } from "@/lib/api";
+import { jobsPath, marketFromPath, searchPath, type MarketId } from "@/lib/markets";
+import { readLastMarket } from "@/lib/marketPrefs";
 import { cn } from "@/lib/utils";
 
 const PRIMARY = [
-  { href: "/search", label: "Collect Jobs" },
-  { href: "/jobs", label: "Job Pool" },
+  { href: "/search", label: "Collect Jobs", page: "search" as const },
+  { href: "/jobs", label: "Job Pool", page: "jobs" as const },
   { href: "/applications", label: "Applications" },
   { href: "/resumes", label: "Documents" },
 ];
@@ -78,10 +80,13 @@ export function Nav() {
   const [more, setMore] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
+  const [lastMarket, setLastMarket] = useState<MarketId>("cn");
+
   useEffect(() => {
     getAuthStatus().then(setAuth);
     setOpen(false);
     setMore(false);
+    setLastMarket(marketFromPath(pathname) ?? readLastMarket());
   }, [pathname]);
 
   useEffect(() => {
@@ -99,6 +104,17 @@ export function Nav() {
   }, [more]);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+  const market = lastMarket;
+  function itemHref(l: (typeof PRIMARY)[number]): string {
+    if (l.page === "search") return searchPath(market);
+    if (l.page === "jobs") return jobsPath(market);
+    return l.href;
+  }
+  function itemActive(l: (typeof PRIMARY)[number]): boolean {
+    if (l.page === "jobs") return /\/jobs(?:\/|$)/.test(pathname);
+    if (l.page === "search") return /\/search(?:\/|$)/.test(pathname);
+    return isActive(l.href);
+  }
   const accountLabel = auth?.user ? auth.user.username : "Sign in";
   const moreActive = SECONDARY.some((l) => isActive(l.href)) || isActive("/login");
 
@@ -187,17 +203,25 @@ export function Nav() {
         </Link>
 
         <ul className="space-y-0.5">
-          {PRIMARY.map((l) => (
+          {PRIMARY.map((l) => {
+            const href = itemHref(l);
+            return (
             <li key={l.href}>
               <Link
-                href={l.href}
-                aria-current={isActive(l.href) ? "page" : undefined}
-                className={sideLink(l.href)}
+                href={href}
+                aria-current={itemActive(l) ? "page" : undefined}
+                className={cn(
+                  "block rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                  itemActive(l)
+                    ? "bg-ink/[0.06] font-medium text-ink"
+                    : "text-muted hover:text-ink",
+                )}
               >
                 {l.label}
               </Link>
             </li>
-          ))}
+            );
+          })}
         </ul>
 
         <div className="mt-auto space-y-2">
@@ -291,16 +315,28 @@ export function Nav() {
               >
                 <Search className="h-4 w-4" /> Jump to…
               </button>
-              {PRIMARY.map((l) => (
+              {PRIMARY.map((l) => {
+                const href = itemHref(l);
+                return (
                 <Link
                   key={l.href}
-                  href={l.href}
-                  aria-current={isActive(l.href) ? "page" : undefined}
-                  className={mobileLink(l.href)}
+                  href={href}
+                  aria-current={itemActive(l) ? "page" : undefined}
+                  className={cn(
+                    "block rounded-lg px-3 py-2.5 text-sm transition-colors",
+                    itemActive(l)
+                      ? dark
+                        ? "bg-white/10 font-semibold text-white"
+                        : "bg-surface font-semibold text-ink"
+                      : dark
+                        ? "text-stone-300 hover:bg-white/10 hover:text-white"
+                        : "text-muted hover:bg-surface hover:text-ink",
+                  )}
                 >
                   {l.label}
                 </Link>
-              ))}
+                );
+              })}
               <div className={cn("my-2 border-t", dark ? "border-white/10" : "border-line")} />
               {[...SECONDARY, { href: "/login", label: accountLabel }].map((l) => (
                 <Link

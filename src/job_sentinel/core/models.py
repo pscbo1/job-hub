@@ -27,6 +27,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from job_sentinel.sponsorship.models import SponsorshipInfo
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Enumerations
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,9 +216,19 @@ class Job(BaseModel):
     fingerprint: str = Field(default="")
     status: JobStatus | None = Field(default=None)
     match_score: float | None = Field(default=None)
-    market: str = Field(default="")
+    market: str = Field(
+        default="",
+        description="source_market copied from the collect source (cn, en, or global).",
+    )
     filter_state: str = Field(default="included")
     filter_reasons: list[str] = Field(default_factory=list)
+    sponsorship: SponsorshipInfo = Field(default_factory=SponsorshipInfo)
+    country: str = Field(
+        default="",
+        description="Job location country (ISO/EU/XX). Independent of source_market.",
+    )
+    country_name: str = Field(default="")
+    is_remote: bool = Field(default=False)
 
     @field_validator("status", mode="before")
     @classmethod

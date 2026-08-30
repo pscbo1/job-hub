@@ -61,6 +61,8 @@ apps_app = typer.Typer(help="Track job applications (Huntr-style).")
 app.add_typer(apps_app, name="apps")
 docs_app = typer.Typer(help="Manage the generated résumé/cover-letter library.")
 app.add_typer(docs_app, name="docs")
+sponsors_app = typer.Typer(help="Official visa-sponsor registry sync and job enrichment.")
+app.add_typer(sponsors_app, name="sponsors")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -275,6 +277,61 @@ def collect(
         console.print(f"[yellow]{err}[/]")
     if outcome.status == "failed":
         raise typer.Exit(code=1)
+
+
+@sponsors_app.command("sync")
+def sponsors_sync(
+    country: str | None = typer.Option(
+        None,
+        "--country",
+        "-c",
+        help="GB, NL, or a registry id. Repeat omit to sync all V1 registries.",
+    ),
+    enrich: bool = typer.Option(
+        False,
+        "--enrich/--no-enrich",
+        help="Recompute sponsorship on existing jobs after a successful sync",
+    ),
+) -> None:
+    """Download official sponsor lists into the local SQLite cache."""
+    from job_sentinel.db.repository import JobRepository
+    from job_sentinel.sponsorship.enrich import enrich_stored_jobs
+    from job_sentinel.sponsorship.sync import sync_registries
+
+    countries = [country] if country else None
+    repo = JobRepository(_DEFAULT_DB)
+    try:
+        results = sync_registries(repo, countries=countries)
+        for meta in results:
+            if meta.error:
+                console.print(f"[yellow]{meta.country} {meta.registry_id}[/] failed: {meta.error}")
+            else:
+                console.print(
+                    f"[green]{meta.country}[/] {meta.registry_name} | "
+                    f"rows={meta.row_count} fetched={meta.fetched_at or '—'}"
+                )
+        if enrich and any(not m.error for m in results):
+            n = enrich_stored_jobs(repo)
+            console.print(f"[green]Enriched[/] {n} jobs")
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        repo.close()
+
+
+@sponsors_app.command("enrich")
+def sponsors_enrich() -> None:
+    """Recompute sponsorship for jobs already in the pool (uses cached registries)."""
+    from job_sentinel.db.repository import JobRepository
+    from job_sentinel.sponsorship.enrich import enrich_stored_jobs
+
+    repo = JobRepository(_DEFAULT_DB)
+    try:
+        n = enrich_stored_jobs(repo)
+        console.print(f"[green]Enriched[/] {n} jobs")
+    finally:
+        repo.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

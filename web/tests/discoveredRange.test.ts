@@ -50,10 +50,23 @@ describe("resolveDiscoveredFilter", () => {
 });
 
 describe("jobsPoolHref", () => {
-  it("encodes range and custom since", () => {
-    expect(jobsPoolHref("7d")).toBe("/jobs?range=7d");
-    expect(jobsPoolHref("all")).toBe("/jobs?range=all");
-    expect(jobsPoolHref("custom", "2026-08-25")).toBe("/jobs?range=custom&since=2026-08-25");
-    expect(jobsPoolHref("7d", "", "excluded")).toBe("/jobs?range=7d&pool=excluded");
+  it("encodes market path and main filters", () => {
+    expect(jobsPoolHref({ market: "cn", range: "7d" })).toBe("/cn/jobs?range=7d");
+    expect(jobsPoolHref({ market: "en", range: "all" })).toBe("/en/jobs?range=all");
+    expect(jobsPoolHref({ market: "en", range: "custom", customSince: "2026-08-25" })).toBe(
+      "/en/jobs?range=custom&since=2026-08-25",
+    );
+    expect(jobsPoolHref({ market: "cn", range: "7d", pool: "excluded" })).toBe(
+      "/cn/jobs?range=7d&pool=excluded",
+    );
+    expect(
+      jobsPoolHref({
+        market: "en",
+        range: "7d",
+        country: "GB",
+        remote: true,
+        sources: ["linkedin"],
+      }),
+    ).toBe("/en/jobs?range=7d&country=GB&remote=true&sources=linkedin");
   });
 });

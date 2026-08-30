@@ -63,6 +63,9 @@ class TestMigration:
         assert _FORBIDDEN.isdisjoint(jobs_cols)
         assert "filter_state" in jobs_cols
         assert "filter_reasons" in jobs_cols
+        assert "sponsorship" in jobs_cols
+        assert "sponsor_employers" in names
+        assert "sponsor_registry_sync" in names
         assert "market" in jobs_cols
         assert "fingerprint" in jobs_cols
         raw_cols = _column_names(repo, "jobs_raw")
