@@ -254,7 +254,7 @@ export default function DashboardPage() {
           {recentApps.length === 0 && recentDocs.length === 0 ? (
             <CardSub className="mt-3">
               Nothing yet — find roles on{" "}
-              <Link href="/search" className="text-brand hover:underline">Search</Link>.
+              <Link href="/search" className="text-brand hover:underline">Collect Jobs</Link>.
             </CardSub>
           ) : (
             <ul className="mt-3 space-y-2 text-sm">
@@ -310,7 +310,7 @@ export default function DashboardPage() {
           <CardTitle className="text-base">Quick actions</CardTitle>
           <div className="mt-3 grid grid-cols-2 gap-2">
             {[
-              { href: "/search", label: "Find jobs" },
+              { href: "/search", label: "Collect Jobs" },
               { href: "/studio", label: "Tailor a résumé" },
               { href: "/applications", label: "Update pipeline" },
               { href: "/profile", label: "Edit profile" },

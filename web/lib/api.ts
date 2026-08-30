@@ -222,6 +222,64 @@ export async function patchHubJobStatus(
   }
 }
 
+export async function dismissHubJob(jobId: string): Promise<HubJob | null> {
+  if (demo.DEMO) {
+    return {
+      id: jobId,
+      title: "",
+      company: "",
+      location: "",
+      source: "",
+      job_url: "",
+      published_at: null,
+      discovered_at: "",
+      status: null,
+      match_score: null,
+      filter_state: "excluded",
+      filter_reasons: ["manual_dismiss"],
+    };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/dismiss`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as HubJob;
+  } catch {
+    return null;
+  }
+}
+
+export async function undismissHubJob(jobId: string): Promise<HubJob | null> {
+  if (demo.DEMO) {
+    return {
+      id: jobId,
+      title: "",
+      company: "",
+      location: "",
+      source: "",
+      job_url: "",
+      published_at: null,
+      discovered_at: "",
+      status: null,
+      match_score: null,
+      filter_state: "included",
+      filter_reasons: [],
+    };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/undismiss`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as HubJob;
+  } catch {
+    return null;
+  }
+}
+
 export async function tailorResume(jobDescription: string): Promise<TailorResult | null> {
   if (demo.DEMO) return demo.demoTailor;
   try {

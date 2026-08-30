@@ -123,7 +123,7 @@ export function JobsExplorer({
 
   return (
     <div className="space-y-4">
-      <div className="sticky top-14 z-10 -mx-1 space-y-3 rounded-2xl border border-line bg-bg/90 p-3 backdrop-blur-md">
+      <div className="sticky top-14 z-10 -mx-1 space-y-3 rounded-2xl border border-line bg-bg/90 p-3 backdrop-blur-md md:top-0">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-0 flex-1">
             <svg
@@ -224,7 +224,7 @@ export function JobsExplorer({
             {jobs.length === 0
               ? pool === "excluded"
                 ? "No excluded jobs for this date range."
-                : "No jobs in the pool yet. Collect from Search, or import with job-sentinel ingest."
+                : "No jobs in the pool yet. Use Collect Jobs, or import with job-sentinel ingest."
               : "Try a different search, date, or status filter."}
           </CardSub>
         </Card>

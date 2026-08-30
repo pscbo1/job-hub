@@ -20,6 +20,7 @@ REASON_PART_TIME = "part_time"
 REASON_INTERNSHIP = "internship"
 REASON_CUSTOM_KEYWORD = "custom_keyword"
 REASON_EXCLUDED_COMPANY = "excluded_company"
+REASON_MANUAL_DISMISS = "manual_dismiss"
 
 _META_KEY = "hub_filter_settings"
 
@@ -187,12 +188,49 @@ def save_filter_settings(repo: JobRepository, settings: FilterSettings) -> Filte
     return settings
 
 
+def _with_manual_dismiss(job: Job, decision: FilterDecision) -> FilterDecision:
+    """Keep a per-job dismiss across rule re-filters."""
+    reasons = list(decision.filter_reasons)
+    if REASON_MANUAL_DISMISS in job.filter_reasons and REASON_MANUAL_DISMISS not in reasons:
+        reasons.append(REASON_MANUAL_DISMISS)
+    if reasons:
+        return FilterDecision(filter_state=FILTER_STATE_EXCLUDED, filter_reasons=reasons)
+    return FilterDecision(filter_state=FILTER_STATE_INCLUDED, filter_reasons=[])
+
+
 def apply_filter_to_job(repo: JobRepository, job: Job, settings: FilterSettings) -> FilterDecision:
-    decision = evaluate_job(job, settings)
+    stored = repo.get_hub_job(job.id) or job
+    decision = _with_manual_dismiss(stored, evaluate_job(stored, settings))
     repo.update_hub_job_filter(
-        job.id, filter_state=decision.filter_state, filter_reasons=decision.filter_reasons
+        stored.id, filter_state=decision.filter_state, filter_reasons=decision.filter_reasons
     )
     return decision
+
+
+def dismiss_hub_job(repo: JobRepository, job_id: str) -> Job | None:
+    """Exclude one job. Does not change status or delete rows."""
+    job = repo.get_hub_job(job_id)
+    if job is None:
+        return None
+    reasons = list(job.filter_reasons)
+    if REASON_MANUAL_DISMISS not in reasons:
+        reasons.append(REASON_MANUAL_DISMISS)
+    return repo.update_hub_job_filter(
+        job_id, filter_state=FILTER_STATE_EXCLUDED, filter_reasons=reasons
+    )
+
+
+def undismiss_hub_job(repo: JobRepository, job_id: str) -> Job | None:
+    """Drop ``manual_dismiss`` and re-evaluate configured rules."""
+    job = repo.get_hub_job(job_id)
+    if job is None:
+        return None
+    job.filter_reasons = [r for r in job.filter_reasons if r != REASON_MANUAL_DISMISS]
+    settings = load_filter_settings(repo)
+    decision = evaluate_job(job, settings)
+    return repo.update_hub_job_filter(
+        job_id, filter_state=decision.filter_state, filter_reasons=decision.filter_reasons
+    )
 
 
 def reapply_filters(repo: JobRepository, settings: FilterSettings | None = None) -> ReapplyResult:

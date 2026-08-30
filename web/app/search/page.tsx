@@ -205,7 +205,7 @@ export default function SearchPage() {
   return (
     <div className="mx-auto max-w-xl px-5 py-12">
       <header className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Search</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-ink">Collect Jobs</h1>
         <p className="mt-1 text-sm text-muted">
           Collect new jobs from external sources into Job Pool. Browse and filter collected jobs
           on Job Pool — this page does not search the local pool.

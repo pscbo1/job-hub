@@ -42,7 +42,7 @@ export function JobActions({
     setBusy(false);
   }
 
-  const label = current ?? "unset";
+  const label = current ?? "No status";
 
   return (
     <>
@@ -58,7 +58,7 @@ export function JobActions({
           }}
           className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-ink disabled:opacity-50"
         >
-          <option value="">unset</option>
+          <option value="">No status</option>
           {STATUSES.map((s) => (
             <option key={s} value={s}>
               {s}

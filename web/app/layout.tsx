@@ -67,11 +67,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             for your real jobs, profile, and a private local model.
           </div>
         )}
-        <Nav />
-        <main id="content" className="min-h-screen">
-          {children}
-        </main>
-        <footer className="border-t border-line bg-surface">
+        <div className="md:flex md:items-start">
+          <Nav />
+          <div className="min-w-0 flex-1">
+            <main id="content" className="min-h-screen">
+              {children}
+            </main>
+            <footer className="border-t border-line bg-surface">
           <div className="mx-auto max-w-6xl px-6 py-10">
             <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
               <p className="flex max-w-xs items-center gap-2 text-sm text-muted">
@@ -112,7 +114,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span>Built by Harshit Wandhare · Private by design — no telemetry, no tracking.</span>
             </div>
           </div>
-        </footer>
+            </footer>
+          </div>
+        </div>
       </body>
     </html>
   );

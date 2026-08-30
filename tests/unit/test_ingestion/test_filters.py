@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from job_sentinel.core.models import Job, JobStatus
+from job_sentinel.core.models import Job, JobRaw, JobStatus
 from job_sentinel.db.repository import JobRepository
 from job_sentinel.ingestion.contract import CollectorRecord
 from job_sentinel.ingestion.filters import (
     FILTER_STATE_EXCLUDED,
     FILTER_STATE_INCLUDED,
     FilterSettings,
+    dismiss_hub_job,
     evaluate_job,
     reapply_filters,
     save_filter_settings,
+    undismiss_hub_job,
 )
 from job_sentinel.ingestion.pipeline import ingest_records
 
@@ -123,5 +125,53 @@ def test_excluded_job_stays_in_raw_and_hidden_from_pool(tmp_path: Path) -> None:
         hidden = repo.list_hub_jobs(filter_state="excluded")
         assert len(hidden) == 1
         assert hidden[0].filter_reasons == ["internship"]
+    finally:
+        repo.close()
+
+
+def test_manual_dismiss_and_undismiss_preserve_status_and_raw(tmp_path: Path) -> None:
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        save_filter_settings(
+            repo,
+            FilterSettings(
+                exclude_outsourcing=False,
+                exclude_part_time=False,
+                exclude_internship=False,
+            ),
+        )
+        job = repo.upsert_job(
+            _job(source_job_id="keep-me", company="示例科技", status=JobStatus.TO_DO)
+        )
+        repo.insert_job_raw(
+            JobRaw(
+                source="zhaopin",
+                source_job_id="keep-me",
+                job_id=job.id,
+            )
+        )
+        raw_count = repo._db["jobs_raw"].count
+        dismissed = dismiss_hub_job(repo, job.id)
+        assert dismissed is not None
+        assert dismissed.filter_state == FILTER_STATE_EXCLUDED
+        assert "manual_dismiss" in dismissed.filter_reasons
+        assert dismissed.status == JobStatus.TO_DO
+        assert repo._db["jobs_raw"].count == raw_count
+        assert repo.list_hub_jobs(filter_state="included") == []
+        assert any(j.id == job.id for j in repo.list_hub_jobs(filter_state="excluded"))
+
+        reapply_filters(repo)
+        still = repo.get_hub_job(job.id)
+        assert still is not None
+        assert still.filter_state == FILTER_STATE_EXCLUDED
+        assert "manual_dismiss" in still.filter_reasons
+        assert still.status == JobStatus.TO_DO
+
+        restored = undismiss_hub_job(repo, job.id)
+        assert restored is not None
+        assert restored.filter_state == FILTER_STATE_INCLUDED
+        assert restored.filter_reasons == []
+        assert restored.status == JobStatus.TO_DO
+        assert any(j.id == job.id for j in repo.list_hub_jobs(filter_state="included"))
     finally:
         repo.close()

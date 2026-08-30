@@ -48,11 +48,11 @@ interface Item {
 const ITEMS: Item[] = [
   { label: "Home", hint: "Landing page", icon: Home, href: "/", group: "Navigate" },
   { label: "Dashboard", hint: "Pipeline, deadlines, activity", icon: LayoutDashboard, href: "/dashboard", group: "Navigate", keywords: "overview funnel stats home" },
-  { label: "Search", hint: "Collect jobs from Zhaopin, Liepin, Boss", icon: Search, href: "/search", group: "Navigate", keywords: "collect zhaopin liepin boss mcp-jobs" },
+  { label: "Collect Jobs", hint: "Collect jobs from Zhaopin, Liepin, Boss", icon: Search, href: "/search", group: "Navigate", keywords: "search collect zhaopin liepin boss mcp-jobs" },
   { label: "Chat", hint: "Ask Sentinel about your jobs", icon: MessageSquare, href: "/chat", group: "Navigate" },
   { label: "Profile", hint: "Your résumé, rendered live", icon: FileText, href: "/profile", group: "Navigate" },
   { label: "Studio", hint: "Tailor + score against a job description", icon: Wand2, href: "/studio", group: "Navigate" },
-  { label: "Jobs", hint: "Tracked postings & deadlines", icon: Briefcase, href: "/jobs", group: "Navigate", keywords: "deadlines tracked postings" },
+  { label: "Job Pool", hint: "Normalized collected jobs", icon: Briefcase, href: "/jobs", group: "Navigate", keywords: "jobs deadlines tracked postings pool" },
   { label: "Applications", hint: "Your pipeline — saved to offer", icon: ClipboardList, href: "/applications", group: "Navigate", keywords: "tracker pipeline applied interview offer" },
   { label: "Documents", hint: "Generated résumés & cover letters", icon: FolderOpen, href: "/resumes", group: "Navigate", keywords: "resume cover letter library pdf history" },
   { label: "Settings", hint: "LLM providers, API keys, model config", icon: Settings, href: "/settings", group: "Navigate", keywords: "llm model api key provider openrouter groq gemini ollama" },

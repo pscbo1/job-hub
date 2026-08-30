@@ -335,8 +335,11 @@ export default function ApplicationsPage() {
             <div className="max-w-xs space-y-1">
               <CardTitle>No applications yet</CardTitle>
               <CardSub>
-                Find roles on the <a href="/search" className="text-brand hover:underline">Search</a>{" "}
-                page and hit Track, or add jobs from the Jobs board.
+                Collect roles from{" "}
+                <a href="/search" className="text-brand hover:underline">
+                  Collect Jobs
+                </a>{" "}
+                and track them in Job Pool.
               </CardSub>
             </div>
           </Card>

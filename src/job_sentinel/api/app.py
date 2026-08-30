@@ -470,6 +470,36 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
         return job
 
+    @app.post("/api/jobs/{job_id}/dismiss", response_model=Job)
+    def dismiss_hub_job_route(job_id: str) -> Job:
+        """Exclude this job from the default pool. Status and jobs_raw are unchanged."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.filters import dismiss_hub_job
+
+        repo = JobRepository(db_path)
+        try:
+            job = dismiss_hub_job(repo, job_id)
+        finally:
+            repo.close()
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return job
+
+    @app.post("/api/jobs/{job_id}/undismiss", response_model=Job)
+    def undismiss_hub_job_route(job_id: str) -> Job:
+        """Remove a manual dismiss and re-apply stored filter rules."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.filters import undismiss_hub_job
+
+        repo = JobRepository(db_path)
+        try:
+            job = undismiss_hub_job(repo, job_id)
+        finally:
+            repo.close()
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return job
+
     @app.post("/api/jobs/{posting_id}/status", response_model=JobPosting)
     def set_job_status(posting_id: str, req: StatusRequest) -> JobPosting:
         """Legacy portal ``job_postings`` status (12twenty watcher)."""

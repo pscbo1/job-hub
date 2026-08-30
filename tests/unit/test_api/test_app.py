@@ -209,3 +209,37 @@ def test_filter_settings_round_trip_and_hide_jobs(tmp_path: Path) -> None:
     visible = client.get("/api/jobs").json()
     assert visible[0]["id"] == intern.id
     assert visible[0]["status"] is None
+
+
+def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
+    from job_sentinel.core.models import Job, JobRaw, JobStatus
+    from job_sentinel.db.repository import JobRepository
+
+    repo = JobRepository(tmp_path / "j.db")
+    job = repo.upsert_job(
+        Job(
+            source="zhaopin",
+            source_job_id="d1",
+            title="产品经理",
+            company="示例",
+            status=JobStatus.SAVED,
+        )
+    )
+    repo.insert_job_raw(JobRaw(source="zhaopin", source_job_id="d1", job_id=job.id))
+    repo.close()
+    client = _client(tmp_path)
+    gone = client.post(f"/api/jobs/{job.id}/dismiss")
+    assert gone.status_code == 200
+    body = gone.json()
+    assert body["filter_state"] == "excluded"
+    assert "manual_dismiss" in body["filter_reasons"]
+    assert body["status"] == "saved"
+    assert client.get("/api/jobs").json() == []
+    hidden = client.get("/api/jobs", params={"filter_state": "excluded"}).json()
+    assert hidden[0]["id"] == job.id
+    back = client.post(f"/api/jobs/{job.id}/undismiss")
+    assert back.status_code == 200
+    assert back.json()["filter_state"] == "included"
+    assert back.json()["status"] == "saved"
+    visible = client.get("/api/jobs").json()
+    assert visible[0]["id"] == job.id
