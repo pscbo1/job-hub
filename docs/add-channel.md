@@ -35,8 +35,13 @@ Public JSON / ATS board API → RSS/XML → SSR JSON island → small public HTM
 Stop if the source needs login, partner credentials, or an unstable private API
 that cannot be called without a session.
 
-FAO Careers (Taleo) and LinkedIn Jobs are examples of that stop when they are
-not wired as runnable collectors.
+FAO Careers (Taleo) is an example of that stop.
+
+LinkedIn Jobs is a runnable `public_html` collector. It uses undocumented
+`/jobs-guest/jobs/api/seeMoreJobPostings/search` and
+`/jobs-guest/jobs/api/jobPosting/{jobId}` HTML endpoints with no login or
+cookies. Treat markup and query params as unstable; do not add a compatibility
+layer.
 
 ## Company ATS (Greenhouse / Lever / Ashby)
 
