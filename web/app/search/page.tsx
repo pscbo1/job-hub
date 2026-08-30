@@ -10,10 +10,40 @@ import { Input } from "@/components/ui/input";
 import {
   collectJobs,
   getCollectSources,
+  getFilterSettings,
+  saveFilterSettings,
   type CollectOutcome,
   type CollectSource,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+const SOURCE_STORAGE_KEY = "job-hub.collect.sources";
+const MAX_STORAGE_KEY = "job-hub.collect.maxResults";
+const MAX_PRESETS = [50, 100, 200];
+const DEFAULT_SOURCES = ["zhaopin", "liepin"];
+
+function loadJsonList(key: string): string[] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((item): item is string => typeof item === "string");
+  } catch {
+    return null;
+  }
+}
+
+function loadMaxResults(): number {
+  try {
+    const raw = localStorage.getItem(MAX_STORAGE_KEY);
+    const n = raw ? Number(raw) : 100;
+    if (Number.isFinite(n) && n >= 1 && n <= 200) return Math.round(n);
+  } catch {
+    /* ignore */
+  }
+  return 100;
+}
 
 export default function SearchPage() {
   const [apiDown, setApiDown] = useState(false);
@@ -21,8 +51,15 @@ export default function SearchPage() {
   const [catalog, setCatalog] = useState<CollectSource[]>([]);
   const [keywords, setKeywords] = useState("");
   const [location, setLocation] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set(["zhaopin", "liepin"]));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [maxResults, setMaxResults] = useState(100);
+  const [excludeOutsourcing, setExcludeOutsourcing] = useState(true);
+  const [excludePartTime, setExcludePartTime] = useState(true);
+  const [excludeInternship, setExcludeInternship] = useState(true);
+  const [customKeywords, setCustomKeywords] = useState("");
+  const [excludedCompanies, setExcludedCompanies] = useState("");
   const [running, setRunning] = useState(false);
+  const [refiltering, setRefiltering] = useState(false);
   const [outcome, setOutcome] = useState<CollectOutcome | null>(null);
   const [message, setMessage] = useState("");
   const keywordsRef = useRef<HTMLInputElement>(null);
@@ -43,32 +80,59 @@ export default function SearchPage() {
   }, []);
 
   useEffect(() => {
-    getCollectSources()
-      .then((r) => {
-        if (r === null) {
+    Promise.all([getCollectSources(), getFilterSettings()])
+      .then(([sourcesResp, filters]) => {
+        if (sourcesResp === null) {
           setApiDown(true);
           return;
         }
-        const list = r.sources ?? [];
+        const list = (sourcesResp.sources ?? []).filter((s) => s.enabled);
         setCatalog(list);
         const ids = list.map((s) => s.id);
-        setSelected((prev) => {
-          const next = new Set([...prev].filter((id) => ids.includes(id)));
-          if (next.size === 0 && ids[0]) next.add(ids[0]);
-          return next;
-        });
+        const remembered = loadJsonList(SOURCE_STORAGE_KEY);
+        const initial = (remembered ?? DEFAULT_SOURCES).filter((id) => ids.includes(id));
+        setSelected(new Set(initial));
+        setMaxResults(loadMaxResults());
+        if (filters) {
+          setExcludeOutsourcing(filters.exclude_outsourcing);
+          setExcludePartTime(filters.exclude_part_time);
+          setExcludeInternship(filters.exclude_internship);
+          setCustomKeywords(filters.custom_keywords.join("\n"));
+          setExcludedCompanies(filters.excluded_companies.join("\n"));
+        }
       })
       .catch(() => setApiDown(true))
       .finally(() => setLoaded(true));
   }, []);
+
+  function persistSources(next: Set<string>) {
+    try {
+      localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify([...next]));
+    } catch {
+      /* ignore quota */
+    }
+  }
 
   function toggleSource(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      persistSources(next);
       return next;
     });
+  }
+
+  function changeMaxResults(value: string) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    const capped = Math.min(200, Math.max(1, Math.round(n)));
+    setMaxResults(capped);
+    try {
+      localStorage.setItem(MAX_STORAGE_KEY, String(capped));
+    } catch {
+      /* ignore */
+    }
   }
 
   async function runCollect() {
@@ -81,6 +145,12 @@ export default function SearchPage() {
       keywords: kw,
       location: location.trim(),
       sources: [...selected],
+      max_results: maxResults,
+      exclude_outsourcing: excludeOutsourcing,
+      exclude_part_time: excludePartTime,
+      exclude_internship: excludeInternship,
+      custom_keywords: customKeywords,
+      excluded_companies: excludedCompanies,
     });
     setRunning(false);
     if (r === null) {
@@ -88,6 +158,30 @@ export default function SearchPage() {
       return;
     }
     setOutcome(r);
+  }
+
+  async function refilterStored() {
+    setRefiltering(true);
+    setMessage("");
+    const r = await saveFilterSettings({
+      exclude_outsourcing: excludeOutsourcing,
+      exclude_part_time: excludePartTime,
+      exclude_internship: excludeInternship,
+      custom_keywords: customKeywords.split(/[\n,;，；]+/).map((s) => s.trim()).filter(Boolean),
+      excluded_companies: excludedCompanies.split(/[\n,;，；]+/).map((s) => s.trim()).filter(Boolean),
+      apply: true,
+    });
+    setRefiltering(false);
+    if (r === null) {
+      setMessage("Couldn't save filters. Is the API running?");
+      return;
+    }
+    const n = r.reapplied;
+    setMessage(
+      n
+        ? `Re-filtered ${n.scanned} stored jobs (${n.included} in pool, ${n.excluded} excluded). No scrape.`
+        : "Filter settings saved.",
+    );
   }
 
   if (!loaded) {
@@ -148,35 +242,127 @@ export default function SearchPage() {
 
           <div>
             <p className="mb-2 text-sm font-medium text-ink">Sources</p>
-            <div className="flex flex-wrap gap-1.5">
+            <p className="mb-2 text-[11px] text-muted">
+              Only currently wired collectors are listed. Collection runs only the sources you
+              check.
+            </p>
+            <div className="flex flex-col gap-1.5">
               {catalog.map((s) => (
-                <button
+                <label
                   key={s.id}
+                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-line px-2.5 py-2 text-sm text-ink"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={selected.has(s.id)}
+                    onChange={() => toggleSource(s.id)}
+                  />
+                  <span>
+                    <span className="font-medium">{s.label}</span>
+                    {s.notes ? <span className="block text-[11px] text-muted">{s.notes}</span> : null}
+                  </span>
+                </label>
+              ))}
+            </div>
+            {selected.size === 0 && (
+              <p className="mt-2 text-xs text-amber-600">Select at least one source to collect.</p>
+            )}
+          </div>
+
+          <div>
+            <p className="mb-2 text-sm font-medium text-ink">Max results</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {MAX_PRESETS.map((n) => (
+                <button
+                  key={n}
                   type="button"
-                  onClick={() => toggleSource(s.id)}
-                  title={s.notes || undefined}
+                  onClick={() => changeMaxResults(String(n))}
                   className={cn(
                     "rounded-full border px-2.5 py-0.5 text-xs transition-colors",
-                    selected.has(s.id)
+                    maxResults === n
                       ? "border-brand bg-brand/10 text-brand"
                       : "border-line text-muted hover:text-ink",
                   )}
                 >
-                  {s.label}
+                  {n}
                 </button>
               ))}
+              <Input
+                type="number"
+                min={1}
+                max={200}
+                value={maxResults}
+                onChange={(e) => changeMaxResults(e.target.value)}
+                className="h-8 w-24"
+                aria-label="Max results"
+              />
             </div>
-            {catalog.some((s) => s.id === "boss") && (
-              <p className="mt-2 text-[11px] text-muted">
-                Boss uses the existing local Chrome login. Leave it off unless that profile is
-                already signed in.
-              </p>
-            )}
+            <p className="mt-1 text-[11px] text-muted">
+              Passed to mcp-jobs. Collectors paginate until this cap or the source runs out.
+            </p>
           </div>
 
-          {selected.size === 0 && (
-            <p className="text-xs text-amber-600">Select at least one source.</p>
-          )}
+          <div>
+            <p className="mb-2 text-sm font-medium text-ink">Exclude from Job Pool</p>
+            <div className="space-y-1.5 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={excludeOutsourcing}
+                  onChange={(e) => setExcludeOutsourcing(e.target.checked)}
+                />
+                Outsourcing / 外包
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={excludePartTime}
+                  onChange={(e) => setExcludePartTime(e.target.checked)}
+                />
+                Part-time / 兼职
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={excludeInternship}
+                  onChange={(e) => setExcludeInternship(e.target.checked)}
+                />
+                Internship / 实习
+              </label>
+            </div>
+            <label className="mt-3 block text-sm font-medium text-ink">
+              Custom exclude keywords
+              <textarea
+                value={customKeywords}
+                onChange={(e) => setCustomKeywords(e.target.value)}
+                placeholder="One per line, or comma-separated"
+                rows={3}
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink shadow-sm placeholder:text-muted/70 focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+              />
+            </label>
+            <label className="mt-3 block text-sm font-medium text-ink">
+              Hidden companies
+              <textarea
+                value={excludedCompanies}
+                onChange={(e) => setExcludedCompanies(e.target.value)}
+                placeholder="Company names, comma or newline"
+                rows={3}
+                className="mt-1 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink shadow-sm placeholder:text-muted/70 focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+              />
+            </label>
+            <p className="mt-1 text-[11px] text-muted">
+              Excluded jobs stay in jobs_raw and jobs. Changing rules re-filters without scraping.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refilterStored()}
+              disabled={refiltering || running}
+              className="mt-2 text-xs font-medium text-brand hover:underline disabled:text-muted"
+            >
+              {refiltering ? "Re-filtering…" : "Save & re-filter stored jobs"}
+            </button>
+          </div>
 
           <Button type="submit" disabled={!canRun} className="w-full">
             {running ? "Collecting…" : "Collect Jobs"}
@@ -184,7 +370,7 @@ export default function SearchPage() {
         </form>
       </Card>
 
-      {message && <p className="mt-4 text-sm text-amber-600">{message}</p>}
+      {message && <p className="mt-4 text-sm text-amber-700">{message}</p>}
 
       {running && !outcome && (
         <Card className="mt-4">
@@ -220,13 +406,13 @@ function CollectResultCard({
   return (
     <Card className="mt-4 space-y-3">
       <CardTitle className={tone}>{label}</CardTitle>
-      {outcome.message && outcome.message !== label && (
-        <CardSub>{outcome.message}</CardSub>
-      )}
+      {outcome.message && outcome.message !== label && <CardSub>{outcome.message}</CardSub>}
       <ul className="space-y-1 text-sm text-ink">
         <li>New jobs added: {outcome.jobs_created}</li>
         <li>Updated existing jobs: {outcome.jobs_updated}</li>
         <li>Raw records stored: {outcome.raw_inserted}</li>
+        <li>Excluded from Job Pool: {outcome.excluded ?? 0}</li>
+        {outcome.max_results != null && <li>Max results requested: {outcome.max_results}</li>}
       </ul>
       {outcome.source_results.length > 0 && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">

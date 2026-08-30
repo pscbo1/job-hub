@@ -54,5 +54,6 @@ describe("jobsPoolHref", () => {
     expect(jobsPoolHref("7d")).toBe("/jobs?range=7d");
     expect(jobsPoolHref("all")).toBe("/jobs?range=all");
     expect(jobsPoolHref("custom", "2026-08-25")).toBe("/jobs?range=custom&since=2026-08-25");
+    expect(jobsPoolHref("7d", "", "excluded")).toBe("/jobs?range=7d&pool=excluded");
   });
 });

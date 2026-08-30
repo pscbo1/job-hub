@@ -9,6 +9,12 @@ from loguru import logger
 
 from job_sentinel.core.models import JobRaw
 from job_sentinel.ingestion.contract import IngestResult
+from job_sentinel.ingestion.filters import (
+    FILTER_STATE_EXCLUDED,
+    FilterSettings,
+    apply_filter_to_job,
+    load_filter_settings,
+)
 from job_sentinel.ingestion.normalize import (
     canonicalize_source,
     canonicalize_url,
@@ -33,9 +39,10 @@ def ingest_records(
     Dedup and collector-safe field rules live in ``JobRepository.upsert_job``.
     """
     result = IngestResult()
+    settings = load_filter_settings(repo)
     for record in records:
         try:
-            _ingest_one(repo, record, run_id=run_id, result=result)
+            _ingest_one(repo, record, run_id=run_id, result=result, settings=settings)
         except Exception as exc:
             logger.warning("Ingest skipped one record: {}", exc)
             result.errors.append(str(exc))
@@ -48,6 +55,7 @@ def _ingest_one(
     *,
     run_id: str | None,
     result: IngestResult,
+    settings: FilterSettings,
 ) -> None:
     source = canonicalize_source(record.channel_key) or record.channel_key
     reasons = validation_reasons(record)
@@ -79,6 +87,9 @@ def _ingest_one(
     created = existing is None
     stored = repo.upsert_job(job)
     repo.mark_job_raw_processed(raw.id, job_id=stored.id)
+    decision = apply_filter_to_job(repo, stored, settings)
+    if decision.filter_state == FILTER_STATE_EXCLUDED:
+        result.excluded += 1
     if created:
         result.jobs_created += 1
     else:

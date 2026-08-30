@@ -132,7 +132,7 @@ def normalize_record(record: CollectorRecord) -> Job:
         company=company,
         location=location,
         description=description,
-        employment_type="",
+        employment_type=_employment_type_from_record(record),
         salary=_salary_from_record(record),
         published_at=record.published_at,
         discovered_at=collected,
@@ -143,6 +143,20 @@ def normalize_record(record: CollectorRecord) -> Job:
         match_score=None,
         market=record.market or "CN",
     )
+
+
+def _employment_type_from_record(record: CollectorRecord) -> str:
+    payload = record.raw_payload
+    for key in ("employment_type", "jobType", "job_type", "工作性质", "职位类型"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    tags = payload.get("tags")
+    if isinstance(tags, list):
+        parts = [str(t).strip() for t in tags if str(t).strip()]
+        if parts:
+            return " ".join(parts)
+    return ""
 
 
 def _salary_from_record(record: CollectorRecord) -> str:

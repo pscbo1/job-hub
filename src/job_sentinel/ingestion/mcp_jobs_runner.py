@@ -14,6 +14,12 @@ from loguru import logger
 from job_sentinel.config.settings import get_settings
 
 
+def page_to_for_max_jobs(max_jobs: int) -> int:
+    """Ask mcp-jobs for enough pages to reach ``max_jobs``; collectors stop earlier."""
+    capped = max(1, min(int(max_jobs), 200))
+    return min(30, max(1, (capped + 19) // 20))
+
+
 class McpJobsCollectError(Exception):
     """mcp-jobs CLI failed or returned unreadable output."""
 
@@ -62,6 +68,9 @@ def run_mcp_jobs_search(
 
     node_bin = node or settings.mcp_jobs_node
     timeout = timeout_seconds if timeout_seconds is not None else settings.mcp_jobs_timeout_seconds
+    max_jobs_value = max_jobs if max_jobs is not None else settings.mcp_jobs_max_jobs
+    page_from_value = page_from if page_from is not None else settings.mcp_jobs_page_from
+    page_to_value = page_to if page_to is not None else page_to_for_max_jobs(max_jobs_value)
     fd, tmp_name = tempfile.mkstemp(suffix=".json", prefix="mcp-jobs-collect-")
     os.close(fd)
     out_path = Path(tmp_name)
@@ -73,11 +82,11 @@ def run_mcp_jobs_search(
         "--out",
         str(out_path),
         "--pageFrom",
-        str(page_from if page_from is not None else settings.mcp_jobs_page_from),
+        str(page_from_value),
         "--pageTo",
-        str(page_to if page_to is not None else settings.mcp_jobs_page_to),
+        str(page_to_value),
         "--maxJobs",
-        str(max_jobs if max_jobs is not None else settings.mcp_jobs_max_jobs),
+        str(max_jobs_value),
     ]
     if city.strip():
         argv.extend(["--city", city.strip()])

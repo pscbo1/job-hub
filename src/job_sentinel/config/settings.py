@@ -473,17 +473,21 @@ class Settings(BaseSettings):
         description="Node executable used to run the mcp-jobs collect CLI",
     )
     mcp_jobs_timeout_seconds: int = Field(
-        default=600,
+        default=1200,
         ge=30,
         description="Seconds to wait for one mcp-jobs collection run",
     )
     mcp_jobs_page_from: int = Field(default=1, ge=1, description="mcp-jobs start page")
-    mcp_jobs_page_to: int = Field(default=1, ge=1, description="mcp-jobs end page (V0: one page)")
+    mcp_jobs_page_to: int = Field(
+        default=1,
+        ge=1,
+        description="Unused when page range is derived from max results",
+    )
     mcp_jobs_max_jobs: int = Field(
-        default=40,
+        default=100,
         ge=1,
         le=200,
-        description="Cap unique jobs requested from mcp-jobs per run",
+        description="Default max unique jobs requested from mcp-jobs per run",
     )
     session_path: Path = Field(
         default=_REPO_ROOT / "data" / "session.json",

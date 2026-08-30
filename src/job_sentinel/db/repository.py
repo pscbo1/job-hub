@@ -46,16 +46,14 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
 _DOC_TABLE = "generated_documents"
 _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
-_FORBIDDEN_JOB_COLUMNS = frozenset(
-    {"favorite", "next_step", "comment", "applied_at", "filter_state", "filter_reasons"}
-)
+_FORBIDDEN_JOB_COLUMNS = frozenset({"favorite", "next_step", "comment", "applied_at"})
 
 
 class JobRepository:
@@ -222,6 +220,8 @@ class JobRepository:
                 status TEXT DEFAULT NULL,
                 match_score REAL,
                 market TEXT NOT NULL DEFAULT '',
+                filter_state TEXT NOT NULL DEFAULT 'included',
+                filter_reasons TEXT NOT NULL DEFAULT '[]',
                 CHECK (
                     status IS NULL
                     OR status IN ('saved', 'to_do', 'applied', 'closed', 'reference')
@@ -235,6 +235,7 @@ class JobRepository:
             jobs.transform(drop=extra)
             logger.debug("Dropped non-V0 columns from jobs: {}", extra)
 
+        self._ensure_job_filter_columns()
         jobs.create_index(["source", "source_job_id"], unique=True, if_not_exists=True)
         for col in (
             "discovered_at",
@@ -243,8 +244,21 @@ class JobRepository:
             "source",
             "fingerprint",
             "canonical_url",
+            "filter_state",
         ):
             jobs.create_index([col], if_not_exists=True)
+
+    def _ensure_job_filter_columns(self) -> None:
+        """V0 reversible exclusion: keep jobs, hide them from the default pool."""
+        names = {col.name for col in self._table(_JOBS_TABLE).columns}
+        if "filter_state" not in names:
+            self._db.execute(
+                "ALTER TABLE jobs ADD COLUMN filter_state TEXT NOT NULL DEFAULT 'included'"
+            )
+        if "filter_reasons" not in names:
+            self._db.execute(
+                "ALTER TABLE jobs ADD COLUMN filter_reasons TEXT NOT NULL DEFAULT '[]'"
+            )
 
     def _ensure_jobs_raw_table(self) -> None:
         self._db.execute(
@@ -277,6 +291,12 @@ class JobRepository:
     def _set_meta(self, key: str, value: str) -> None:
         self._table(_META_TABLE).upsert({"key": key, "value": value}, pk="key")
 
+    def get_meta(self, key: str) -> str | None:
+        return self._get_meta(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._set_meta(key, value)
+
     def _migrate(self, from_version: int) -> None:
         logger.info("Migrating DB schema v{} → v{}", from_version, SCHEMA_VERSION)
         if from_version < 2:
@@ -285,6 +305,9 @@ class JobRepository:
             self._ensure_documents_table()
         if from_version < 3:
             self._ensure_v0_tables()
+        if from_version < 4:
+            self._ensure_jobs_table()
+            self._ensure_job_filter_columns()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -434,22 +457,64 @@ class JobRepository:
         )
         return _hub_job_from_row(dict(rows[0])) if rows else None
 
-    def list_hub_jobs(self, *, limit: int = 100, since: datetime | None = None) -> list[Job]:
-        """Job Pool rows, newest ``discovered_at`` first."""
+    def list_hub_jobs(
+        self,
+        *,
+        limit: int = 100,
+        since: datetime | None = None,
+        filter_state: str = "included",
+    ) -> list[Job]:
+        """Job Pool rows, newest ``discovered_at`` first.
+
+        ``filter_state``: ``included`` (default pool), ``excluded``, or ``all``.
+        """
         capped = max(1, min(limit, 500))
-        if since is None:
-            rows = self._table(_JOBS_TABLE).rows_where(
-                order_by="discovered_at DESC",
-                limit=capped,
+        clauses: list[str] = []
+        params: list[str] = []
+        if since is not None:
+            clauses.append("discovered_at >= ?")
+            params.append(since.isoformat())
+        state = filter_state.strip().lower()
+        if state == "excluded":
+            clauses.append("filter_state = ?")
+            params.append("excluded")
+        elif state != "all":
+            clauses.append(
+                "(filter_state IS NULL OR filter_state = '' OR filter_state = 'included')"
             )
-        else:
-            rows = self._table(_JOBS_TABLE).rows_where(
-                "discovered_at >= ?",
-                [since.isoformat()],
-                order_by="discovered_at DESC",
-                limit=capped,
-            )
+        where = " AND ".join(clauses) if clauses else "1=1"
+        rows = self._table(_JOBS_TABLE).rows_where(
+            where,
+            params,
+            order_by="discovered_at DESC",
+            limit=capped,
+        )
         return [_hub_job_from_row(dict(r)) for r in rows]
+
+    def list_all_hub_jobs(self) -> list[Job]:
+        """Every canonical job, for reversible re-filtering."""
+        rows = self._table(_JOBS_TABLE).rows_where(order_by="discovered_at DESC")
+        return [_hub_job_from_row(dict(r)) for r in rows]
+
+    def update_hub_job_filter(
+        self,
+        job_id: str,
+        *,
+        filter_state: str,
+        filter_reasons: list[str],
+    ) -> Job | None:
+        """Set exclusion state only. Never touches status, match_score, discovered_at."""
+        if self.get_hub_job(job_id) is None:
+            return None
+        self._table(_JOBS_TABLE).update(
+            job_id,
+            {
+                "filter_state": filter_state,
+                "filter_reasons": json.dumps(filter_reasons),
+                "updated_at": _now_iso(),
+            },
+        )
+        return self.get_hub_job(job_id)
 
     def update_hub_job_status(self, job_id: str, status: JobStatus | None) -> Job | None:
         """Set lifecycle status. ``None`` clears it. Does not touch ingest fields."""
@@ -923,6 +988,20 @@ def _doc_from_row(row: dict[str, Any]) -> GeneratedDocument:
 # ── V0 Job / JobRaw helpers ───────────────────────────────────────────────────
 
 
+def _parse_json_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed]
+    return []
+
+
 def _optional_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -957,6 +1036,8 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "status": job.status.value if job.status is not None else None,
         "match_score": job.match_score,
         "market": job.market,
+        "filter_state": job.filter_state or "included",
+        "filter_reasons": json.dumps(list(job.filter_reasons)),
     }
 
 
@@ -984,6 +1065,8 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         status=status,
         match_score=float(score) if score is not None else None,
         market=row.get("market", ""),
+        filter_state=str(row.get("filter_state") or "included"),
+        filter_reasons=_parse_json_list(row.get("filter_reasons")),
     )
 
 

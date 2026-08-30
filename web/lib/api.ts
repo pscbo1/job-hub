@@ -187,11 +187,19 @@ export interface HubJob {
   match_score: number | null;
   salary?: string;
   description?: string;
+  filter_state?: string;
+  filter_reasons?: string[];
 }
 
-export function getJobs(limit = 50, since?: string): Promise<HubJob[]> {
+export type PoolFilterState = "included" | "excluded" | "all";
+
+export function getJobs(
+  limit = 50,
+  since?: string,
+  filterState: PoolFilterState = "included",
+): Promise<HubJob[]> {
   if (demo.DEMO) return Promise.resolve(demo.demoHubJobs.slice(0, limit));
-  const q = new URLSearchParams({ limit: String(limit) });
+  const q = new URLSearchParams({ limit: String(limit), filter_state: filterState });
   if (since) q.set("since", since);
   return getJSON<HubJob[]>(`/api/jobs?${q.toString()}`, []);
 }
@@ -949,6 +957,7 @@ export interface CollectOutcome {
   jobs_updated: number;
   raw_inserted: number;
   invalid: number;
+  excluded?: number;
   source_results: Array<{
     name?: string;
     succeeded?: boolean;
@@ -959,6 +968,45 @@ export interface CollectOutcome {
   errors: string[];
   since: string;
   message: string;
+  max_results?: number;
+}
+
+export interface FilterSettings {
+  exclude_outsourcing: boolean;
+  exclude_part_time: boolean;
+  exclude_internship: boolean;
+  custom_keywords: string[];
+  excluded_companies: string[];
+}
+
+export function getFilterSettings(): Promise<FilterSettings | null> {
+  if (demo.DEMO) {
+    return Promise.resolve({
+      exclude_outsourcing: true,
+      exclude_part_time: true,
+      exclude_internship: true,
+      custom_keywords: [],
+      excluded_companies: [],
+    });
+  }
+  return getJSON<FilterSettings | null>("/api/filters", null);
+}
+
+export async function saveFilterSettings(
+  body: FilterSettings & { apply?: boolean },
+): Promise<{ settings: FilterSettings; reapplied?: { scanned: number; included: number; excluded: number } } | null> {
+  if (demo.DEMO) return { settings: body };
+  try {
+    const res = await fetch(`${API_BASE}/api/filters`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { settings: FilterSettings; reapplied?: { scanned: number; included: number; excluded: number } };
+  } catch {
+    return null;
+  }
 }
 
 export function getCollectSources(): Promise<{ sources: CollectSource[] } | null> {
@@ -979,6 +1027,12 @@ export async function collectJobs(body: {
   keywords: string;
   location: string;
   sources: string[];
+  max_results: number;
+  exclude_outsourcing: boolean;
+  exclude_part_time: boolean;
+  exclude_internship: boolean;
+  custom_keywords: string;
+  excluded_companies: string;
 }): Promise<CollectOutcome | null> {
   if (demo.DEMO) {
     return {
@@ -987,10 +1041,12 @@ export async function collectJobs(body: {
       jobs_updated: 0,
       raw_inserted: 0,
       invalid: 0,
+      excluded: 0,
       source_results: [],
       errors: [],
       since: new Date().toISOString().slice(0, 10),
       message: "Demo mode — collection is not run",
+      max_results: body.max_results,
     };
   }
   try {

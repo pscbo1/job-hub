@@ -57,9 +57,16 @@ export function resolveDiscoveredFilter(
   return { range, since: sinceForPreset(range, now), customSince };
 }
 
-export function jobsPoolHref(range: DiscoveredRange, customSince = ""): string {
+export type PoolView = "included" | "excluded";
+
+export function jobsPoolHref(
+  range: DiscoveredRange,
+  customSince = "",
+  pool: PoolView = "included",
+): string {
   const params = new URLSearchParams();
   params.set("range", range);
   if (range === "custom" && customSince) params.set("since", customSince);
+  if (pool === "excluded") params.set("pool", "excluded");
   return `/jobs?${params.toString()}`;
 }

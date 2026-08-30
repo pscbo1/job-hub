@@ -50,6 +50,7 @@ def test_collect_and_ingest_uses_payload(tmp_path: Path, monkeypatch: pytest.Mon
         assert kwargs["keyword"] == "用户研究"
         assert kwargs["city"] == "北京"
         assert kwargs["collector_ids"] == ["zhaopin"]
+        assert kwargs["max_jobs"] == 100
         return payload
 
     monkeypatch.setattr("job_sentinel.ingestion.collect.run_mcp_jobs_search", fake_run)
@@ -151,17 +152,60 @@ def test_collect_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     resp = client.post(
         "/api/collect/jobs",
-        json={"keywords": "产品", "location": "上海", "sources": ["liepin"]},
+        json={
+            "keywords": "产品",
+            "location": "上海",
+            "sources": ["liepin"],
+            "max_results": 50,
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "completed"
     assert body["jobs_created"] == 1
+    assert body["max_results"] == 50
 
     jobs = client.get("/api/jobs").json()
     assert len(jobs) == 1
     assert jobs[0]["source"] == "liepin"
     assert jobs[0]["status"] is None
+
+
+def test_collect_api_uses_selected_sources_and_max_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "rawJobs": [
+                {
+                    "source": "zhaopin",
+                    "title": "PM",
+                    "company": "X",
+                    "jobDetail": "https://www.zhaopin.com/jobdetail/ONLY.htm",
+                }
+            ],
+            "sources": [{"name": "zhaopin", "succeeded": True, "jobCount": 1}],
+        }
+
+    monkeypatch.setattr("job_sentinel.ingestion.collect.run_mcp_jobs_search", fake_run)
+    client = TestClient(create_app(profile_path=tmp_path / "p.yaml", db_path=tmp_path / "j.db"))
+    resp = client.post(
+        "/api/collect/jobs",
+        json={
+            "keywords": "产品",
+            "sources": ["zhaopin"],
+            "max_results": 200,
+            "exclude_internship": False,
+        },
+    )
+    assert resp.status_code == 200
+    assert captured["collector_ids"] == ["zhaopin"]
+    assert captured["max_jobs"] == 200
+    assert "liepin" not in captured["collector_ids"]
+    assert "boss" not in captured["collector_ids"]
 
 
 def test_collect_api_rejects_empty_keywords(tmp_path: Path) -> None:
@@ -207,7 +251,54 @@ def test_runner_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "--keyword" in argv and "用户研究" in argv
     assert "--city" in argv and "北京" in argv
     assert "--sources" in argv and argv[argv.index("--sources") + 1] == "zhaopin"
+    assert "--maxJobs" in argv and argv[argv.index("--maxJobs") + 1] == "10"
+    assert "--pageTo" in argv and argv[argv.index("--pageTo") + 1] == "1"
     assert payload["anySucceeded"] is True
+
+
+def test_page_to_scales_with_max_jobs() -> None:
+    from job_sentinel.ingestion.mcp_jobs_runner import page_to_for_max_jobs
+
+    assert page_to_for_max_jobs(50) == 3
+    assert page_to_for_max_jobs(100) == 5
+    assert page_to_for_max_jobs(200) == 10
+
+
+def test_runner_computes_page_to_from_max_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "mcp-jobs"
+    (root / "scripts").mkdir(parents=True)
+    (root / "dist").mkdir()
+    (root / "scripts" / "collect-json.js").write_text("/* stub */", encoding="utf-8")
+    (root / "dist" / "index.js").write_text("module.exports = {}", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> Any:
+        captured["argv"] = argv
+        out = Path(argv[argv.index("--out") + 1])
+        out.write_text('{"rawJobs":[],"sources":[],"anySucceeded":true}', encoding="utf-8")
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr("job_sentinel.ingestion.mcp_jobs_runner.subprocess.run", fake_run)
+    payload = run_mcp_jobs_search(
+        keyword="用户研究",
+        collector_ids=["zhaopin"],
+        mcp_jobs_root=root,
+        node="node",
+        timeout_seconds=30,
+        max_jobs=100,
+    )
+    argv = captured["argv"]
+    assert payload["anySucceeded"] is True
+    assert argv[argv.index("--maxJobs") + 1] == "100"
+    assert argv[argv.index("--pageTo") + 1] == "5"
 
 
 def test_collect_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

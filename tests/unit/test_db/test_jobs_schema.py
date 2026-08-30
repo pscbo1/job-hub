@@ -27,8 +27,6 @@ _FORBIDDEN = {
     "next_step",
     "comment",
     "applied_at",
-    "filter_state",
-    "filter_reasons",
 }
 
 
@@ -63,6 +61,8 @@ class TestMigration:
         assert "job_postings" in names
         jobs_cols = _column_names(repo, "jobs")
         assert _FORBIDDEN.isdisjoint(jobs_cols)
+        assert "filter_state" in jobs_cols
+        assert "filter_reasons" in jobs_cols
         assert "market" in jobs_cols
         assert "fingerprint" in jobs_cols
         raw_cols = _column_names(repo, "jobs_raw")

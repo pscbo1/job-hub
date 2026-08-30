@@ -215,6 +215,8 @@ class Job(BaseModel):
     status: JobStatus | None = Field(default=None)
     match_score: float | None = Field(default=None)
     market: str = Field(default="")
+    filter_state: str = Field(default="included")
+    filter_reasons: list[str] = Field(default_factory=list)
 
     @field_validator("status", mode="before")
     @classmethod

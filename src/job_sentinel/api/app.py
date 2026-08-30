@@ -130,8 +130,14 @@ class CollectJobsRequest(BaseModel):
     keywords: str = Field(min_length=1)
     location: str = ""
     sources: list[str] = Field(min_length=1)
+    max_results: int = Field(default=100, ge=1, le=200)
+    exclude_outsourcing: bool = True
+    exclude_part_time: bool = True
+    exclude_internship: bool = True
+    custom_keywords: str = ""
+    excluded_companies: str = ""
 
-    @field_validator("keywords", "location", mode="before")
+    @field_validator("keywords", "location", "custom_keywords", "excluded_companies", mode="before")
     @classmethod
     def _strip_text(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v
@@ -142,6 +148,15 @@ class CollectJobsRequest(BaseModel):
         if not isinstance(v, list):
             return v
         return [str(item).strip() for item in v if str(item).strip()]
+
+
+class FilterSettingsRequest(BaseModel):
+    exclude_outsourcing: bool = True
+    exclude_part_time: bool = True
+    exclude_internship: bool = True
+    custom_keywords: str | list[str] = ""
+    excluded_companies: str | list[str] = ""
+    apply: bool = True
 
 
 class ChatRequest(BaseModel):
@@ -421,14 +436,23 @@ def create_app(
         return _summary(load_profile(profile_path))
 
     @app.get("/api/jobs", response_model=list[Job])
-    def list_jobs(limit: int = 50, since: str | None = None) -> list[Job]:
+    def list_jobs(
+        limit: int = 50,
+        since: str | None = None,
+        filter_state: str = "included",
+    ) -> list[Job]:
         """Job Pool: canonical ``jobs`` rows (not legacy ``job_postings``)."""
         from job_sentinel.db.repository import JobRepository
 
+        state = filter_state.strip().lower()
+        if state not in {"included", "excluded", "all"}:
+            raise HTTPException(
+                status_code=422, detail="filter_state must be included, excluded, or all"
+            )
         since_dt = _parse_since(since)
         repo = JobRepository(db_path)
         try:
-            return repo.list_hub_jobs(limit=limit, since=since_dt)
+            return repo.list_hub_jobs(limit=limit, since=since_dt, filter_state=state)
         finally:
             repo.close()
 
@@ -476,6 +500,7 @@ def create_app(
         """Run mcp-jobs with UI criteria, then ingest into jobs_raw / jobs."""
         from job_sentinel.db.repository import JobRepository
         from job_sentinel.ingestion.collect import collect_and_ingest
+        from job_sentinel.ingestion.filters import FilterSettings
 
         repo = JobRepository(db_path)
         try:
@@ -484,10 +509,56 @@ def create_app(
                 keywords=req.keywords,
                 location=req.location,
                 source_ids=req.sources,
+                max_results=req.max_results,
+                filter_settings=FilterSettings(
+                    exclude_outsourcing=req.exclude_outsourcing,
+                    exclude_part_time=req.exclude_part_time,
+                    exclude_internship=req.exclude_internship,
+                    custom_keywords=req.custom_keywords,
+                    excluded_companies=req.excluded_companies,
+                ),
             )
         finally:
             repo.close()
         return outcome.model_dump()
+
+    @app.get("/api/filters")
+    def get_filter_settings() -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.filters import load_filter_settings
+
+        repo = JobRepository(db_path)
+        try:
+            return load_filter_settings(repo).model_dump()
+        finally:
+            repo.close()
+
+    @app.put("/api/filters")
+    def put_filter_settings(req: FilterSettingsRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.filters import (
+            FilterSettings,
+            reapply_filters,
+            save_filter_settings,
+        )
+
+        settings = FilterSettings(
+            exclude_outsourcing=req.exclude_outsourcing,
+            exclude_part_time=req.exclude_part_time,
+            exclude_internship=req.exclude_internship,
+            custom_keywords=req.custom_keywords,
+            excluded_companies=req.excluded_companies,
+        )
+        repo = JobRepository(db_path)
+        try:
+            save_filter_settings(repo, settings)
+            applied = reapply_filters(repo, settings) if req.apply else None
+        finally:
+            repo.close()
+        body: dict[str, Any] = {"settings": settings.model_dump()}
+        if applied is not None:
+            body["reapplied"] = applied.model_dump()
+        return body
 
     @app.post("/api/ingest/jobs")
     def ingest_collector_jobs(payload: dict[str, Any] | list[Any]) -> dict[str, Any]:

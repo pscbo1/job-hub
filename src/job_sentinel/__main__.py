@@ -236,6 +236,7 @@ def collect(
         "-s",
         help="Comma-separated source ids: zhaopin, liepin, boss",
     ),
+    max_results: int = typer.Option(100, "--max-results", "-n", min=1, max=200),
 ) -> None:
     """Collect from mcp-jobs into jobs_raw then jobs (same path as the Search page)."""
     from job_sentinel.db.repository import JobRepository
@@ -249,6 +250,7 @@ def collect(
             keywords=keywords,
             location=location,
             source_ids=source_ids,
+            max_results=max_results,
         )
     finally:
         repo.close()

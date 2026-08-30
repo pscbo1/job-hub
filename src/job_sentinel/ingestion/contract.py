@@ -46,4 +46,5 @@ class IngestResult(BaseModel):
     jobs_updated: int = 0
     invalid: int = 0
     skipped: int = 0
+    excluded: int = 0
     errors: list[str] = Field(default_factory=list)

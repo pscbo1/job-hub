@@ -8,6 +8,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field
 
 from job_sentinel.ingestion.collect_sources import resolve_collect_sources
+from job_sentinel.ingestion.filters import (
+    FilterSettings,
+    reapply_filters,
+    save_filter_settings,
+)
 from job_sentinel.ingestion.mcp_jobs import parse_ingest_payload
 from job_sentinel.ingestion.mcp_jobs_runner import McpJobsCollectError, run_mcp_jobs_search
 from job_sentinel.ingestion.pipeline import ingest_records
@@ -24,10 +29,12 @@ class CollectOutcome(BaseModel):
     jobs_updated: int = 0
     raw_inserted: int = 0
     invalid: int = 0
+    excluded: int = 0
     source_results: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     since: str = ""
     message: str = ""
+    max_results: int = 100
 
 
 def collect_and_ingest(
@@ -37,14 +44,23 @@ def collect_and_ingest(
     location: str,
     source_ids: list[str],
     run_id: str | None = None,
+    max_results: int = 100,
+    filter_settings: FilterSettings | None = None,
 ) -> CollectOutcome:
     """Validate sources, call mcp-jobs, ingest rawJobs into jobs_raw then jobs."""
     started = datetime.now(tz=UTC)
     since = started.date().isoformat()
+    capped = max(1, min(int(max_results), 200))
     try:
         specs = resolve_collect_sources(source_ids)
     except ValueError as exc:
-        return CollectOutcome(status="failed", since=since, message=str(exc), errors=[str(exc)])
+        return CollectOutcome(
+            status="failed",
+            since=since,
+            message=str(exc),
+            errors=[str(exc)],
+            max_results=capped,
+        )
 
     keyword = keywords.strip()
     if not keyword:
@@ -53,6 +69,7 @@ def collect_and_ingest(
             since=since,
             message="Keywords are required",
             errors=["Keywords are required"],
+            max_results=capped,
         )
 
     kinds = {spec.kind for spec in specs}
@@ -63,22 +80,35 @@ def collect_and_ingest(
             + ", ".join(sorted(unsupported))
             + ". V0 only runs mcp-jobs platforms."
         )
-        return CollectOutcome(status="failed", since=since, message=msg, errors=[msg])
+        return CollectOutcome(
+            status="failed", since=since, message=msg, errors=[msg], max_results=capped
+        )
+
+    if filter_settings is not None:
+        save_filter_settings(repo, filter_settings)
 
     try:
         payload = run_mcp_jobs_search(
             keyword=keyword,
             city=location,
             collector_ids=[spec.collector_id for spec in specs],
+            max_jobs=capped,
         )
     except McpJobsCollectError as exc:
-        return CollectOutcome(status="failed", since=since, message=str(exc), errors=[str(exc)])
+        return CollectOutcome(
+            status="failed",
+            since=since,
+            message=str(exc),
+            errors=[str(exc)],
+            max_results=capped,
+        )
 
     source_results = _source_results(payload)
     records = parse_ingest_payload(payload)
     ingest = ingest_records(
         repo, records, run_id=run_id or f"collect-{started.strftime('%Y%m%dT%H%M%SZ')}"
     )
+    reapply_filters(repo)
 
     errors = list(ingest.errors)
     any_ok = bool(source_results) and any(bool(s.get("succeeded")) for s in source_results)
@@ -112,10 +142,12 @@ def collect_and_ingest(
         jobs_updated=ingest.jobs_updated,
         raw_inserted=ingest.raw_inserted,
         invalid=ingest.invalid,
+        excluded=ingest.excluded,
         source_results=source_results,
         errors=errors,
         since=since,
         message=message,
+        max_results=capped,
     )
 
 

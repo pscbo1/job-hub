@@ -183,3 +183,29 @@ def test_build_with_profile_returns_pdf_or_503(tmp_path: Path) -> None:
     assert resp.status_code in (200, 503)
     if resp.status_code == 200:
         assert resp.headers["content-type"] == "application/pdf"
+
+
+def test_filter_settings_round_trip_and_hide_jobs(tmp_path: Path) -> None:
+    from job_sentinel.core.models import Job
+    from job_sentinel.db.repository import JobRepository
+
+    repo = JobRepository(tmp_path / "j.db")
+    intern = repo.upsert_job(Job(source="zhaopin", source_job_id="i1", title="产品实习"))
+    repo.close()
+    client = _client(tmp_path)
+    defaults = client.get("/api/filters").json()
+    assert defaults["exclude_internship"] is True
+    applied = client.put("/api/filters", json={**defaults, "apply": True}).json()
+    assert applied["reapplied"]["excluded"] == 1
+    assert client.get("/api/jobs").json() == []
+    hidden = client.get("/api/jobs", params={"filter_state": "excluded"}).json()
+    assert hidden[0]["id"] == intern.id
+    assert hidden[0]["filter_reasons"] == ["internship"]
+    cleared = client.put(
+        "/api/filters",
+        json={**defaults, "exclude_internship": False, "apply": True},
+    ).json()
+    assert cleared["reapplied"]["included"] == 1
+    visible = client.get("/api/jobs").json()
+    assert visible[0]["id"] == intern.id
+    assert visible[0]["status"] is None

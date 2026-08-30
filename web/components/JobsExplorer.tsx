@@ -12,6 +12,7 @@ import {
   DISCOVERED_RANGE_OPTIONS,
   jobsPoolHref,
   type DiscoveredRange,
+  type PoolView,
 } from "@/lib/discoveredRange";
 import { cn, externalUrl } from "@/lib/utils";
 
@@ -56,10 +57,14 @@ export function JobsExplorer({
   jobs,
   range = "7d",
   customSince = "",
+  pool = "included",
+  otherCount = 0,
 }: {
   jobs: HubJob[];
   range?: DiscoveredRange;
   customSince?: string;
+  pool?: PoolView;
+  otherCount?: number;
 }) {
   const router = useRouter();
   const reduced = useReducedMotion();
@@ -105,11 +110,15 @@ export function JobsExplorer({
   }, [jobs, query, filter, sort, overrides]);
 
   function setRange(next: DiscoveredRange) {
-    router.push(jobsPoolHref(next, next === "custom" ? customSince : ""));
+    router.push(jobsPoolHref(next, next === "custom" ? customSince : "", pool));
   }
 
   function setCustomSince(value: string) {
-    router.push(jobsPoolHref("custom", value));
+    router.push(jobsPoolHref("custom", value, pool));
+  }
+
+  function setPool(next: PoolView) {
+    router.push(jobsPoolHref(range, customSince, next));
   }
 
   return (
@@ -173,6 +182,18 @@ export function JobsExplorer({
               ]}
             />
           </label>
+          <button
+            type="button"
+            onClick={() => setPool(pool === "excluded" ? "included" : "excluded")}
+            className={cn(
+              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+              pool === "excluded"
+                ? "border-ink bg-ink text-white"
+                : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
+            )}
+          >
+            {pool === "excluded" ? "Back to Job Pool" : `Excluded ${otherCount}`}
+          </button>
         </div>
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
           {["all", "unset", ...STATUSES].map((s) => (
@@ -201,7 +222,9 @@ export function JobsExplorer({
           <CardTitle>Nothing matches</CardTitle>
           <CardSub className="mt-2">
             {jobs.length === 0
-              ? "No jobs in the pool yet. Collect from Search, or import with job-sentinel ingest."
+              ? pool === "excluded"
+                ? "No excluded jobs for this date range."
+                : "No jobs in the pool yet. Collect from Search, or import with job-sentinel ingest."
               : "Try a different search, date, or status filter."}
           </CardSub>
         </Card>
@@ -243,6 +266,11 @@ export function JobsExplorer({
                         {typeof j.match_score === "number" && (
                           <span className="text-[11px] text-muted">
                             Match {(j.match_score * 100).toFixed(0)}%
+                          </span>
+                        )}
+                        {pool === "excluded" && (j.filter_reasons?.length ?? 0) > 0 && (
+                          <span className="text-[11px] text-amber-700">
+                            {j.filter_reasons?.join(", ")}
                           </span>
                         )}
                       </div>
