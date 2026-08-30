@@ -43,8 +43,8 @@ def _doc(**kwargs: object) -> GeneratedDocument:
 # ── schema version ────────────────────────────────────────────────────────────
 
 
-def test_schema_version_is_4() -> None:
-    assert SCHEMA_VERSION == 4
+def test_schema_version_is_5() -> None:
+    assert SCHEMA_VERSION == 5
 
 
 def test_migration_creates_tables(tmp_path: Path) -> None:
