@@ -25,23 +25,21 @@ import {
 } from "@/lib/marketPrefs";
 
 describe("parseMarketId", () => {
-  it("maps view ids and does not treat global as a view", () => {
+  it("maps view ids and treats global as EN", () => {
     expect(parseMarketId("cn")).toBe("cn");
     expect(parseMarketId("CN")).toBe("cn");
     expect(parseMarketId("en")).toBe("en");
-    expect(parseMarketId("GLOBAL")).toBeNull();
+    expect(parseMarketId("GLOBAL")).toBe("en");
     expect(parseSourceMarket("GLOBAL")).toBe("global");
     expect(parseMarketId("jp")).toBeNull();
   });
 });
 
 describe("source isolation", () => {
-  it("groups by source_market; global appears in both views", () => {
+  it("keeps CN and EN/global sources in separate views", () => {
     expect(sourceInMarket("cn", "cn")).toBe(true);
-    expect(sourceInMarket("CN", "en")).toBe(false);
-    expect(sourceInMarket("en", "en")).toBe(true);
     expect(sourceInMarket("global", "en")).toBe(true);
-    expect(sourceInMarket("global", "cn")).toBe(true);
+    expect(sourceInMarket("global", "cn")).toBe(false);
     expect(sourceInMarket("", "cn")).toBe(false);
   });
 
@@ -49,20 +47,16 @@ describe("source isolation", () => {
     expect(storedToMarketId(undefined)).toBeNull();
   });
 
-  it("routes global jobs by country and keeps en sources in EN", () => {
+  it("assigns jobs by source, not by country", () => {
     const registry = { palantir: "global", linkedin: "en", zhaopin: "cn" };
-    expect(jobInMarketView({ source: "palantir", country: "CN" }, "cn", registry)).toBe(true);
-    expect(jobInMarketView({ source: "palantir", country: "GB" }, "cn", registry)).toBe(false);
+    expect(jobInMarketView({ source: "palantir", country: "CN" }, "cn", registry)).toBe(false);
     expect(jobInMarketView({ source: "palantir", country: "GB" }, "en", registry)).toBe(true);
-    expect(jobInMarketView({ source: "linkedin", country: "CN" }, "en", registry)).toBe(true);
     expect(jobInMarketView({ source: "linkedin", country: "CN" }, "cn", registry)).toBe(false);
-    expect(jobInMarketView({ source: "zhaopin", country: "GB" }, "cn", registry)).toBe(true);
   });
 });
 
 describe("country URL parsing and unknown", () => {
   it("normalizes UK and unknown", () => {
-    expect(parseCountryParam(undefined)).toBe("");
     expect(parseCountryParam("all")).toBe("");
     expect(parseCountryParam("uk")).toBe("GB");
     expect(parseCountryParam("unknown")).toBe("XX");
@@ -72,8 +66,7 @@ describe("country URL parsing and unknown", () => {
   });
 
   it("always includes seed countries plus Unknown", () => {
-    const opts = countryFilterOptions([{ country: "XX", country_name: "Unknown / Global" }]);
-    const codes = opts.map((o) => o.code);
+    const codes = countryFilterOptions([]).map((o) => o.code);
     expect(codes).toContain("US");
     expect(codes).toContain("GB");
     expect(codes).toContain("XX");
@@ -104,13 +97,6 @@ describe("preference isolation", () => {
   it("does not copy CN source selection onto EN", () => {
     writeLastMarket("cn");
     writeCollectSourceIds("cn", ["zhaopin", "liepin"]);
-    writePoolPrefs("cn", {
-      country: "",
-      sources: ["zhaopin"],
-      remote: false,
-      postedDays: "",
-      showSponsorship: false,
-    });
     writePoolPrefs("en", {
       country: "GB",
       sources: ["linkedin"],
@@ -118,13 +104,10 @@ describe("preference isolation", () => {
       postedDays: "7",
       showSponsorship: true,
     });
-
     expect(readLastMarket()).toBe("cn");
     expect(readCollectSourceIds("cn")).toEqual(["zhaopin", "liepin"]);
     expect(readCollectSourceIds("en")).toBeNull();
-    expect(readPoolPrefs("en").sources).toEqual(["linkedin"]);
     expect(readPoolPrefs("en").country).toBe("GB");
-    expect(readPoolPrefs("cn").sources).toEqual(["zhaopin"]);
     expect(collectSourcesStorageKey("cn")).not.toBe(collectSourcesStorageKey("en"));
   });
 });

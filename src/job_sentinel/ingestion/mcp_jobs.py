@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from job_sentinel.ingestion.contract import CollectorRecord
 from job_sentinel.ingestion.normalize import canonicalize_source
+from job_sentinel.markets import parse_source_market
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -44,6 +45,19 @@ def _as_str(value: object) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _record_market(channel: str, raw: str = "", *, default: str = "") -> str:
+    """Resolve source_market from payload, then the collect-source registry."""
+    from job_sentinel.ingestion.collect_sources import get_collect_source
+
+    parsed = parse_source_market(raw)
+    if parsed is not None:
+        return parsed
+    spec = get_collect_source(channel)
+    if spec is not None:
+        return spec.market
+    return default
+
+
 def from_unified_row(row: dict[str, Any]) -> CollectorRecord | None:
     """One mcp-jobs ``writeSourceExports`` Chinese-key row."""
     source = (
@@ -53,7 +67,7 @@ def from_unified_row(row: dict[str, Any]) -> CollectorRecord | None:
     url = _as_str(row.get(_UNIFIED_URL) or row.get("jobDetail"))
     return CollectorRecord(
         channel_key=source,
-        market="CN",
+        market=_record_market(source, default="cn"),
         source_url=url,
         title=title,
         company=_as_str(row.get(_UNIFIED_COMPANY) or row.get("company")),
@@ -77,7 +91,7 @@ def from_joblike(item: dict[str, Any]) -> CollectorRecord | None:
         source = "unknown"
     return CollectorRecord(
         channel_key=source,
-        market=_as_str(item.get("market")) or "CN",
+        market=_record_market(source, _as_str(item.get("market")), default="cn"),
         source_job_id=_as_str(item.get("source_job_id")) or None,
         source_url=url,
         application_url=_as_str(item.get("application_url")),
@@ -99,9 +113,10 @@ def from_joblike(item: dict[str, Any]) -> CollectorRecord | None:
 def from_contract_dict(item: dict[str, Any]) -> CollectorRecord:
     payload = item.get("raw_payload")
     raw = dict(payload) if isinstance(payload, dict) else dict(item)
+    channel = canonicalize_source(_as_str(item.get("channel_key") or item.get("source")))
     return CollectorRecord(
-        channel_key=canonicalize_source(_as_str(item.get("channel_key") or item.get("source"))),
-        market=_as_str(item.get("market")) or "CN",
+        channel_key=channel,
+        market=_record_market(channel, _as_str(item.get("market"))),
         source_job_id=_as_str(item.get("source_job_id")) or None,
         source_url=_as_str(item.get("source_url") or item.get("jobDetail")),
         application_url=_as_str(item.get("application_url")),

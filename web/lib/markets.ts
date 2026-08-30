@@ -1,8 +1,4 @@
-/** UI market views (cn / en) vs source_market (cn / en / global).
-
-source_market is configured per collect source. country is a per-job location
-field. global sources appear in every view; their jobs split by country.
-*/
+/** UI market views (cn / en). Source market is cn / en / global (global → EN). */
 
 export type MarketId = "cn" | "en";
 export type SourceMarket = "cn" | "en" | "global";
@@ -37,7 +33,6 @@ export const MARKETS: Record<MarketId, MarketConfig> = {
   },
 };
 
-/** Always-available EN country choices (neutral — US is included). */
 export const EN_COUNTRY_SEED: { code: string; name: string }[] = [
   { code: "GB", name: "United Kingdom" },
   { code: "NL", name: "Netherlands" },
@@ -59,6 +54,7 @@ export function parseSourceMarket(raw: string | undefined | null): SourceMarket 
 
 export function parseMarketId(raw: string | undefined | null): MarketId | null {
   const sm = parseSourceMarket(raw);
+  if (sm === "global") return "en";
   if (sm === "cn" || sm === "en") return sm;
   return null;
 }
@@ -72,7 +68,6 @@ export function marketHasFilter(market: MarketId, name: string): boolean {
   return MARKETS[market].filters.includes(name);
 }
 
-/** Map a stored exclusive source_market onto a view. global is not a view. */
 export function storedToMarketId(stored: string | undefined | null): MarketId | null {
   return parseMarketId(stored);
 }
@@ -80,7 +75,7 @@ export function storedToMarketId(stored: string | undefined | null): MarketId | 
 export function sourceInMarket(sourceMarket: string | undefined | null, market: MarketId): boolean {
   const sm = parseSourceMarket(sourceMarket);
   if (sm == null) return false;
-  if (sm === "global") return true;
+  if (sm === "global") return market === "en";
   return sm === market;
 }
 
@@ -93,11 +88,7 @@ export function jobInMarketView(
   const sm = parseSourceMarket(fromRegistry) ?? parseSourceMarket(job.market);
   if (sm == null) return false;
   if (sm === "cn") return view === "cn";
-  if (sm === "en") return view === "en";
-  const raw = (job.country || "").trim().toUpperCase();
-  const code = raw === "UK" ? "GB" : raw;
-  const inCn = code === "CN";
-  return view === "cn" ? inCn : !inCn;
+  return view === "en";
 }
 
 export function countryFilterOptions(
@@ -111,12 +102,8 @@ export function countryFilterOptions(
       byCode.set("GB", "United Kingdom");
       continue;
     }
-    if (code === "XX" || code === "UNKNOWN") {
-      continue;
-    }
-    if (!byCode.has(code)) {
-      byCode.set(code, job.country_name || code);
-    }
+    if (code === "XX" || code === "UNKNOWN") continue;
+    if (!byCode.has(code)) byCode.set(code, job.country_name || code);
   }
   const rows = [...byCode.entries()]
     .map(([code, name]) => ({ code, name }))

@@ -110,7 +110,7 @@ def test_ats_board_maps_greenhouse() -> None:
     assert len(recs) == 1
     rec = recs[0]
     assert rec.channel_key == "dimagi"
-    assert rec.market == "GLOBAL"
+    assert rec.market == "global"
     assert rec.source_job_id == "8141380"
     assert rec.source_url.endswith("/8141380")
     assert rec.company == "Dimagi"

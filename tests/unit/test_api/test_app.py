@@ -318,6 +318,8 @@ def test_jobs_market_country_and_no_cross_market_leak(tmp_path: Path) -> None:
     assert {j["source_job_id"] for j in unknown} == {"rem1"}
     us = client.get("/api/jobs", params={"market": "en", "country": "US"}).json()
     assert {j["source_job_id"] for j in us} == {"us1"}
+    china = client.get("/api/jobs", params={"market": "en", "country": "CN"}).json()
+    assert {j["source_job_id"] for j in china} == {"p-cn"}
     assert client.get("/api/jobs", params={"market": "jp"}).status_code == 422
 
     repo = JobRepository(tmp_path / "j.db")
@@ -340,7 +342,7 @@ def test_collect_sources_market_query(tmp_path: Path) -> None:
         for s in client.get("/api/collect/sources", params={"market": "en"}).json()["sources"]
     }
     assert "zhaopin" in cn_ids
-    assert "dimagi" in cn_ids
+    assert "dimagi" not in cn_ids
     assert "linkedin" not in cn_ids
     assert "linkedin" in en_ids
     assert "dimagi" in en_ids
@@ -350,6 +352,6 @@ def test_collect_sources_market_query(tmp_path: Path) -> None:
         for s in client.get("/api/collect/sources", params={"market": "global"}).json()["sources"]
     }
     assert "dimagi" in global_ids
-    assert "linkedin" not in global_ids
+    assert "linkedin" in global_ids
     assert "zhaopin" not in global_ids
     assert client.get("/api/collect/sources", params={"market": "jp"}).status_code == 422

@@ -12,9 +12,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from job_sentinel.ingestion.ats_board_client import resolve_board
+from job_sentinel.markets import (
+    SourceMarket,
+    parse_market_id,
+    require_source_market,
+    source_in_view,
+)
 
 CollectKind = Literal["platform", "career_page", "vertical"]
 SourceGroup = Literal["platform", "vertical", "company_careers"]
@@ -45,7 +51,7 @@ class CollectSource(BaseModel):
         description="Id passed to the collector (mcp-jobs provider name or alias)."
     )
     integration: IntegrationMethod = "mcp_jobs"
-    market: str = "CN"
+    market: SourceMarket
     runnable: bool = True
     notes: str = ""
     enabled: bool = True
@@ -61,6 +67,13 @@ class CollectSource(BaseModel):
         default=None,
         description="Reserved for a later custom grouping layer; unused in V0.",
     )
+
+    @field_validator("market", mode="before")
+    @classmethod
+    def _require_source_market(cls, v: object) -> object:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            raise ValueError("market is required (cn, en, or global)")
+        return require_source_market(str(v))
 
     @model_validator(mode="after")
     def _default_source_group(self) -> CollectSource:
@@ -80,6 +93,7 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         kind="platform",
         collector_id="zhaopin",
         integration="mcp_jobs",
+        market="cn",
         notes="智联招聘",
     ),
     CollectSource(
@@ -88,6 +102,7 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         kind="platform",
         collector_id="liepin",
         integration="mcp_jobs",
+        market="cn",
         notes="猎聘",
     ),
     CollectSource(
@@ -96,6 +111,7 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         kind="platform",
         collector_id="boss",
         integration="mcp_jobs",
+        market="cn",
         notes="BOSS直聘 — uses the existing local Chrome profile / login",
     ),
     CollectSource(
@@ -104,7 +120,7 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         kind="vertical",
         collector_id="impactpool",
         integration="public_html",
-        market="GLOBAL",
+        market="en",
         notes="Impact-sector board — latest public listings, then keyword filter",
     ),
     CollectSource(
@@ -113,7 +129,7 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         kind="career_page",
         collector_id="tencent",
         integration="http_json",
-        market="CN",
+        market="cn",
         company="Tencent",
         notes="careers.tencent.com public Query API — try SSV / 公益 / Tech for Good",
     ),
@@ -123,7 +139,7 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         kind="platform",
         collector_id="hiring_cafe",
         integration="ssr_json",
-        market="GLOBAL",
+        market="en",
         notes="Public SSR job island on hiring.cafe — keyword filter is client-side",
     ),
     CollectSource(
@@ -132,7 +148,7 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         kind="platform",
         collector_id="linkedin",
         integration="public_html",
-        market="GLOBAL",
+        market="en",
         notes=(
             "Public guest job HTML (undocumented /jobs-guest endpoints). "
             "No login or cookies. Keyword, location, date posted, and remote only."
@@ -172,13 +188,17 @@ def _company_row_to_source(row: dict[str, Any]) -> CollectSource:
         raise ValueError(f"{source_id}: {exc}") from exc
     label = str(row.get("label") or "").strip() or f"{company} Careers"
     enabled = bool(row["enabled"]) if "enabled" in row else True
+    raw_market = str(row.get("market") or "").strip()
+    if not raw_market:
+        msg = f"{source_id}: market is required (cn, en, or global)"
+        raise ValueError(msg)
     return CollectSource(
         id=source_id,
         label=label,
         kind="career_page",
         collector_id=source_id,
         integration="ats_board",
-        market=str(row.get("market") or "GLOBAL").strip() or "GLOBAL",
+        market=raw_market,
         notes=str(row.get("notes") or "").strip(),
         enabled=enabled,
         ats=ats_key,
@@ -204,10 +224,18 @@ def _merge_sources() -> tuple[CollectSource, ...]:
 _SOURCES: tuple[CollectSource, ...] = _merge_sources()
 
 
-def list_collect_sources(*, enabled_only: bool = True) -> list[CollectSource]:
-    if enabled_only:
-        return [s for s in _SOURCES if s.enabled and s.runnable]
-    return list(_SOURCES)
+def list_collect_sources(
+    *,
+    enabled_only: bool = True,
+    market: str | None = None,
+) -> list[CollectSource]:
+    rows = [s for s in _SOURCES if s.enabled and s.runnable] if enabled_only else list(_SOURCES)
+    if market is None or not str(market).strip():
+        return rows
+    mid = parse_market_id(market)
+    if mid is None:
+        raise ValueError(f"Unknown market: {market}")
+    return [s for s in rows if source_in_view(s.market, mid)]
 
 
 def get_collect_source(source_id: str) -> CollectSource | None:
@@ -218,7 +246,11 @@ def get_collect_source(source_id: str) -> CollectSource | None:
     return None
 
 
-def resolve_collect_sources(source_ids: list[str]) -> list[CollectSource]:
+def resolve_collect_sources(
+    source_ids: list[str],
+    *,
+    market: str | None = None,
+) -> list[CollectSource]:
     """Validate ids. Unknown or non-runnable ids raise ValueError (API maps this to 400)."""
     if not source_ids:
         raise ValueError("Select at least one source")
@@ -239,4 +271,12 @@ def resolve_collect_sources(source_ids: list[str]) -> list[CollectSource]:
         raise ValueError(f"Unknown collection source(s): {', '.join(unknown)}")
     if not resolved:
         raise ValueError("Select at least one source")
+    if market is not None and str(market).strip():
+        mid = parse_market_id(market)
+        if mid is None:
+            raise ValueError(f"Unknown market: {market}")
+        allowed = {s.id for s in list_collect_sources(enabled_only=False, market=mid)}
+        crossed = [s.id for s in resolved if s.id not in allowed]
+        if crossed:
+            raise ValueError(f"Source(s) not in market {mid}: {', '.join(crossed)}")
     return resolved

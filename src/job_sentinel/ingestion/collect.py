@@ -53,13 +53,14 @@ def collect_and_ingest(
     filter_settings: FilterSettings | None = None,
     remote: bool | None = None,
     date_posted_days: int | None = None,
+    market: str | None = None,
 ) -> CollectOutcome:
     """Validate sources, collect records, ingest into jobs_raw then jobs."""
     started = datetime.now(tz=UTC)
     since = started.date().isoformat()
     capped = max(1, min(int(max_results), 200))
     try:
-        specs = resolve_collect_sources(source_ids)
+        specs = resolve_collect_sources(source_ids, market=market)
     except ValueError as exc:
         return CollectOutcome(
             status="failed",

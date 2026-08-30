@@ -99,7 +99,7 @@ def test_linkedin_search_then_detail(monkeypatch: pytest.MonkeyPatch) -> None:
     recs = collect_linkedin(spec, keywords="engineer", location="United States", max_results=2)
     assert len(recs) == 2
     assert recs[0].channel_key == "linkedin"
-    assert recs[0].market == "GLOBAL"
+    assert recs[0].market == "en"
     assert recs[0].source_job_id == "1111111111"
     assert recs[0].source_url == "https://www.linkedin.com/jobs/view/1111111111"
     assert recs[0].title == "Software Engineer"

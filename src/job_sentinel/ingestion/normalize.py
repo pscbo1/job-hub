@@ -49,6 +49,20 @@ def canonicalize_source(raw: str) -> str:
     return _SOURCE_ALIASES.get(key, key)
 
 
+def _source_market_for(source: str, raw_market: str) -> str:
+    """Prefer a valid record market, then the source registry. Do not guess."""
+    from job_sentinel.ingestion.collect_sources import get_collect_source
+    from job_sentinel.markets import parse_source_market
+
+    parsed = parse_source_market(raw_market)
+    if parsed is not None:
+        return parsed
+    spec = get_collect_source(source)
+    if spec is not None:
+        return spec.market
+    return ""
+
+
 def canonicalize_url(url: str) -> str:
     """Drop known tracking query params; keep the rest of the URL."""
     text = url.strip()
@@ -147,7 +161,7 @@ def normalize_record(record: CollectorRecord) -> Job:
         fingerprint=compute_job_fingerprint(company, title, location),
         status=None,
         match_score=None,
-        market=record.market or "CN",
+        market=_source_market_for(source, record.market),
     )
 
 

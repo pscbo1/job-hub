@@ -2,7 +2,7 @@
 # New Greenhouse / Lever / Ashby / Workday companies: add a row. Do not add
 # collector code.
 #
-# Required: id, company
+# Required: id, company, market (cn | en | global)
 # Board identity: ats + slug, or careers_url on a known host
 #   greenhouse: https://boards.greenhouse.io/{slug} or job-boards.greenhouse.io/{slug}
 #   lever:      https://jobs.lever.co/{slug}
@@ -19,7 +19,7 @@ companies:
     ats: greenhouse
     slug: dimagi
     careers_url: https://job-boards.greenhouse.io/dimagi
-    market: GLOBAL
+    market: global
     notes: Greenhouse public board API
 
   - id: automattic
@@ -27,7 +27,7 @@ companies:
     ats: greenhouse
     slug: automatticcareers
     careers_url: https://automattic.com/work-with-us/
-    market: GLOBAL
+    market: global
     notes: Greenhouse board token is automatticcareers
 
   - id: palantir
@@ -35,7 +35,7 @@ companies:
     ats: lever
     slug: palantir
     careers_url: https://jobs.lever.co/palantir
-    market: GLOBAL
+    market: global
     notes: Lever public postings JSON
 
   - id: redhat
@@ -43,5 +43,5 @@ companies:
     ats: workday
     slug: redhat.wd5.myworkdayjobs.com/Jobs
     careers_url: https://redhat.wd5.myworkdayjobs.com/Jobs
-    market: GLOBAL
+    market: global
     notes: Workday CXS JSON (undocumented, unauthenticated)

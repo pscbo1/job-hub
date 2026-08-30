@@ -12,7 +12,10 @@ class CollectorRecord(BaseModel):
     """One item from a CN collector, before Job Hub persistence."""
 
     channel_key: str = Field(..., min_length=1)
-    market: str = Field(default="CN")
+    market: str = Field(
+        default="",
+        description="source_market from the collect-source config (cn, en, or global).",
+    )
     source_job_id: str | None = Field(default=None)
     source_url: str = Field(default="")
     application_url: str = Field(default="")
@@ -25,10 +28,25 @@ class CollectorRecord(BaseModel):
     collected_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("channel_key", "market", "title", "company", "location", mode="before")
+    @field_validator("channel_key", "title", "company", "location", mode="before")
     @classmethod
     def _strip(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v
+
+    @field_validator("market", mode="before")
+    @classmethod
+    def _canonical_market(cls, v: object) -> object:
+        if v is None:
+            return ""
+        text = v.strip() if isinstance(v, str) else v
+        if not isinstance(text, str) or not text:
+            return ""
+        from job_sentinel.markets import parse_source_market
+
+        parsed = parse_source_market(text)
+        if parsed is None:
+            raise ValueError("market must be cn, en, or global")
+        return parsed
 
     @field_validator("source_job_id", "requirements", mode="before")
     @classmethod
