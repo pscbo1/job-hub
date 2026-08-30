@@ -1,12 +1,15 @@
-"""Search/Collect: run mcp-jobs, then the existing ingest pipeline."""
+"""Search/Collect: run mcp-jobs and HTTP adapters, then the existing ingest pipeline."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
+from job_sentinel.ingestion.adapters import AdapterError
+from job_sentinel.ingestion.adapters.run import collect_adapter_records
 from job_sentinel.ingestion.collect_sources import resolve_collect_sources
 from job_sentinel.ingestion.filters import (
     FilterSettings,
@@ -19,6 +22,8 @@ from job_sentinel.ingestion.pipeline import ingest_records
 
 if TYPE_CHECKING:
     from job_sentinel.db.repository import JobRepository
+    from job_sentinel.ingestion.collect_sources import CollectSource
+    from job_sentinel.ingestion.contract import CollectorRecord
 
 CollectStatus = Literal["completed", "failed", "partial"]
 
@@ -47,7 +52,7 @@ def collect_and_ingest(
     max_results: int = 100,
     filter_settings: FilterSettings | None = None,
 ) -> CollectOutcome:
-    """Validate sources, call mcp-jobs, ingest rawJobs into jobs_raw then jobs."""
+    """Validate sources, collect records, ingest into jobs_raw then jobs."""
     started = datetime.now(tz=UTC)
     since = started.date().isoformat()
     capped = max(1, min(int(max_results), 200))
@@ -72,45 +77,44 @@ def collect_and_ingest(
             max_results=capped,
         )
 
-    kinds = {spec.kind for spec in specs}
-    unsupported = kinds - {"platform"}
-    if unsupported:
-        msg = (
-            "No collector wired for source kind(s): "
-            + ", ".join(sorted(unsupported))
-            + ". V0 only runs mcp-jobs platforms."
-        )
-        return CollectOutcome(
-            status="failed", since=since, message=msg, errors=[msg], max_results=capped
-        )
-
     if filter_settings is not None:
         save_filter_settings(repo, filter_settings)
 
-    try:
-        payload = run_mcp_jobs_search(
+    records: list[CollectorRecord] = []
+    source_results: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    mcp_specs = [s for s in specs if s.integration == "mcp_jobs"]
+    other_specs = [s for s in specs if s.integration != "mcp_jobs"]
+
+    if mcp_specs:
+        _run_mcp_jobs(
+            mcp_specs,
             keyword=keyword,
-            city=location,
-            collector_ids=[spec.collector_id for spec in specs],
-            max_jobs=capped,
-        )
-    except McpJobsCollectError as exc:
-        return CollectOutcome(
-            status="failed",
-            since=since,
-            message=str(exc),
-            errors=[str(exc)],
-            max_results=capped,
+            location=location,
+            capped=capped,
+            records=records,
+            source_results=source_results,
+            errors=errors,
         )
 
-    source_results = _source_results(payload)
-    records = parse_ingest_payload(payload)
+    for spec in other_specs:
+        _run_adapter(
+            spec,
+            keyword=keyword,
+            location=location,
+            capped=capped,
+            records=records,
+            source_results=source_results,
+            errors=errors,
+        )
+
     ingest = ingest_records(
         repo, records, run_id=run_id or f"collect-{started.strftime('%Y%m%dT%H%M%SZ')}"
     )
     reapply_filters(repo)
 
-    errors = list(ingest.errors)
+    errors.extend(err for err in ingest.errors if err not in errors)
     any_ok = bool(source_results) and any(bool(s.get("succeeded")) for s in source_results)
     all_ok = bool(source_results) and all(bool(s.get("succeeded")) for s in source_results)
     if not source_results:
@@ -129,13 +133,6 @@ def collect_and_ingest(
         status = "completed"
         message = "Collection completed"
 
-    for src in source_results:
-        if src.get("succeeded"):
-            continue
-        extra = _source_error_summary([src])
-        if extra and extra not in errors:
-            errors.append(extra)
-
     return CollectOutcome(
         status=status,
         jobs_created=ingest.jobs_created,
@@ -151,6 +148,70 @@ def collect_and_ingest(
     )
 
 
+def _run_mcp_jobs(
+    specs: list[CollectSource],
+    *,
+    keyword: str,
+    location: str,
+    capped: int,
+    records: list[CollectorRecord],
+    source_results: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    for spec in specs:
+        try:
+            payload = run_mcp_jobs_search(
+                keyword=keyword,
+                city=location,
+                collector_ids=[spec.collector_id],
+                max_jobs=capped,
+            )
+        except McpJobsCollectError as exc:
+            logger.warning("mcp-jobs collect failed for {}: {}", spec.id, exc)
+            errors.append(str(exc))
+            source_results.append(
+                {"name": spec.id, "succeeded": False, "jobCount": 0, "errors": [str(exc)]}
+            )
+            continue
+
+        source_results.extend(_source_results(payload))
+        records.extend(parse_ingest_payload(payload))
+        for extra in _failed_source_errors(_source_results(payload)):
+            if extra not in errors:
+                errors.append(extra)
+
+
+def _run_adapter(
+    spec: CollectSource,
+    *,
+    keyword: str,
+    location: str,
+    capped: int,
+    records: list[CollectorRecord],
+    source_results: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    try:
+        found = collect_adapter_records(
+            spec, keywords=keyword, location=location, max_results=capped
+        )
+    except (AdapterError, ValueError) as exc:
+        logger.warning("adapter {} failed: {}", spec.id, exc)
+        msg = str(exc)
+        errors.append(msg)
+        source_results.append({"name": spec.id, "succeeded": False, "jobCount": 0, "errors": [msg]})
+        return
+    except Exception as exc:
+        logger.warning("adapter {} failed: {}", spec.id, exc)
+        msg = f"{spec.id}: {exc}"
+        errors.append(msg)
+        source_results.append({"name": spec.id, "succeeded": False, "jobCount": 0, "errors": [msg]})
+        return
+
+    records.extend(found)
+    source_results.append({"name": spec.id, "succeeded": True, "jobCount": len(found)})
+
+
 def _source_results(payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw = payload.get("sources")
     if not isinstance(raw, list):
@@ -160,6 +221,11 @@ def _source_results(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             out.append(item)
     return out
+
+
+def _failed_source_errors(sources: list[dict[str, Any]]) -> list[str]:
+    extra = _source_error_summary(sources)
+    return [extra] if extra else []
 
 
 def _source_error_summary(sources: list[dict[str, Any]]) -> str:

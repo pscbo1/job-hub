@@ -100,10 +100,21 @@ def test_collect_partial_when_one_source_fails(
         ],
     }
 
-    monkeypatch.setattr(
-        "job_sentinel.ingestion.collect.run_mcp_jobs_search",
-        lambda **kwargs: payload,
-    )
+    def fake_run(**kwargs: Any) -> dict[str, Any]:
+        cid = kwargs["collector_ids"][0]
+        if cid == "zhaopin":
+            return {
+                "rawJobs": payload["rawJobs"],
+                "sources": [{"name": "zhaopin", "succeeded": True, "jobCount": 1}],
+            }
+        return {
+            "rawJobs": [],
+            "sources": [
+                {"name": "liepin", "succeeded": False, "jobCount": 0, "errors": ["timeout"]}
+            ],
+        }
+
+    monkeypatch.setattr("job_sentinel.ingestion.collect.run_mcp_jobs_search", fake_run)
     repo = JobRepository(tmp_path / "jobs.db")
     try:
         outcome = collect_and_ingest(
@@ -113,6 +124,34 @@ def test_collect_partial_when_one_source_fails(
         assert outcome.jobs_created == 1
     finally:
         repo.close()
+
+
+def test_max_results_is_per_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        name = kwargs["collector_ids"][0]
+        return {
+            "rawJobs": [],
+            "sources": [{"name": name, "succeeded": True, "jobCount": 0}],
+        }
+
+    monkeypatch.setattr("job_sentinel.ingestion.collect.run_mcp_jobs_search", fake_run)
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        collect_and_ingest(
+            repo,
+            keywords="用户研究",
+            location="北京",
+            source_ids=["zhaopin", "liepin", "boss"],
+            max_results=40,
+        )
+    finally:
+        repo.close()
+
+    assert [c["collector_ids"] for c in calls] == [["zhaopin"], ["liepin"], ["boss"]]
+    assert all(c["max_jobs"] == 40 for c in calls)
 
 
 def test_collect_failed_when_runner_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,6 +189,8 @@ def test_collect_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert listed.status_code == 200
     ids = {s["id"] for s in listed.json()["sources"]}
     assert {"zhaopin", "liepin", "boss"} <= ids
+    assert "dimagi" in ids
+    assert "linkedin" not in ids
 
     resp = client.post(
         "/api/collect/jobs",
@@ -329,3 +370,90 @@ def test_collect_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "created=1" in result.output
+
+
+def test_collect_adapter_skips_mcp_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from job_sentinel.ingestion.contract import CollectorRecord
+
+    def boom(**kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("mcp-jobs should not run for ATS-only collect")
+
+    monkeypatch.setattr("job_sentinel.ingestion.collect.run_mcp_jobs_search", boom)
+
+    rec = CollectorRecord(
+        channel_key="dimagi",
+        market="GLOBAL",
+        source_job_id="8141380",
+        source_url="https://job-boards.greenhouse.io/dimagi/jobs/8141380",
+        title="Software Engineer",
+        company="Dimagi",
+        location="Cambridge",
+        description="Build CommCare.",
+    )
+    monkeypatch.setattr(
+        "job_sentinel.ingestion.collect.collect_adapter_records",
+        lambda spec, **kwargs: [rec],
+    )
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        first = collect_and_ingest(
+            repo,
+            keywords="engineer",
+            location="",
+            source_ids=["dimagi"],
+            filter_settings=None,
+        )
+        assert first.status == "completed"
+        assert first.raw_inserted == 1
+        assert first.jobs_created == 1
+        job = repo.get_job_by_source_key("dimagi", "8141380")
+        assert job is not None
+        assert job.job_url.endswith("/8141380")
+        discovered = job.discovered_at
+
+        second = collect_and_ingest(repo, keywords="engineer", location="", source_ids=["dimagi"])
+        assert second.jobs_created == 0
+        assert second.jobs_updated == 1
+        again = repo.get_hub_job(job.id)
+        assert again is not None
+        assert again.discovered_at == discovered
+    finally:
+        repo.close()
+
+
+def test_collect_adapter_respects_excluded_company(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from job_sentinel.ingestion.contract import CollectorRecord
+    from job_sentinel.ingestion.filters import FILTER_STATE_EXCLUDED, FilterSettings
+
+    rec = CollectorRecord(
+        channel_key="dimagi",
+        market="GLOBAL",
+        source_job_id="1",
+        source_url="https://job-boards.greenhouse.io/dimagi/jobs/1",
+        title="Engineer",
+        company="Dimagi",
+        location="Remote",
+    )
+    monkeypatch.setattr(
+        "job_sentinel.ingestion.collect.collect_adapter_records",
+        lambda spec, **kwargs: [rec],
+    )
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        outcome = collect_and_ingest(
+            repo,
+            keywords="engineer",
+            location="",
+            source_ids=["dimagi"],
+            filter_settings=FilterSettings(excluded_companies=["Dimagi"]),
+        )
+        assert outcome.excluded == 1
+        job = repo.get_job_by_source_key("dimagi", "1")
+        assert job is not None
+        stored = repo.get_hub_job(job.id)
+        assert stored is not None
+        assert stored.filter_state == FILTER_STATE_EXCLUDED
+    finally:
+        repo.close()

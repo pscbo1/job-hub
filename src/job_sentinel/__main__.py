@@ -234,11 +234,11 @@ def collect(
         "zhaopin,liepin",
         "--sources",
         "-s",
-        help="Comma-separated source ids: zhaopin, liepin, boss",
+        help="Comma-separated source ids (zhaopin, liepin, boss, dimagi, …)",
     ),
     max_results: int = typer.Option(100, "--max-results", "-n", min=1, max=200),
 ) -> None:
-    """Collect from mcp-jobs into jobs_raw then jobs (same path as the Search page)."""
+    """Collect from configured sources into jobs_raw then jobs (same path as Search)."""
     from job_sentinel.db.repository import JobRepository
     from job_sentinel.ingestion.collect import collect_and_ingest
 

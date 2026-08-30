@@ -1,8 +1,7 @@
 """Collectable source registry.
 
-V0 lists CN platforms that mcp-jobs already implements. Later sources
-(company career pages, vertical channels) register here with a ``kind``;
-Job Pool and the ingest pipeline stay unchanged.
+Each source declares how it is collected. Search lists only runnable sources.
+Job Pool and the ingest pipeline stay unchanged — adapters emit CollectorRecord.
 """
 
 from __future__ import annotations
@@ -13,6 +12,13 @@ from pydantic import BaseModel, Field, model_validator
 
 CollectKind = Literal["platform", "career_page", "vertical"]
 SourceGroup = Literal["platform", "vertical", "company_careers"]
+IntegrationMethod = Literal[
+    "mcp_jobs",
+    "ats_board",
+    "http_json",
+    "public_html",
+    "ssr_json",
+]
 
 _KIND_TO_SOURCE_GROUP: dict[CollectKind, SourceGroup] = {
     "platform": "platform",
@@ -30,10 +36,14 @@ class CollectSource(BaseModel):
     collector_id: str = Field(
         description="Id passed to the collector (mcp-jobs provider name or alias)."
     )
-    integration: Literal["mcp_jobs"] = "mcp_jobs"
+    integration: IntegrationMethod = "mcp_jobs"
+    market: str = "CN"
+    runnable: bool = True
     notes: str = ""
     enabled: bool = True
-    runnable: bool = True
+    ats: str | None = None
+    slug: str | None = None
+    company: str | None = None
     source_group: SourceGroup | None = Field(
         default=None,
         description="Collect Jobs UI group. Defaults from kind when omitted.",
@@ -51,12 +61,14 @@ class CollectSource(BaseModel):
 
 
 # Stable V0 ids. New sources append here; do not reuse ids.
+# FAO Careers (Taleo) and LinkedIn Jobs are intentionally omitted — not runnable.
 _SOURCES: tuple[CollectSource, ...] = (
     CollectSource(
         id="zhaopin",
         label="Zhaopin",
         kind="platform",
         collector_id="zhaopin",
+        integration="mcp_jobs",
         notes="智联招聘",
     ),
     CollectSource(
@@ -64,6 +76,7 @@ _SOURCES: tuple[CollectSource, ...] = (
         label="Liepin",
         kind="platform",
         collector_id="liepin",
+        integration="mcp_jobs",
         notes="猎聘",
     ),
     CollectSource(
@@ -71,7 +84,60 @@ _SOURCES: tuple[CollectSource, ...] = (
         label="Boss",
         kind="platform",
         collector_id="boss",
+        integration="mcp_jobs",
         notes="BOSS直聘 — uses the existing local Chrome profile / login",
+    ),
+    CollectSource(
+        id="impactpool",
+        label="Impactpool",
+        kind="vertical",
+        collector_id="impactpool",
+        integration="public_html",
+        market="GLOBAL",
+        notes="Impact-sector board — latest public listings, then keyword filter",
+    ),
+    CollectSource(
+        id="dimagi",
+        label="Dimagi Careers",
+        kind="career_page",
+        collector_id="dimagi",
+        integration="ats_board",
+        market="GLOBAL",
+        ats="greenhouse",
+        slug="dimagi",
+        company="Dimagi",
+        notes="Greenhouse public board API",
+    ),
+    CollectSource(
+        id="automattic",
+        label="Automattic Careers",
+        kind="career_page",
+        collector_id="automattic",
+        integration="ats_board",
+        market="GLOBAL",
+        ats="greenhouse",
+        slug="automatticcareers",
+        company="Automattic",
+        notes="Greenhouse public board API",
+    ),
+    CollectSource(
+        id="tencent",
+        label="Tencent Careers",
+        kind="career_page",
+        collector_id="tencent",
+        integration="http_json",
+        market="CN",
+        company="Tencent",
+        notes="careers.tencent.com public Query API — try SSV / 公益 / Tech for Good",
+    ),
+    CollectSource(
+        id="hiring_cafe",
+        label="HiringCafe",
+        kind="platform",
+        collector_id="hiring_cafe",
+        integration="ssr_json",
+        market="GLOBAL",
+        notes="Public SSR job island on hiring.cafe — keyword filter is client-side",
     ),
 )
 
