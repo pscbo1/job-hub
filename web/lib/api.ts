@@ -9,6 +9,7 @@
 
 import * as demo from "@/lib/demo";
 import { parseMarketId, sourceInMarket } from "@/lib/markets";
+import type { CommonSearchFilters, SearchPreset } from "@/lib/searchCapabilities";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -1054,6 +1055,7 @@ export interface CollectSource {
   runnable?: boolean;
   notes: string;
   enabled: boolean;
+  search_fields?: string[];
 }
 
 export type CollectStatus = "completed" | "failed" | "partial";
@@ -1157,6 +1159,7 @@ export async function collectJobs(body: {
   custom_keywords: string;
   excluded_companies: string;
   market?: string;
+  source_overrides?: Record<string, Record<string, unknown>>;
 }): Promise<CollectOutcome | null> {
   if (demo.DEMO) {
     return {
@@ -1183,6 +1186,125 @@ export async function collectJobs(body: {
     return (await res.json()) as CollectOutcome;
   } catch {
     return null;
+  }
+}
+
+const DEMO_PRESETS_KEY = "job-hub.search.presets.demo";
+
+function readDemoPresets(): SearchPreset[] {
+  try {
+    const raw = localStorage.getItem(DEMO_PRESETS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as SearchPreset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDemoPresets(rows: SearchPreset[]): void {
+  try {
+    localStorage.setItem(DEMO_PRESETS_KEY, JSON.stringify(rows));
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function listSearchPresets(market: string): Promise<SearchPreset[] | null> {
+  if (demo.DEMO) {
+    return readDemoPresets().filter((row) => row.market === market);
+  }
+  const q = `?market=${encodeURIComponent(market)}`;
+  const data = await getJSON<{ presets: SearchPreset[] } | null>(`/api/search/presets${q}`, null);
+  return data?.presets ?? null;
+}
+
+export async function createSearchPreset(body: {
+  name: string;
+  market: string;
+  sources: string[];
+  common_filters: CommonSearchFilters;
+  source_overrides?: Record<string, Record<string, unknown>>;
+}): Promise<SearchPreset | null> {
+  if (demo.DEMO) {
+    const now = new Date().toISOString();
+    const row: SearchPreset = {
+      id: crypto.randomUUID(),
+      name: body.name.trim(),
+      market: body.market,
+      sources: body.sources,
+      common_filters: body.common_filters,
+      source_overrides: body.source_overrides ?? {},
+      created_at: now,
+      updated_at: now,
+    };
+    writeDemoPresets([...readDemoPresets(), row]);
+    return row;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/search/presets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as SearchPreset;
+  } catch {
+    return null;
+  }
+}
+
+export async function updateSearchPreset(
+  presetId: string,
+  body: {
+    name?: string;
+    sources?: string[];
+    common_filters?: CommonSearchFilters;
+    source_overrides?: Record<string, Record<string, unknown>>;
+  },
+): Promise<SearchPreset | null> {
+  if (demo.DEMO) {
+    const rows = readDemoPresets();
+    const idx = rows.findIndex((row) => row.id === presetId);
+    if (idx < 0) return null;
+    const next = {
+      ...rows[idx],
+      ...body,
+      updated_at: new Date().toISOString(),
+    };
+    rows[idx] = next;
+    writeDemoPresets(rows);
+    return next;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/search/presets/${encodeURIComponent(presetId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as SearchPreset;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteSearchPreset(presetId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    const rows = readDemoPresets();
+    const next = rows.filter((row) => row.id !== presetId);
+    if (next.length === rows.length) return false;
+    writeDemoPresets(next);
+    return true;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/search/presets/${encodeURIComponent(presetId)}`, {
+      method: "DELETE",
+      headers: { ...authHeaders() },
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

@@ -36,6 +36,12 @@ def test_collect_sources_api_includes_source_group(tmp_path: Path) -> None:
     for item in sources:
         assert item["source_group"] in {"platform", "vertical", "company_careers"}
         assert item.get("runnable") is not False
+        assert item.get("search_fields")
+    by_id = {s["id"]: s for s in sources}
+    assert "remote" in by_id["linkedin"]["search_fields"]
+    assert "date_posted_days" in by_id["linkedin"]["search_fields"]
+    if "hiring_cafe" in by_id:
+        assert "remote" not in by_id["hiring_cafe"]["search_fields"]
     groups = {s["id"]: s["source_group"] for s in sources}
     assert groups["zhaopin"] == "platform"
     assert groups["linkedin"] == "platform"

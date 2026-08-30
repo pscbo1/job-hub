@@ -139,6 +139,7 @@ class CollectJobsRequest(BaseModel):
     custom_keywords: str = ""
     excluded_companies: str = ""
     market: str = ""
+    source_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @field_validator("keywords", "location", "custom_keywords", "excluded_companies", mode="before")
     @classmethod
@@ -152,6 +153,13 @@ class CollectJobsRequest(BaseModel):
             return v
         return [str(item).strip() for item in v if str(item).strip()]
 
+    @field_validator("source_overrides", mode="before")
+    @classmethod
+    def _clean_overrides(cls, v: object) -> object:
+        from job_sentinel.ingestion.search_capabilities import sanitize_overrides
+
+        return sanitize_overrides(v)
+
 
 class FilterSettingsRequest(BaseModel):
     exclude_outsourcing: bool = True
@@ -160,6 +168,21 @@ class FilterSettingsRequest(BaseModel):
     custom_keywords: str | list[str] = ""
     excluded_companies: str | list[str] = ""
     apply: bool = True
+
+
+class SearchPresetWriteRequest(BaseModel):
+    name: str
+    market: str
+    sources: list[str] = Field(min_length=1)
+    common_filters: dict[str, Any] = Field(default_factory=dict)
+    source_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class SearchPresetPatchRequest(BaseModel):
+    name: str | None = None
+    sources: list[str] | None = None
+    common_filters: dict[str, Any] | None = None
+    source_overrides: dict[str, dict[str, Any]] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -621,6 +644,7 @@ def create_app(
                 remote=req.remote,
                 date_posted_days=req.date_posted_days,
                 market=req.market or None,
+                source_overrides=req.source_overrides,
                 filter_settings=FilterSettings(
                     exclude_outsourcing=req.exclude_outsourcing,
                     exclude_part_time=req.exclude_part_time,
@@ -632,6 +656,73 @@ def create_app(
         finally:
             repo.close()
         return outcome.model_dump()
+
+    @app.get("/api/search/presets")
+    def list_search_presets(market: str | None = None) -> dict[str, Any]:
+        """Saved Search configs for one market. Does not include results."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.search_presets import load_presets
+
+        mid = _parse_market_param(market)
+        repo = JobRepository(db_path)
+        try:
+            try:
+                rows = load_presets(repo, market=mid)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            repo.close()
+        return {"presets": [row.model_dump() for row in rows]}
+
+    @app.post("/api/search/presets")
+    def create_search_preset(req: SearchPresetWriteRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.search_presets import SearchPresetWrite, create_preset
+
+        repo = JobRepository(db_path)
+        try:
+            try:
+                preset = create_preset(repo, SearchPresetWrite.model_validate(req.model_dump()))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            repo.close()
+        return preset.model_dump()
+
+    @app.patch("/api/search/presets/{preset_id}")
+    def patch_search_preset(preset_id: str, req: SearchPresetPatchRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.search_presets import SearchPresetPatch, update_preset
+
+        repo = JobRepository(db_path)
+        try:
+            try:
+                preset = update_preset(
+                    repo,
+                    preset_id,
+                    SearchPresetPatch.model_validate(req.model_dump(exclude_unset=True)),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            repo.close()
+        if preset is None:
+            raise HTTPException(status_code=404, detail="Saved search not found")
+        return preset.model_dump()
+
+    @app.delete("/api/search/presets/{preset_id}")
+    def delete_search_preset(preset_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.search_presets import delete_preset
+
+        repo = JobRepository(db_path)
+        try:
+            deleted = delete_preset(repo, preset_id)
+        finally:
+            repo.close()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Saved search not found")
+        return {"ok": True}
 
     @app.get("/api/filters")
     def get_filter_settings() -> dict[str, Any]:

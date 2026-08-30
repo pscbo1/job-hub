@@ -458,3 +458,55 @@ def test_collect_adapter_respects_excluded_company(
         assert stored.filter_state == FILTER_STATE_EXCLUDED
     finally:
         repo.close()
+
+
+def test_collect_passes_linkedin_filters_only_to_linkedin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from job_sentinel.ingestion.contract import CollectorRecord
+
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    def boom_mcp(**kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("mcp-jobs should not run")
+
+    def fake_adapter(spec: Any, **kwargs: Any) -> list[CollectorRecord]:
+        seen.append((spec.id, kwargs))
+        return [
+            CollectorRecord(
+                channel_key=spec.id,
+                market="en",
+                source_job_id=spec.id,
+                source_url=f"https://example.com/{spec.id}",
+                title="Role",
+                company="Co",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "job_sentinel.ingestion.collect.run_mcp_jobs_search",
+        boom_mcp,
+    )
+    monkeypatch.setattr("job_sentinel.ingestion.collect.collect_adapter_records", fake_adapter)
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        collect_and_ingest(
+            repo,
+            keywords="ux",
+            location="United States",
+            source_ids=["linkedin", "hiring_cafe"],
+            remote=True,
+            date_posted_days=7,
+            source_overrides={
+                "linkedin": {"remote": True},
+                "hiring_cafe": {"remote": True, "gone": "x"},
+            },
+        )
+    finally:
+        repo.close()
+    by_id = dict(seen)
+    assert by_id["linkedin"]["remote"] is True
+    assert by_id["linkedin"]["date_posted_days"] == 7
+    assert "remote" not in by_id["hiring_cafe"]
+    assert "date_posted_days" not in by_id["hiring_cafe"]
+    assert "gone" not in by_id["hiring_cafe"]

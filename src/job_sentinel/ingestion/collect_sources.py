@@ -15,6 +15,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from job_sentinel.ingestion.ats_board_client import resolve_board
+from job_sentinel.ingestion.search_capabilities import ordered_search_fields
 from job_sentinel.markets import (
     SourceMarket,
     parse_market_id,
@@ -67,6 +68,10 @@ class CollectSource(BaseModel):
         default=None,
         description="Reserved for a later custom grouping layer; unused in V0.",
     )
+    search_fields: list[str] = Field(
+        default_factory=list,
+        description="Search filters this adapter actually consumes.",
+    )
 
     @field_validator("market", mode="before")
     @classmethod
@@ -79,6 +84,8 @@ class CollectSource(BaseModel):
     def _default_source_group(self) -> CollectSource:
         if self.source_group is None:
             self.source_group = _KIND_TO_SOURCE_GROUP[self.kind]
+        if not self.search_fields:
+            self.search_fields = ordered_search_fields(self.id)
         return self
 
 

@@ -19,6 +19,7 @@ from job_sentinel.ingestion.filters import (
 from job_sentinel.ingestion.mcp_jobs import parse_ingest_payload
 from job_sentinel.ingestion.mcp_jobs_runner import McpJobsCollectError, run_mcp_jobs_search
 from job_sentinel.ingestion.pipeline import ingest_records
+from job_sentinel.ingestion.search_capabilities import resolve_source_query, sanitize_overrides
 
 if TYPE_CHECKING:
     from job_sentinel.db.repository import JobRepository
@@ -54,6 +55,7 @@ def collect_and_ingest(
     remote: bool | None = None,
     date_posted_days: int | None = None,
     market: str | None = None,
+    source_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> CollectOutcome:
     """Validate sources, collect records, ingest into jobs_raw then jobs."""
     started = datetime.now(tz=UTC)
@@ -71,6 +73,7 @@ def collect_and_ingest(
         )
 
     keyword = keywords.strip()
+    overrides = sanitize_overrides(source_overrides)
     if not keyword:
         return CollectOutcome(
             status="failed",
@@ -99,6 +102,9 @@ def collect_and_ingest(
             records=records,
             source_results=source_results,
             errors=errors,
+            remote=remote,
+            date_posted_days=date_posted_days,
+            source_overrides=overrides,
         )
 
     for spec in other_specs:
@@ -112,6 +118,7 @@ def collect_and_ingest(
             errors=errors,
             remote=remote,
             date_posted_days=date_posted_days,
+            source_overrides=overrides,
         )
 
     ingest = ingest_records(
@@ -162,14 +169,26 @@ def _run_mcp_jobs(
     records: list[CollectorRecord],
     source_results: list[dict[str, Any]],
     errors: list[str],
+    remote: bool | None = None,
+    date_posted_days: int | None = None,
+    source_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     for spec in specs:
+        params, _dropped = resolve_source_query(
+            spec.id,
+            keywords=keyword,
+            location=location,
+            max_results=capped,
+            remote=remote,
+            date_posted_days=date_posted_days,
+            source_overrides=source_overrides,
+        )
         try:
             payload = run_mcp_jobs_search(
-                keyword=keyword,
-                city=location,
+                keyword=str(params.get("keywords") or keyword),
+                city=str(params.get("location") or ""),
                 collector_ids=[spec.collector_id],
-                max_jobs=capped,
+                max_jobs=int(params.get("max_results") or capped),
             )
         except McpJobsCollectError as exc:
             logger.warning("mcp-jobs collect failed for {}: {}", spec.id, exc)
@@ -197,16 +216,28 @@ def _run_adapter(
     errors: list[str],
     remote: bool | None = None,
     date_posted_days: int | None = None,
+    source_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> None:
+    params, _dropped = resolve_source_query(
+        spec.id,
+        keywords=keyword,
+        location=location,
+        max_results=capped,
+        remote=remote,
+        date_posted_days=date_posted_days,
+        source_overrides=source_overrides,
+    )
+    adapter_kwargs: dict[str, Any] = {
+        "keywords": str(params.get("keywords") or keyword),
+        "location": str(params.get("location") or ""),
+        "max_results": int(params.get("max_results") or capped),
+    }
+    if "remote" in params:
+        adapter_kwargs["remote"] = params["remote"]
+    if "date_posted_days" in params:
+        adapter_kwargs["date_posted_days"] = params["date_posted_days"]
     try:
-        found = collect_adapter_records(
-            spec,
-            keywords=keyword,
-            location=location,
-            max_results=capped,
-            remote=remote,
-            date_posted_days=date_posted_days,
-        )
+        found = collect_adapter_records(spec, **adapter_kwargs)
     except (AdapterError, ValueError) as exc:
         logger.warning("adapter {} failed: {}", spec.id, exc)
         msg = str(exc)

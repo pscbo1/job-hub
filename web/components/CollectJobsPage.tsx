@@ -7,15 +7,20 @@ import { CollectSourceGroups } from "@/components/CollectSourceGroups";
 import { CollectToast } from "@/components/CollectToast";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
 import { MarketSwitch } from "@/components/MarketSwitch";
+import { SearchPresetsBar } from "@/components/SearchPresetsBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   collectJobs,
+  createSearchPreset,
+  deleteSearchPreset,
   getCollectSources,
   getFilterSettings,
   getJobs,
+  listSearchPresets,
   saveFilterSettings,
+  updateSearchPreset,
   type CollectOutcome,
   type CollectSource,
 } from "@/lib/api";
@@ -36,7 +41,7 @@ import {
   persistableSourceIds,
 } from "@/lib/collectSourceGroups";
 import { jobsPoolHref } from "@/lib/discoveredRange";
-import { marketHasFilter, sourceInMarket, type MarketId } from "@/lib/markets";
+import { sourceInMarket, type MarketId } from "@/lib/markets";
 import {
   defaultCollectSources,
   readCollectQueryPrefs,
@@ -44,6 +49,15 @@ import {
   writeCollectQueryPrefs,
   writeCollectSourceIds,
 } from "@/lib/marketPrefs";
+import {
+  emptyCommonFilters,
+  fieldIsPartial,
+  presetLoadWarnings,
+  snapshotEquals,
+  sourcesForField,
+  type CommonSearchFilters,
+  type SearchPreset,
+} from "@/lib/searchCapabilities";
 import { cn } from "@/lib/utils";
 
 const MAX_STORAGE_KEY = "job-hub.collect.maxResults";
@@ -75,6 +89,10 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
   const [excludeInternship, setExcludeInternship] = useState(true);
   const [customKeywords, setCustomKeywords] = useState("");
   const [excludedCompanies, setExcludedCompanies] = useState("");
+  const [presets, setPresets] = useState<SearchPreset[]>([]);
+  const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [sourceOverrides, setSourceOverrides] = useState<Record<string, Record<string, unknown>>>({});
+  const [presetWarnings, setPresetWarnings] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [refiltering, setRefiltering] = useState(false);
   const [outcome, setOutcome] = useState<CollectOutcome | null>(null);
@@ -82,7 +100,26 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
   const [toast, setToast] = useState<CollectToastContent | null>(null);
   const [message, setMessage] = useState("");
   const keywordsRef = useRef<HTMLInputElement>(null);
-  const showRemotePosted = marketHasFilter(market, "remote") || marketHasFilter(market, "posted");
+
+  function currentCommon(): CommonSearchFilters {
+    const posted = Number(datePostedDays);
+    return {
+      keywords: keywords.trim(),
+      location: location.trim(),
+      remote: remoteOnly ? true : null,
+      date_posted_days: Number.isFinite(posted) && posted > 0 ? posted : null,
+      max_results: maxResults,
+    };
+  }
+
+  function scopedOverrides(ids: Iterable<string>): Record<string, Record<string, unknown>> {
+    const allowed = new Set(ids);
+    const next: Record<string, Record<string, unknown>> = {};
+    for (const [id, fields] of Object.entries(sourceOverrides)) {
+      if (allowed.has(id) && fields && Object.keys(fields).length > 0) next[id] = fields;
+    }
+    return next;
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -107,8 +144,11 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
 
   useEffect(() => {
     setLoaded(false);
-    Promise.all([getCollectSources(market), getFilterSettings()])
-      .then(([sourcesResp, filters]) => {
+    setActivePresetId(null);
+    setSourceOverrides({});
+    setPresetWarnings([]);
+    Promise.all([getCollectSources(market), getFilterSettings(), listSearchPresets(market)])
+      .then(([sourcesResp, filters, saved]) => {
         if (sourcesResp === null) {
           setApiDown(true);
           return;
@@ -125,6 +165,7 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
         setLocation(queryPrefs.location);
         setRemoteOnly(queryPrefs.remote);
         setDatePostedDays(queryPrefs.postedDays);
+        setPresets(saved ?? []);
         if (filters) {
           setExcludeOutsourcing(filters.exclude_outsourcing);
           setExcludePartTime(filters.exclude_part_time);
@@ -154,6 +195,87 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
     });
   }
 
+  function applyPresetToForm(preset: SearchPreset, catalogList: CollectSource[]) {
+    const catalogIds = new Set(catalogList.map((s) => s.id));
+    const nextSources = new Set(preset.sources.filter((id) => catalogIds.has(id)));
+    const filters = { ...emptyCommonFilters(), ...preset.common_filters };
+    setKeywords(filters.keywords);
+    setLocation(filters.location);
+    setRemoteOnly(filters.remote === true);
+    setDatePostedDays(filters.date_posted_days ? String(filters.date_posted_days) : "");
+    setMaxResults(filters.max_results);
+    setSelected(nextSources);
+    persistSources(nextSources);
+    persistQuery({
+      location: filters.location,
+      remote: filters.remote === true,
+      postedDays: filters.date_posted_days ? String(filters.date_posted_days) : "",
+    });
+    try {
+      localStorage.setItem(MAX_STORAGE_KEY, String(filters.max_results));
+    } catch {
+      /* ignore */
+    }
+    setSourceOverrides(preset.source_overrides ?? {});
+    setActivePresetId(preset.id);
+    setPresetWarnings(presetLoadWarnings(preset, catalogList));
+  }
+
+  async function handleSavePreset(name: string) {
+    const row = await createSearchPreset({
+      name,
+      market,
+      sources: [...selected],
+      common_filters: currentCommon(),
+      source_overrides: scopedOverrides(selected),
+    });
+    if (!row) {
+      setMessage("Couldn't save this search. Is the API running?");
+      return;
+    }
+    setPresets((rows) => [...rows, row]);
+    setActivePresetId(row.id);
+    setPresetWarnings([]);
+  }
+
+  async function handleUpdatePreset() {
+    if (!activePresetId) return;
+    const row = await updateSearchPreset(activePresetId, {
+      sources: [...selected],
+      common_filters: currentCommon(),
+      source_overrides: scopedOverrides(selected),
+    });
+    if (!row) {
+      setMessage("Couldn't update this saved search.");
+      return;
+    }
+    setPresets((rows) => rows.map((p) => (p.id === row.id ? row : p)));
+    setSourceOverrides(row.source_overrides ?? {});
+    setPresetWarnings([]);
+  }
+
+  async function handleRenamePreset(preset: SearchPreset, name: string) {
+    const row = await updateSearchPreset(preset.id, { name });
+    if (!row) {
+      setMessage("Couldn't rename this saved search.");
+      return;
+    }
+    setPresets((rows) => rows.map((p) => (p.id === row.id ? row : p)));
+  }
+
+  async function handleDeletePreset(preset: SearchPreset) {
+    const ok = await deleteSearchPreset(preset.id);
+    if (!ok) {
+      setMessage("Couldn't delete this saved search.");
+      return;
+    }
+    setPresets((rows) => rows.filter((p) => p.id !== preset.id));
+    if (activePresetId === preset.id) {
+      setActivePresetId(null);
+      setPresetWarnings([]);
+    }
+  }
+
   function changeMaxResults(value: string) {
     const n = Number(value);
     if (!Number.isFinite(n)) return;
@@ -179,13 +301,14 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
       location: location.trim(),
       sources: [...selected],
       max_results: maxResults,
-      ...collectQueryFilters(showRemotePosted && remoteOnly, showRemotePosted ? datePostedDays : ""),
+      ...collectQueryFilters(remoteOnly, datePostedDays),
       exclude_outsourcing: excludeOutsourcing,
       exclude_part_time: excludePartTime,
       exclude_internship: excludeInternship,
       custom_keywords: customKeywords,
       excluded_companies: excludedCompanies,
       market,
+      source_overrides: scopedOverrides(selected),
     });
     setRunning(false);
     const labelsById = Object.fromEntries(catalog.map((s) => [s.id, s.label]));
@@ -259,6 +382,27 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
   }
 
   const canRun = Boolean(keywords.trim()) && selected.size > 0 && !running;
+  const remoteSources = sourcesForField("remote", selected, catalog);
+  const postedSources = sourcesForField("date_posted_days", selected, catalog);
+  const showRemote = remoteSources.length > 0;
+  const showPosted = postedSources.length > 0;
+  const remotePartial = fieldIsPartial("remote", selected, catalog);
+  const postedPartial = fieldIsPartial("date_posted_days", selected, catalog);
+  const activePreset = presets.find((p) => p.id === activePresetId) ?? null;
+  const dirty =
+    activePreset != null &&
+    !snapshotEquals(
+      {
+        sources: [...selected],
+        common: currentCommon(),
+        overrides: scopedOverrides(selected),
+      },
+      {
+        sources: activePreset.sources,
+        common: { ...emptyCommonFilters(), ...activePreset.common_filters },
+        overrides: activePreset.source_overrides ?? {},
+      },
+    );
   const poolHref = jobsPoolHref({
     market,
     range: outcome?.since ? "custom" : "7d",
@@ -277,6 +421,20 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
       </header>
 
       <Card className="space-y-4">
+        <SearchPresetsBar
+          presets={presets}
+          activeId={activePresetId}
+          dirty={dirty}
+          canSave={selected.size > 0}
+          onLoad={(preset) => applyPresetToForm(preset, catalog)}
+          onSave={(name) => void handleSavePreset(name)}
+          onUpdate={() => void handleUpdatePreset()}
+          onRename={(preset, name) => void handleRenamePreset(preset, name)}
+          onDelete={(preset) => void handleDeletePreset(preset)}
+        />
+        {presetWarnings.length > 0 && (
+          <p className="text-[11px] text-amber-700">{presetWarnings.join(" · ")}</p>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -308,10 +466,10 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
               persistQuery({ location: e.target.value });
             }}
           />
-          {showRemotePosted && (
+          {(showRemote || showPosted) && (
             <>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-                {marketHasFilter(market, "remote") && (
+                {showRemote && (
                   <label className="flex items-center gap-2 text-ink">
                     <input
                       type="checkbox"
@@ -322,9 +480,14 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
                       }}
                     />
                     Remote
+                    {remotePartial && (
+                      <span className="text-[11px] font-normal text-muted">
+                        ({remoteSources.map((s) => s.label ?? s.id).join(", ")} only)
+                      </span>
+                    )}
                   </label>
                 )}
-                {marketHasFilter(market, "posted") && (
+                {showPosted && (
                   <label className="flex items-center gap-2 text-ink">
                     Posted
                     <select
@@ -340,11 +503,16 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
                       <option value="7">Past week</option>
                       <option value="30">Past month</option>
                     </select>
+                    {postedPartial && (
+                      <span className="text-[11px] font-normal text-muted">
+                        ({postedSources.map((s) => s.label ?? s.id).join(", ")} only)
+                      </span>
+                    )}
                   </label>
                 )}
               </div>
               <p className="text-[11px] text-muted">
-                Remote and posted date are sent to sources that support them (LinkedIn guest search).
+                These filters are sent only to sources that support them.
               </p>
             </>
           )}
