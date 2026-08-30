@@ -9,9 +9,16 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 CollectKind = Literal["platform", "career_page", "vertical"]
+SourceGroup = Literal["platform", "vertical", "company_careers"]
+
+_KIND_TO_SOURCE_GROUP: dict[CollectKind, SourceGroup] = {
+    "platform": "platform",
+    "vertical": "vertical",
+    "career_page": "company_careers",
+}
 
 
 class CollectSource(BaseModel):
@@ -23,8 +30,24 @@ class CollectSource(BaseModel):
     collector_id: str = Field(
         description="Id passed to the collector (mcp-jobs provider name or alias)."
     )
+    integration: Literal["mcp_jobs"] = "mcp_jobs"
     notes: str = ""
     enabled: bool = True
+    runnable: bool = True
+    source_group: SourceGroup | None = Field(
+        default=None,
+        description="Collect Jobs UI group. Defaults from kind when omitted.",
+    )
+    collection_group: str | None = Field(
+        default=None,
+        description="Reserved for a later custom grouping layer; unused in V0.",
+    )
+
+    @model_validator(mode="after")
+    def _default_source_group(self) -> CollectSource:
+        if self.source_group is None:
+            self.source_group = _KIND_TO_SOURCE_GROUP[self.kind]
+        return self
 
 
 # Stable V0 ids. New sources append here; do not reuse ids.
@@ -55,7 +78,7 @@ _SOURCES: tuple[CollectSource, ...] = (
 
 def list_collect_sources(*, enabled_only: bool = True) -> list[CollectSource]:
     if enabled_only:
-        return [s for s in _SOURCES if s.enabled]
+        return [s for s in _SOURCES if s.enabled and s.runnable]
     return list(_SOURCES)
 
 
@@ -68,7 +91,7 @@ def get_collect_source(source_id: str) -> CollectSource | None:
 
 
 def resolve_collect_sources(source_ids: list[str]) -> list[CollectSource]:
-    """Validate ids. Unknown ids raise ValueError (API maps this to 400)."""
+    """Validate ids. Unknown or non-runnable ids raise ValueError (API maps this to 400)."""
     if not source_ids:
         raise ValueError("Select at least one source")
     resolved: list[CollectSource] = []
@@ -79,7 +102,7 @@ def resolve_collect_sources(source_ids: list[str]) -> list[CollectSource]:
         if not key or key in seen:
             continue
         spec = get_collect_source(key)
-        if spec is None or not spec.enabled:
+        if spec is None or not spec.enabled or not spec.runnable:
             unknown.append(raw)
             continue
         seen.add(key)

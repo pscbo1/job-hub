@@ -1003,6 +1003,11 @@ export interface CollectSource {
   label: string;
   kind: "platform" | "career_page" | "vertical";
   collector_id: string;
+  integration?: "mcp_jobs" | "ats_board" | "http_json" | "public_html" | "ssr_json";
+  source_group?: "platform" | "vertical" | "company_careers" | null;
+  collection_group?: string | null;
+  market?: string;
+  runnable?: boolean;
   notes: string;
   enabled: boolean;
 }
@@ -1071,9 +1076,14 @@ export function getCollectSources(): Promise<{ sources: CollectSource[] } | null
   if (demo.DEMO) {
     return Promise.resolve({
       sources: [
-        { id: "zhaopin", label: "Zhaopin", kind: "platform", collector_id: "zhaopin", notes: "", enabled: true },
-        { id: "liepin", label: "Liepin", kind: "platform", collector_id: "liepin", notes: "", enabled: true },
-        { id: "boss", label: "Boss", kind: "platform", collector_id: "boss", notes: "local Chrome login", enabled: true },
+        { id: "zhaopin", label: "Zhaopin", kind: "platform", collector_id: "zhaopin", integration: "mcp_jobs", notes: "", enabled: true },
+        { id: "liepin", label: "Liepin", kind: "platform", collector_id: "liepin", integration: "mcp_jobs", notes: "", enabled: true },
+        { id: "boss", label: "Boss", kind: "platform", collector_id: "boss", integration: "mcp_jobs", notes: "local Chrome login", enabled: true },
+        { id: "impactpool", label: "Impactpool", kind: "vertical", collector_id: "impactpool", integration: "public_html", notes: "", enabled: true },
+        { id: "dimagi", label: "Dimagi Careers", kind: "career_page", collector_id: "dimagi", integration: "ats_board", notes: "", enabled: true },
+        { id: "automattic", label: "Automattic Careers", kind: "career_page", collector_id: "automattic", integration: "ats_board", notes: "", enabled: true },
+        { id: "tencent", label: "Tencent Careers", kind: "career_page", collector_id: "tencent", integration: "http_json", notes: "", enabled: true },
+        { id: "hiring_cafe", label: "HiringCafe", kind: "platform", collector_id: "hiring_cafe", integration: "ssr_json", notes: "", enabled: true },
       ],
     });
   }

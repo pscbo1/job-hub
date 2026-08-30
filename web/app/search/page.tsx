@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
+import { CollectSourceGroups } from "@/components/CollectSourceGroups";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
 import { Button } from "@/components/ui/button";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
@@ -15,6 +16,11 @@ import {
   type CollectOutcome,
   type CollectSource,
 } from "@/lib/api";
+import {
+  initialSourceSelection,
+  isSelectableCollectSource,
+  persistableSourceIds,
+} from "@/lib/collectSourceGroups";
 import { cn } from "@/lib/utils";
 
 const SOURCE_STORAGE_KEY = "job-hub.collect.sources";
@@ -86,12 +92,11 @@ export default function SearchPage() {
           setApiDown(true);
           return;
         }
-        const list = (sourcesResp.sources ?? []).filter((s) => s.enabled);
+        const list = (sourcesResp.sources ?? []).filter(isSelectableCollectSource);
         setCatalog(list);
         const ids = list.map((s) => s.id);
         const remembered = loadJsonList(SOURCE_STORAGE_KEY);
-        const initial = (remembered ?? DEFAULT_SOURCES).filter((id) => ids.includes(id));
-        setSelected(new Set(initial));
+        setSelected(new Set(initialSourceSelection(remembered, ids, DEFAULT_SOURCES)));
         setMaxResults(loadMaxResults());
         if (filters) {
           setExcludeOutsourcing(filters.exclude_outsourcing);
@@ -107,20 +112,16 @@ export default function SearchPage() {
 
   function persistSources(next: Set<string>) {
     try {
-      localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify([...next]));
+      const ids = persistableSourceIds(next, catalog.map((s) => s.id));
+      localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(ids));
     } catch {
       /* ignore quota */
     }
   }
 
-  function toggleSource(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      persistSources(next);
-      return next;
-    });
+  function setSourceSelection(next: Set<string>) {
+    persistSources(next);
+    setSelected(next);
   }
 
   function changeMaxResults(value: string) {
@@ -243,28 +244,14 @@ export default function SearchPage() {
           <div>
             <p className="mb-2 text-sm font-medium text-ink">Sources</p>
             <p className="mb-2 text-[11px] text-muted">
-              Only currently wired collectors are listed. Collection runs only the sources you
-              check.
+              Only runnable integrated collectors are listed. Collection runs only the sources you
+              check. Customize a group to pick individual channels.
             </p>
-            <div className="flex flex-col gap-1.5">
-              {catalog.map((s) => (
-                <label
-                  key={s.id}
-                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-line px-2.5 py-2 text-sm text-ink"
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={selected.has(s.id)}
-                    onChange={() => toggleSource(s.id)}
-                  />
-                  <span>
-                    <span className="font-medium">{s.label}</span>
-                    {s.notes ? <span className="block text-[11px] text-muted">{s.notes}</span> : null}
-                  </span>
-                </label>
-              ))}
-            </div>
+            <CollectSourceGroups
+              catalog={catalog}
+              selected={selected}
+              onChange={setSourceSelection}
+            />
             {selected.size === 0 && (
               <p className="mt-2 text-xs text-amber-600">Select at least one source to collect.</p>
             )}
