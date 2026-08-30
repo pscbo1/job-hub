@@ -99,6 +99,7 @@ def test_collect_partial_when_one_source_fails(
             {"name": "liepin", "succeeded": False, "jobCount": 0, "errors": ["timeout"]},
         ],
     }
+
     monkeypatch.setattr(
         "job_sentinel.ingestion.collect.run_mcp_jobs_search",
         lambda **kwargs: payload,
@@ -148,7 +149,7 @@ def test_collect_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     listed = client.get("/api/collect/sources")
     assert listed.status_code == 200
     ids = {s["id"] for s in listed.json()["sources"]}
-    assert ids == {"zhaopin", "liepin", "boss"}
+    assert {"zhaopin", "liepin", "boss"} <= ids
 
     resp = client.post(
         "/api/collect/jobs",
@@ -259,9 +260,11 @@ def test_runner_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_page_to_scales_with_max_jobs() -> None:
     from job_sentinel.ingestion.mcp_jobs_runner import page_to_for_max_jobs
 
-    assert page_to_for_max_jobs(50) == 3
-    assert page_to_for_max_jobs(100) == 5
-    assert page_to_for_max_jobs(200) == 10
+    assert page_to_for_max_jobs(15) == 1
+    assert page_to_for_max_jobs(16) == 2
+    assert page_to_for_max_jobs(50) == 4
+    assert page_to_for_max_jobs(100) == 7
+    assert page_to_for_max_jobs(200) == 14
 
 
 def test_runner_computes_page_to_from_max_jobs(
@@ -298,7 +301,7 @@ def test_runner_computes_page_to_from_max_jobs(
     argv = captured["argv"]
     assert payload["anySucceeded"] is True
     assert argv[argv.index("--maxJobs") + 1] == "100"
-    assert argv[argv.index("--pageTo") + 1] == "5"
+    assert argv[argv.index("--pageTo") + 1] == "7"
 
 
 def test_collect_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

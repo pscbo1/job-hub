@@ -15,9 +15,13 @@ from job_sentinel.config.settings import get_settings
 
 
 def page_to_for_max_jobs(max_jobs: int) -> int:
-    """Ask mcp-jobs for enough pages to reach ``max_jobs``; collectors stop earlier."""
+    """Ask mcp-jobs for enough pages to reach ``max_jobs`` per source.
+
+    Domestic list pages are often ~15-20 cards. Use 15 so page 2+ is requested
+    whenever max_jobs is greater than a single page.
+    """
     capped = max(1, min(int(max_jobs), 200))
-    return min(30, max(1, (capped + 19) // 20))
+    return min(30, max(1, (capped + 14) // 15))
 
 
 class McpJobsCollectError(Exception):
