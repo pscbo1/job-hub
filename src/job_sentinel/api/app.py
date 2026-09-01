@@ -1000,7 +1000,7 @@ def create_app(
         Create a tracked application.
 
         Pass ``posting_id`` to populate fields from a stored JobPosting (stage
-        defaults to APPLIED in that case).  Otherwise supply manual fields.
+        defaults to draft).  Otherwise supply manual fields.
         """
         if auth_mode != "off" and _bearer_user(request) is None:
             raise HTTPException(status_code=401, detail="Login required.")

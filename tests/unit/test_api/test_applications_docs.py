@@ -127,7 +127,7 @@ def test_create_application_from_posting(tmp_path: Path) -> None:
     assert body["title"] == "ML Engineer"
     assert body["employer"] == "AI Corp"
     assert body["posting_id"] == "p-001"
-    assert body["stage"] == "applied"  # defaults to APPLIED when sourced from a posting
+    assert body["stage"] == "draft"
 
 
 # ── GET /api/applications/{id} ────────────────────────────────────────────────

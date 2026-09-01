@@ -387,6 +387,9 @@ class JobRepository:
         self._remap_legacy_application_stages()
 
     def _remap_legacy_application_stages(self) -> None:
+        names = {col.name for col in self._table(_APP_TABLE).columns}
+        if "stage" not in names:
+            return
         self._db.execute("UPDATE applications SET stage = 'draft' WHERE stage = 'saved'")
         self._db.execute("UPDATE applications SET stage = 'interview' WHERE stage = 'interviewing'")
         self._db.execute(

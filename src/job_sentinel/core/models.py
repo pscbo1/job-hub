@@ -424,7 +424,19 @@ class Application(BaseModel):
                 data["close_reason"] = CloseReason.NOT_SELECTED
         return data
 
-    @field_validator("title", "employer", "location", mode="before")
+    @field_validator(
+        "title",
+        "employer",
+        "location",
+        "url",
+        "source",
+        "salary",
+        "applied_date",
+        "deadline",
+        "notes",
+        "close_note",
+        mode="before",
+    )
     @classmethod
     def _strip(cls, v: object) -> str:
         return str(v).strip() if v else ""
