@@ -85,7 +85,9 @@ def test_stale_applied_true_when_idle(tmp_path: Path) -> None:
     repo = JobRepository(tmp_path / "j.db")
     job = repo.upsert_job(Job(source="zhaopin", source_job_id="idle", title="SWE"))
     _row, app = start_application(repo, job.id)
-    submitted = mark_submitted(repo, app.id, materials_dir=tmp_path / "materials", confirm_empty=True)
+    submitted = mark_submitted(
+        repo, app.id, materials_dir=tmp_path / "materials", confirm_empty=True
+    )
     old = _old()
     repo.update_application(submitted.id, updated_at=old.isoformat())
     repo.update_hub_job_tracking(job.id)

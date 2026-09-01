@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from job_sentinel.core.models import (
-    ApplicationMaterialBinding,
     FILE_MATERIAL_KINDS,
     KNOWLEDGE_MATERIAL_KINDS,
+    ApplicationMaterialBinding,
     Material,
     MaterialVersion,
     PacketSnapshot,
@@ -164,9 +164,7 @@ class MaterialsService:
         )
         if payload is not None:
             try:
-                file_ref = self.storage.write_bytes(
-                    material.id, version.id, payload_name, payload
-                )
+                file_ref = self.storage.write_bytes(material.id, version.id, payload_name, payload)
             except StorageError as exc:
                 raise MaterialsError(str(exc)) from exc
             original = payload_name
@@ -277,7 +275,7 @@ class MaterialsService:
         return material
 
     def freeze_snapshot(self, submission_id: str, snapshot: PacketSnapshot) -> PacketSnapshot:
-        """Copy bound files into a submission-owned path so later library edits cannot change bytes."""
+        """Copy bound files into a submission-owned path so later edits cannot change bytes."""
         frozen: list[PacketSnapshotItem] = []
         for index, item in enumerate(snapshot.items):
             copy = item.model_copy()

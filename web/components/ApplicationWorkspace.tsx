@@ -369,7 +369,7 @@ function CurrentMaterialRow({
               material={item.material}
               currentId={item.binding.material_version_id}
               onPick={(versionId) =>
-                void changePacketVersion(app.id, item.binding.id, versionId).then(() => refresh(true))
+                void changePacketVersion(app.id, item.binding.id, versionId).then(() => onRefresh(true))
               }
             />
           </label>

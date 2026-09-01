@@ -454,7 +454,8 @@ class JobRepository:
         cols = {col.name for col in self._table(_SUBMISSIONS_TABLE).columns}
         if "idempotency_key" not in cols:
             self._db.execute(
-                "ALTER TABLE application_submissions ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
+                "ALTER TABLE application_submissions "
+                "ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
             )
         self._db.execute(
             """

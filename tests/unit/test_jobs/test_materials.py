@@ -90,7 +90,9 @@ def test_empty_packet_snapshot_is_explicit(tmp_path: Path) -> None:
     repo = JobRepository(tmp_path / "j.db")
     job = repo.upsert_job(Job(source="manual", source_job_id="1", title="SWE"))
     _row, app = start_application(repo, job.id)
-    submitted = mark_submitted(repo, app.id, materials_dir=tmp_path / "materials", confirm_empty=True)
+    submitted = mark_submitted(
+        repo, app.id, materials_dir=tmp_path / "materials", confirm_empty=True
+    )
     snap = submitted.submissions[0].packet_snapshot
     assert snap.items == []
     assert snap.material_version_ids == []
