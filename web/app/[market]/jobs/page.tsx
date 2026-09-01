@@ -64,9 +64,10 @@ export default async function MarketJobsPage({
     <div className="mx-auto max-w-3xl space-y-4 px-5 py-12">
       <div className="space-y-3">
         <MarketSwitch current={market} page="jobs" />
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Job Pool</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-ink">Discover</h1>
         <p className="mt-1 text-sm text-muted">
-          {marketLabel(market)} jobs from collectors. Filter by discovered date and set status.
+          {marketLabel(market)} jobs from collectors. Save, mark Reference, or start an application.
+          New jobs have no tracking until you act.
         </p>
       </div>
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from job_sentinel.core.models import Job, JobRaw, JobStatus
+from job_sentinel.core.models import Job, JobEngagement, JobRaw
 from job_sentinel.db.repository import JobRepository
 from job_sentinel.ingestion.contract import CollectorRecord
 from job_sentinel.ingestion.filters import (
@@ -73,7 +73,7 @@ def test_reapply_without_rescrape_preserves_user_fields(tmp_path: Path) -> None:
         first = repo.upsert_job(
             _job(
                 title="产品实习",
-                status=JobStatus.APPLIED,
+                status=JobEngagement.TO_DO,
                 match_score=0.7,
             )
         )
@@ -85,7 +85,7 @@ def test_reapply_without_rescrape_preserves_user_fields(tmp_path: Path) -> None:
         assert excluded.excluded == 1
         assert stored.filter_state == FILTER_STATE_EXCLUDED
         assert stored.filter_reasons == ["internship"]
-        assert stored.status == JobStatus.APPLIED
+        assert stored.engagement == JobEngagement.TO_DO
         assert stored.match_score == 0.7
         assert stored.discovered_at == discovered
 
@@ -96,7 +96,7 @@ def test_reapply_without_rescrape_preserves_user_fields(tmp_path: Path) -> None:
         assert included.included == 1
         assert again.filter_state == FILTER_STATE_INCLUDED
         assert again.filter_reasons == []
-        assert again.status == JobStatus.APPLIED
+        assert again.engagement == JobEngagement.TO_DO
         assert again.discovered_at == discovered
         pool = repo.list_hub_jobs(filter_state="included")
         assert any(j.id == first.id for j in pool)
@@ -141,7 +141,7 @@ def test_manual_dismiss_and_undismiss_preserve_status_and_raw(tmp_path: Path) ->
             ),
         )
         job = repo.upsert_job(
-            _job(source_job_id="keep-me", company="示例科技", status=JobStatus.TO_DO)
+            _job(source_job_id="keep-me", company="示例科技", status=JobEngagement.TO_DO)
         )
         repo.insert_job_raw(
             JobRaw(
@@ -155,7 +155,7 @@ def test_manual_dismiss_and_undismiss_preserve_status_and_raw(tmp_path: Path) ->
         assert dismissed is not None
         assert dismissed.filter_state == FILTER_STATE_EXCLUDED
         assert "manual_dismiss" in dismissed.filter_reasons
-        assert dismissed.status == JobStatus.TO_DO
+        assert dismissed.engagement == JobEngagement.TO_DO
         assert repo._db["jobs_raw"].count == raw_count
         assert repo.list_hub_jobs(filter_state="included") == []
         assert any(j.id == job.id for j in repo.list_hub_jobs(filter_state="excluded"))
@@ -165,13 +165,13 @@ def test_manual_dismiss_and_undismiss_preserve_status_and_raw(tmp_path: Path) ->
         assert still is not None
         assert still.filter_state == FILTER_STATE_EXCLUDED
         assert "manual_dismiss" in still.filter_reasons
-        assert still.status == JobStatus.TO_DO
+        assert still.engagement == JobEngagement.TO_DO
 
         restored = undismiss_hub_job(repo, job.id)
         assert restored is not None
         assert restored.filter_state == FILTER_STATE_INCLUDED
         assert restored.filter_reasons == []
-        assert restored.status == JobStatus.TO_DO
+        assert restored.engagement == JobEngagement.TO_DO
         assert any(j.id == job.id for j in repo.list_hub_jobs(filter_state="included"))
     finally:
         repo.close()
@@ -191,18 +191,20 @@ def test_hide_company_refilter_hides_matches_preserves_status(tmp_path: Path) ->
                 source_job_id="other",
                 company="别的公司",
                 title="产品经理",
-                status=JobStatus.SAVED,
+                favorite=True,
             )
         )
         hide_a = repo.upsert_job(
-            _job(source_job_id="a", company="科锐国际", title="招聘顾问", status=JobStatus.TO_DO)
+            _job(
+                source_job_id="a", company="科锐国际", title="招聘顾问", status=JobEngagement.TO_DO
+            )
         )
         hide_b = repo.upsert_job(
             _job(
                 source_job_id="b",
                 company="科锐国际人力资源股份有限公司",
                 title="猎头",
-                status=JobStatus.APPLIED,
+                status=JobEngagement.TO_DO,
             )
         )
         repo.insert_job_raw(JobRaw(source="zhaopin", source_job_id="a", job_id=hide_a.id))
@@ -228,8 +230,8 @@ def test_hide_company_refilter_hides_matches_preserves_status(tmp_path: Path) ->
         excluded = {j.id: j for j in repo.list_hub_jobs(filter_state="excluded")}
         assert excluded[hide_a.id].filter_reasons == ["excluded_company"]
         assert excluded[hide_b.id].filter_reasons == ["excluded_company"]
-        assert excluded[hide_a.id].status == JobStatus.TO_DO
-        assert excluded[hide_b.id].status == JobStatus.APPLIED
+        assert excluded[hide_a.id].engagement == JobEngagement.TO_DO
+        assert excluded[hide_b.id].engagement == JobEngagement.TO_DO
         assert excluded[hide_a.id].discovered_at == hide_a.discovered_at
 
         save_filter_settings(repo, rules)
@@ -238,6 +240,6 @@ def test_hide_company_refilter_hides_matches_preserves_status(tmp_path: Path) ->
         again = repo.get_hub_job(hide_a.id)
         assert again is not None
         assert again.filter_state == FILTER_STATE_INCLUDED
-        assert again.status == JobStatus.TO_DO
+        assert again.engagement == JobEngagement.TO_DO
     finally:
         repo.close()

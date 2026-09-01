@@ -1010,6 +1010,48 @@ def adapters() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# archive — idle Job stow (cron-friendly). Sets archived_at, never Closed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def archive(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report matches without writing"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Run even when auto-archive is disabled in settings",
+    ),
+) -> None:
+    """Archive idle Job Pool rows (cron-friendly). No-op unless enabled, unless --force.
+
+    Settings: GET/PUT /api/archive-settings (enabled default off, idle_days=14).
+    Writes Job.archived_at only for Excluded/Dismissed jobs — never Application Closed.
+    """
+    from job_sentinel.config.settings import get_settings
+    from job_sentinel.db.repository import JobRepository
+    from job_sentinel.jobs.archive import load_archive_settings, run_idle_archive
+
+    settings = get_settings()
+    repo = JobRepository(settings.db_path)
+    try:
+        cfg = load_archive_settings(repo)
+        result = run_idle_archive(repo, settings=cfg, dry_run=dry_run, force=force)
+    finally:
+        repo.close()
+    if result.disabled:
+        console.print(
+            "[yellow]Auto-archive is off.[/] Enable it in Discover settings or pass --force."
+        )
+        return
+    mode = "dry-run" if result.dry_run else "archived"
+    console.print(
+        f"[green]{mode}[/] scanned={result.scanned} "
+        f"archived={result.archived} skipped={result.skipped}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # apps — application tracker (Huntr/Teal-style)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1024,7 +1066,7 @@ def _open_repo() -> _JobRepository:
 
 @apps_app.command("list")
 def apps_list(
-    stage: str = typer.Option("", "--stage", "-s", help="Filter by stage (saved/applied/…)"),
+    stage: str = typer.Option("", "--stage", "-s", help="Filter by stage (draft/applied/…)"),
     limit: int = typer.Option(200, "--limit", "-n", help="Max rows to show"),
 ) -> None:
     """List tracked applications."""
@@ -1072,7 +1114,7 @@ def apps_add(
     location: str = typer.Option("", "--location", "-l", help="Work location"),
     url: str = typer.Option("", "--url", "-u", help="Posting URL"),
     source: str = typer.Option("", "--source", help="Source (e.g. manual, adzuna)"),
-    stage: str = typer.Option("saved", "--stage", "-s", help="Initial stage"),
+    stage: str = typer.Option("draft", "--stage", "-s", help="Initial stage"),
     salary: str = typer.Option("", "--salary", help="Salary range / offer"),
     applied_date: str = typer.Option("", "--applied-date", help="ISO date (YYYY-MM-DD)"),
     deadline: str = typer.Option("", "--deadline", help="Application deadline"),

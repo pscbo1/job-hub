@@ -30,14 +30,18 @@ Job Hub 是一个个人求职信息聚合与执行中心。它把分散在通用
 
 V0 核心链路：
 
-`Channel → Collection / Manual Import → jobs_raw → Normalize → Dedup → Rule Filter → Job Pool → Return to Source → Status / Next Step / Comment`
+`Collect → Discover → (Dismiss/Excluded | Save | Reference | Start Application → Draft → Mark Submitted → Applied → Interview → Offer → Closed)`
+
+Save 与 Reference 是独立 boolean，可与 Application 共存。Applied / Interview / Offer / Closed 只出现在 Application。Closed 即历史。系统不出现 Rejected、Under Study、用户可见 To Do。
+
+主导航：**Collect Jobs · Discover · Applications · Tasks · Materials**。
 
 V0 完成后，用户可以在一个页面完成四件事：
 
 1. 查看今天或某日期之后新增的岗位。
-2. 按 Market、Channel、Keyword、Status 筛选。
+2. 按 Market、Channel、Keyword、engagement 筛选。
 3. 打开原始岗位页完成申请或沟通。
-4. 保存岗位状态、下一步、备注与 Reference。
+4. 保存岗位、下一步、备注与 Reference；投递生命周期在 Application。
 
 AI Match、Agent、完整 Trust Engine、自动投递和多轮沟通管理均作为后续独立模块。
 
@@ -153,8 +157,8 @@ AI Match、Agent、完整 Trust Engine、自动投递和多轮沟通管理均作
 | Normalize | 把不同来源映射到统一 Job schema |
 | Dedup | 同一岗位重复采集时只显示一条 Job，并保留多个来源 |
 | Rule Filter | 支持地点、职能、经验、外包/派遣、排除关键词 |
-| Job Pool | 支持 Today、Since Date、Market、Channel、Keyword、Status |
-| Tracking | 支持 Status、Favorite、Next Step、Comment、applied_at |
+| Job Pool | 支持 Today、Since Date、Market、Channel、Keyword、Engagement |
+| Tracking | 支持 Save（favorite）、engagement、Next Step、Comment；投递状态在 Application |
 | Return to Source | 支持 Open Source 与 Open Apply Page |
 | Reference | 保存不申请但值得学习的岗位和备注 |
 | Trust Gate | 来源可追溯、已知 Channel、基础 URL 检查、Review / Blocked |
@@ -164,7 +168,7 @@ AI Match、Agent、完整 Trust Engine、自动投递和多轮沟通管理均作
 ### 7.2 Should Have
 
 - 岗位详情侧栏或详情页。
-- 批量更新 Status。
+- 批量更新 engagement / Next Step。
 - 过滤原因可见。
 - collection run 最近一次状态可见。
 - CSV / JSONL 导入。
@@ -187,21 +191,29 @@ Should Have 不阻塞第一条端到端链路验收。
 
 ## 8. Information Architecture
 
-V0 只建立三个产品表面：
+V0 建立四个产品表面：
 
-### 8.1 `/jobs`
+### 8.1 `/jobs`（Discover / Job Pool）
 
-核心页面。包含：
+采集后的岗位。出现在此不代表用户要跟进。动作：Save（toggle）、Reference（toggle）、Open source、Start application、··· Dismiss。无 Start Review。卡片不显示 Next Step / DDL / task。默认 Current 隐藏 dismissed/excluded。Excluded 不占主栏，从 Filter / More 进入；可 Restore。被 auto-archive 的 excluded 仍出现在 Excluded。
 
-- Today / Since Date 切换。
-- Market、Channel、Keyword、Status 筛选。
-- 岗位列表或卡片。
-- Job detail drawer。
-- Favorite、Status、Next Step、Comment 编辑。
-- Open Source / Open Apply Page。
-- Manual Import 入口。
+顶栏筛选：All / Saved / Reference。更多 Filter：Source / Market / Date / Location。无 Active / To Do / Under Study / Discovery chips。
 
-### 8.2 `/sources`
+Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配置，默认 14）。仅 excluded/dismissed。
+
+### 8.2 `/tasks`
+
+真实动作队列。入列公式：`next_step OR deadline OR unfinished job_task OR Application.stage=draft`。Save-only / Reference-only / 普通 Discover 岗位不进入。默认分组：OVERDUE / TODAY / UPCOMING / NO DATE。无顶部时间 chips。筛选：Source、Market、Has Application Draft。
+
+### 8.3 `/applications`
+
+仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 More 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。Application Detail：Notes（默认）与 Packet。申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
+
+### 8.4 `/search`（Collect Jobs）
+
+Keywords / location / sources / collect / import / presets。不在 Collect 里做 Save、Reference、Tasks 或 Application staging。
+
+### 8.5 `/sources`
 
 轻量来源与运行状态页。包含：
 
@@ -213,7 +225,7 @@ V0 只建立三个产品表面：
 
 V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人工配置。
 
-### 8.3 `/review`
+### 8.6 `/review`
 
 只显示两类记录：
 
@@ -222,6 +234,10 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 
 无待处理内容时保持空状态，不制造通知。
 
+### 8.7 `/materials`
+
+Files library。Material 可有多个 Version（upload 或 URL）。Application Packet 绑定 version，UNIQUE(application_id, material_id)。Mark Submitted 从服务器 bindings 拍 submission snapshot；允许空 Packet（需确认 Record without materials）。Cancel Draft 只清 bindings，library 保留。不在此轮做 Knowledge/Answer Bank、Studio AI 或 object storage。
+
 ---
 
 ## 9. Job Pool UX Requirements
@@ -229,9 +245,9 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 ### 9.1 Default View
 
 - 默认打开 `Today`。
-- 默认隐藏 `Closed`。
-- 默认排序：`published_at desc`；缺失时使用 `first_seen_at desc`。
-- 默认展示新采集且未关闭的岗位。
+- 默认隐藏 dismissed / archived（Archive 是 Job 属性，不是 Closed）。
+- 默认排序：To Do 优先，然后最近 DDL / 未完成 task due；否则 `discovered_at desc`。
+- 默认展示新采集且未归档的岗位。
 
 ### 9.2 Job Card
 
@@ -241,11 +257,12 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 - company
 - location
 - market
-- published_at 或 first_seen_at
+- published_at 或 discovered_at
 - primary channel
-- status
-- favorite
+- engagement（可空）
+- Save（favorite）
 - Next Step 摘要
+- DDL 与未完成 task 芯片
 - Open Source
 
 ### 9.3 Job Detail
@@ -258,7 +275,7 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 - source published time / collected time
 - filter result 与 reasons
 - trust state 与 reasons
-- Status、Favorite、Next Step、Comment、applied_at
+- engagement、Save（favorite）、Next Step、Comment
 
 ### 9.4 Noise Control
 
@@ -268,25 +285,29 @@ V0 不展示 profile views、已读未回、浏览量、收藏量和无明确动
 
 ## 10. Job Lifecycle
 
-### 10.1 Status
+### 10.1 Save and Reference
 
-| Status | 语义 |
-|---|---|
-| `saved` | 用户已收入岗位池，尚未决定是否推进 |
-| `to_do` | 已决定推进，下一动作记录在 Next Step |
-| `applied` | 已提交申请，必须记录 applied_at |
-| `closed` | 当前机会不再需要动作，结果与有效信息保留在 Comment |
-| `reference` | 不进入当前申请流程，但值得保留为 JD、公司、岗位或技能参考 |
+Save（`favorite`）与 Reference（`reference`）都是独立 boolean。二者可以共存，也可以与 Application 共存。Dismiss 时必须清掉 Save 与 Reference。Restore 只清 dismissed_at。
 
-新进入 Job Pool 的岗位默认 `NULL`（采集写入不赋生命周期状态）。采集过程不得覆盖已设置的 status。
+### 10.2 Engagement（legacy）
 
-### 10.2 Favorite
+`engagement` 仅只读兼容。禁止再写入 `under_study` / `to_do`。历史 `engagement=reference` 迁移为 `reference=true` 且 `engagement=null`。Job **不**承载 Applied / Interview / Offer / Closed。
 
-Favorite 是独立 boolean，只表达收藏，不承担生命周期语义。
+### 10.3 Dismiss / Excluded
 
-### 10.3 Closing Rule
+Discovery 噪音。Dismiss 写入 dismissed_at 并进入 Excluded。Current 默认隐藏。Excluded 可 Restore。
 
-已投递约 14 天无推进且没有明确 Next Step 的岗位，可由用户触发批量 Closed。V0 不自动执行关闭。
+### 10.4 Application
+
+阶段仅：draft → applied → interview → offer → closed。Start Application 可从任意正常 Discover 岗位创建 draft。Draft→Applied 只能 Mark Submitted（submission + submitted_at）。Closed 立即保存，close_reason 可空，无 Close modal。放弃未投递 draft = 删除 Application。已投递不可硬删。Closed 后可 reopen。
+
+### 10.5 Archive
+
+Idle auto-archive（默认关，14 天）只处理 Excluded/Dismissed，写 `archived_at`。永不处理 Saved、Reference、进行中的 Application、普通 included 岗位。归档后的 excluded 仍出现在 Excluded 视图。CLI：`job-sentinel archive [--force] [--dry-run]`。
+
+### 10.6 Tasks / DDL
+
+Job 可有 checklist tasks 与主 DDL（`deadline`）。`follow_up_at` 是提醒日期。这些出现在 Tasks，不出现在 Discover 卡片。
 
 ---
 
@@ -295,23 +316,23 @@ Favorite 是独立 boolean，只表达收藏，不承担生命周期语义。
 ### 11.1 Discover and Review
 
 1. 用户打开 `/jobs`。
-2. 系统显示 Today 或 Since Date 的新增岗位。
-3. 用户按 Market、Channel、Keyword、Status 过滤。
-4. 用户查看 Job detail 与来源。
-5. 用户更新 Favorite 或 Status，或直接打开原始页面。
+2. 系统显示 Current 岗位（隐藏 dismissed/excluded）。
+3. 用户按 All / Saved / Reference 或 Source / Market / Date / Location 过滤。
+4. 用户 Save、Reference、Start Application，或打开原始页面。
+5. 噪音岗位 Dismiss 后进入 Excluded，可 Restore。
 
 ### 11.2 Apply
 
-1. 用户把岗位更新为 `To Do`，填写 Next Step。
-2. 用户点击 Open Apply Page 或 Open Source。
+1. 用户在 Discover 对任意正常岗位点击 Start Application（创建 Application draft）。
+2. 用户点击 Open source。
 3. 用户在原渠道完成申请。
-4. 用户返回 Job Hub，把状态改为 `Applied`。
-5. 系统自动写入 applied_at；用户可补充 Next Step 与 Comment。
+4. 用户返回 Job Hub，Mark Submitted（Application stage=`applied`，写入 submission）。
+5. 用户可补充 Next Step 与 Notes。Closed 立即保存，close_reason 可选。
 
 ### 11.3 Reference
 
 1. 用户发现一个不准备申请但值得保留的岗位。
-2. 用户把状态改为 `Reference`。
+2. 用户打开 Reference（独立 boolean，可与 Save / Application 共存）。
 3. 用户在 Comment 中记录值得保留的 JD、公司、技能或行业信息。
 
 ### 11.4 Manual Import
@@ -587,11 +608,18 @@ V0 不调用付费 Threat Intelligence provider，也不把“未发现异常”
 | first_seen_at | timestamptz | required |
 | last_seen_at | timestamptz | required |
 | fingerprint | text | indexed |
-| status | text | lifecycle status |
-| favorite | boolean | default false |
-| next_step | text | nullable |
+| status | text | deprecated leftover column; sealed writes leave null |
+| engagement | text | legacy read-compat only (may still hold under_study/to_do) |
+| favorite | boolean | product Save; default false; mutex with dismissed_at |
+| reference | boolean | independent keep-aside; can coexist with Save and Application |
 | comment | text | nullable |
-| applied_at | timestamptz | nullable |
+| next_step | text | nullable |
+| deadline | timestamptz | nullable main DDL |
+| follow_up_at | timestamptz | reminder; not a Discover chip |
+| last_activity_at | timestamptz | user/task activity only; collectors leave NULL |
+| dismissed_at | timestamptz | Discovery stow / Excluded |
+| archived_at | timestamptz | idle archive for excluded/dismissed only |
+| archive_reason | text | nullable |
 | filter_state | text | included / excluded / review |
 | filter_reasons | jsonb | default [] |
 | trust_state | text | known / review / blocked |
@@ -601,9 +629,22 @@ V0 不调用付费 Threat Intelligence provider，也不把“未发现异常”
 
 Constraints：
 
-- status ∈ NULL / saved / to_do / applied / closed / reference。
-- status 变为 Applied 且 applied_at 为空时自动写入当前时间。
+- `favorite` 与 `reference` 独立；可同时为 true；均与 dismissed_at 互斥。
+- 禁止再写入 engagement=under_study / to_do。历史 engagement=reference 迁移为 reference=true。
+- Job 不承载 Applied / Interview / Offer / Closed；无 Rejected。
 - primary_source_url 必须对应至少一条 job_sources。
+
+### 16.5b `job_tasks`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | text PK | |
+| job_id | text FK | |
+| title | text | required |
+| due_at | date | nullable |
+| done | boolean | default false |
+| sort_order | int | |
+| created_at | timestamptz | |
 
 ### 16.6 `job_sources`
 
@@ -641,18 +682,21 @@ Constraints：
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### 16.8 Deferred Tables
+### 16.8 Application and related
+
+- `applications`：unique `job_id`；stage draft|applied|interview|offer|closed；close_reason 可空；无 rejected；Closed 即历史，无独立 archived 阶段。
+- `application_submissions`：每次 Mark Submitted / 重投一条。
+- `application_events`：阶段与关闭历史。
+- `materials` / `material_versions` / `application_material_bindings`：Library + Packet。binding UNIQUE(application_id, material_id)，由 version→material_id 解析。purpose 为双层自由文本。soft archive。Cancel Draft 只清 bindings。
+- `applications.exclude_from_idle`：申请级排除 idle cleanup。`hub_idle_cleanup_settings`：enabled + idle_days（默认 14，可改）。
 
 V0 不创建或不启用：
 
 - match_results
-- applications
-- communications
-- job_events
+- communications UI
 - risk_registry
 - security_events
 - career_profiles
-- materials
 
 ---
 
@@ -661,11 +705,10 @@ V0 不创建或不启用：
 ### 17.1 Jobs
 
 - `GET /api/jobs`
-  - params：date_mode、since、market、channel、keyword、status、include_closed、page、page_size。
-- `GET /api/jobs/:id`
-  - 返回 job detail、sources、filter reasons、trust reasons。
+  - params：since、market、view=discover|tasks、q、has_draft、include_dismissed、include_archived。
 - `PATCH /api/jobs/:id`
-  - 仅允许更新 favorite、status、next_step、comment、applied_at。
+  - 仅允许更新 favorite、reference、next_step、comment、deadline。
+- `POST /api/jobs/:id/save|unsave|reference|unreference|start-application|dismiss|undismiss`
 
 ### 17.2 Ingestion
 
@@ -689,6 +732,15 @@ V0 不创建或不启用：
 - `GET /api/review`
 - `POST /api/review/:entityType/:id/resolve`
   - action：approve / keep_separate / block。
+
+### 17.5 Applications, idle cleanup, Materials
+
+- `GET /api/applications?view=open|closed|all&stale_applied=`
+- `GET|PUT /api/idle-cleanup-settings` — `enabled`, `idle_days`（默认 14）
+- `PATCH /api/applications/:id` — includes `exclude_from_idle`
+- `GET|POST /api/materials`；`POST /api/materials/upload`；versions upload/URL
+- `GET|PUT /api/applications/:id/packet`；bindings add/change/remove
+- `POST /api/applications/:id/submit` snapshots current server bindings（empty packet allowed）
 
 ---
 
@@ -732,7 +784,7 @@ V0 不从空白脚手架开始。主实现基线采用 [Job Sentinel](https://gi
 | auth | Keep available | localhost 默认关闭；公网运行时启用 |
 | Telegram / email notifier | Disable | 不进入 V0 |
 | profile / documents / LLM / chat | Disable | 不进入 V0 |
-| application CRM | Disable | V0 使用 Job 上的 Status / Next Step / Comment |
+| application CRM | Reduce | V0 使用 Job engagement / Next Step / Comment / tasks；投递阶段在 Application |
 
 ### 18.3 Fixed V0 Stack
 
@@ -861,7 +913,7 @@ V0 使用 SQLite，减少基础设施和部署变量。所有业务代码通过 
 | Link | primary_source_url |
 | Market | market |
 | Location | location |
-| Status | status |
+| Status / Engagement | engagement / Application.stage |
 | Next Step | next_step |
 | Comment | comment |
 
@@ -991,11 +1043,11 @@ V0 开发期间不删除旧表。
 
 交付：
 
-- Favorite。
-- Status。
-- Next Step。
-- Comment。
-- applied_at。
+- Save（favorite）。
+- engagement（null / reference / under_study / to_do）；新入库默认 null。
+- Next Step、Comment、DDL、job tasks。
+- Application stages（draft / applied / interview / offer / closed）。无 Rejected。
+- Job-level archive（`archived_at`），不是 Job Closed。
 - Reference。
 - Open Apply Page。
 
@@ -1050,19 +1102,19 @@ Then 岗位不进入默认视图，并保存过滤原因。
 
 Given 数据库包含多个日期和渠道的岗位，  
 When 用户选择 Today 或 Since Date，  
-Then 结果时间范围正确，并可继续按 Market、Channel、Keyword、Status 筛选。
+Then 结果时间范围正确，并可继续按 Market、Channel、Keyword、engagement 筛选。
 
 ### AC7｜Tracking
 
 Given 用户打开一个岗位，  
-When 用户更新 Status、Favorite、Next Step 或 Comment，  
+When 用户更新 Save、Reference、Next Step 或 Comment，  
 Then 刷新页面后数据保持一致。
 
-### AC8｜Applied
+### AC8｜Mark Submitted
 
-Given 用户把岗位状态更新为 Applied，  
-When applied_at 为空，  
-Then 系统自动写入当前时间。
+Given 用户从任意普通 Discover 岗位 Start Application 得到 draft，  
+When 用户 Mark Submitted，  
+Then Application stage 为 applied，并追加一条 submission。Job 的 Save / Reference 不变。
 
 ### AC9｜Return to Source
 
@@ -1098,7 +1150,7 @@ Then Name、Link、Market、Location、Status、Next Step、Comment 均有明确
 2. 至少一条真实 CN collector 端到端跑通。
 3. Today / Since Date 与五项核心筛选可用。
 4. 重复运行不产生明显重复 Job。
-5. Open Source、Status、Favorite、Next Step、Comment、applied_at 可用。
+5. Open Source、Save、engagement、Next Step、Comment、Application 可用。
 6. Reference 可用。
 7. 失败状态可见。
 8. V0 测试通过。

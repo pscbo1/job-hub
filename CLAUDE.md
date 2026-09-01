@@ -20,6 +20,7 @@ CLI commands: `run` (scheduler+bot), `scrape` (one cycle, default --dry-run), `l
 (manual portal login → data/session.json), `session` (headless validity check), `serve`
 (FastAPI), `web` (API + Next.js together), `adapters`, `db stats|list`,
 `ingest <path>`, `collect` (mcp-jobs → jobs_raw → jobs),
+`archive` (idle Job `archived_at`; `--force` / `--dry-run`),
 `resume init|import <pdf>|show|build|cover|doctor`,
 `apps list|add|stage|note|rm`, `docs list|rm`,
 `sources list|search|company`, `users add|list|remove`.

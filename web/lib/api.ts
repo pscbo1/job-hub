@@ -10,6 +10,7 @@
 import * as demo from "@/lib/demo";
 import { parseMarketId, sourceInMarket } from "@/lib/markets";
 import type { CommonSearchFilters, SearchPreset } from "@/lib/searchCapabilities";
+import { jobBelongsOnTasks } from "@/lib/taskBoard";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -174,7 +175,25 @@ export function getProfile(): Promise<Profile | null> {
   return getJSON<Profile | null>("/api/profile", null);
 }
 
-export type HubJobStatus = "saved" | "to_do" | "applied" | "closed" | "reference";
+export type JobEngagement = "reference" | "under_study" | "to_do";
+export type HubJobStatus = JobEngagement;
+
+export interface JobTask {
+  id: string;
+  job_id: string;
+  title: string;
+  due_at: string | null;
+  done: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface JobTaskPatch {
+  title?: string;
+  due_at?: string | null;
+  done?: boolean;
+  sort_order?: number;
+}
 
 export interface HubJob {
   id: string;
@@ -185,7 +204,19 @@ export interface HubJob {
   job_url: string;
   published_at: string | null;
   discovered_at: string;
-  status: HubJobStatus | null;
+  engagement: JobEngagement | null;
+  status: JobEngagement | null;
+  favorite?: boolean;
+  reference?: boolean;
+  comment?: string;
+  next_step?: string;
+  deadline?: string | null;
+  follow_up_at?: string | null;
+  dismissed_at?: string | null;
+  archived_at?: string | null;
+  application_id?: string | null;
+  last_activity_at?: string | null;
+  tasks?: JobTask[];
   match_score: number | null;
   salary?: string;
   description?: string;
@@ -230,6 +261,11 @@ export interface JobsListQuery {
   sources?: string[];
   remote?: boolean;
   postedDays?: number | string;
+  view?: "discover" | "tasks" | "my_jobs";
+  includeDismissed?: boolean;
+  includeArchived?: boolean;
+  q?: string;
+  hasDraft?: boolean;
 }
 
 export function getJobs(
@@ -238,7 +274,21 @@ export function getJobs(
   filterState: PoolFilterState = "included",
   query: JobsListQuery = {},
 ): Promise<HubJob[]> {
-  if (demo.DEMO) return Promise.resolve(demo.demoHubJobs.slice(0, limit));
+  if (demo.DEMO) {
+    let rows = demo.demoHubJobs;
+    if (filterState === "excluded") {
+      rows = rows.filter((j) => Boolean(j.dismissed_at) || j.filter_state === "excluded");
+    } else if (filterState !== "all") {
+      rows = rows.filter((j) => !j.dismissed_at && j.filter_state !== "excluded");
+    }
+    if (query.view === "tasks" || query.view === "my_jobs") {
+      rows = rows.filter((j) => jobBelongsOnTasks(j));
+    }
+    if (query.hasDraft === true) {
+      rows = [];
+    }
+    return Promise.resolve(rows.slice(0, limit));
+  }
   const q = new URLSearchParams({ limit: String(limit), filter_state: filterState });
   if (since) q.set("since", since);
   if (query.market) q.set("market", query.market);
@@ -246,19 +296,72 @@ export function getJobs(
   if (query.sources && query.sources.length > 0) q.set("sources", query.sources.join(","));
   if (query.remote) q.set("remote", "true");
   if (query.postedDays) q.set("posted_days", String(query.postedDays));
+  if (query.view) q.set("view", query.view);
+  if (query.includeDismissed) q.set("include_dismissed", "true");
+  if (query.includeArchived) q.set("include_archived", "true");
+  if (query.q) q.set("q", query.q);
+  if (query.hasDraft === true) q.set("has_draft", "true");
+  if (query.hasDraft === false) q.set("has_draft", "false");
   return getJSON<HubJob[]>(`/api/jobs?${q.toString()}`, []);
 }
 
 export async function patchHubJobStatus(
   jobId: string,
-  status: HubJobStatus | null,
+  status: JobEngagement | null,
 ): Promise<HubJob | null> {
-  if (demo.DEMO) return { id: jobId, title: "", company: "", location: "", source: "", job_url: "", published_at: null, discovered_at: "", status, match_score: null };
+  return patchHubJob(jobId, { engagement: status });
+}
+
+export async function patchHubJob(
+  jobId: string,
+  body: {
+    engagement?: JobEngagement | null;
+    favorite?: boolean;
+    reference?: boolean;
+    comment?: string;
+    next_step?: string;
+    deadline?: string | null;
+    follow_up_at?: string | null;
+  },
+): Promise<HubJob | null> {
+  if (demo.DEMO) {
+    const current = demo.demoHubJobs.find((j) => j.id === jobId);
+    if (!current) {
+      return {
+        id: jobId,
+        title: "",
+        company: "",
+        location: "",
+        source: "",
+        job_url: "",
+        published_at: null,
+        discovered_at: "",
+        engagement: body.engagement ?? null,
+        status: body.engagement ?? null,
+        favorite: body.favorite,
+        match_score: null,
+      };
+    }
+    const next: HubJob = {
+      ...current,
+        engagement: body.engagement !== undefined ? body.engagement : current.engagement,
+        status: body.engagement !== undefined ? body.engagement : current.status,
+        favorite: body.favorite !== undefined ? body.favorite : current.favorite,
+        reference: body.reference !== undefined ? body.reference : current.reference,
+      comment: body.comment !== undefined ? body.comment : current.comment,
+      next_step: body.next_step !== undefined ? body.next_step : current.next_step,
+      deadline: body.deadline !== undefined ? body.deadline : current.deadline,
+      follow_up_at: body.follow_up_at !== undefined ? body.follow_up_at : current.follow_up_at,
+      tasks: current.tasks,
+    };
+    Object.assign(current, next);
+    return next;
+  }
   try {
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) return null;
     return (await res.json()) as HubJob;
@@ -267,8 +370,11 @@ export async function patchHubJobStatus(
   }
 }
 
-export async function dismissHubJob(jobId: string): Promise<HubJob | null> {
+async function postJobAction(jobId: string, action: string, body: object = {}): Promise<HubJob | null> {
   if (demo.DEMO) {
+    const referenced = action === "reference" ? true : action === "unreference" ? false : undefined;
+    const favorite = action === "save" ? true : action === "unsave" ? false : undefined;
+    const dismissed = action === "dismiss" ? new Date().toISOString() : null;
     return {
       id: jobId,
       title: "",
@@ -278,22 +384,499 @@ export async function dismissHubJob(jobId: string): Promise<HubJob | null> {
       job_url: "",
       published_at: null,
       discovered_at: "",
-      status: null,
+      engagement: action === "dismiss" ? null : null,
+      status: action === "dismiss" ? null : null,
+      favorite: action === "dismiss" ? false : favorite,
+      reference: action === "dismiss" ? false : referenced,
+      dismissed_at: dismissed,
       match_score: null,
-      filter_state: "excluded",
-      filter_reasons: ["manual_dismiss"],
+      filter_state: action === "dismiss" ? "excluded" : "included",
+      filter_reasons: action === "dismiss" ? ["manual_dismiss"] : [],
     };
   }
   try {
-    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/dismiss`, {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
     });
     if (!res.ok) return null;
     return (await res.json()) as HubJob;
   } catch {
     return null;
   }
+}
+
+export function saveHubJob(jobId: string): Promise<HubJob | null> {
+  return postJobAction(jobId, "save");
+}
+export function unsaveHubJob(jobId: string): Promise<HubJob | null> {
+  return postJobAction(jobId, "unsave");
+}
+export function referenceHubJob(jobId: string): Promise<HubJob | null> {
+  return postJobAction(jobId, "reference");
+}
+export function unreferenceHubJob(jobId: string): Promise<HubJob | null> {
+  return postJobAction(jobId, "unreference");
+}
+export function archiveHubJob(jobId: string, reason = ""): Promise<HubJob | null> {
+  return postJobAction(jobId, "archive", { reason });
+}
+export function unarchiveHubJob(jobId: string): Promise<HubJob | null> {
+  return postJobAction(jobId, "unarchive");
+}
+
+export interface ArchiveSettings {
+  enabled: boolean;
+  idle_days: number;
+}
+
+export function getArchiveSettings(): Promise<ArchiveSettings> {
+  if (demo.DEMO) return Promise.resolve({ enabled: false, idle_days: 14 });
+  return getJSON<ArchiveSettings>("/api/archive-settings", { enabled: false, idle_days: 14 });
+}
+
+export async function putArchiveSettings(
+  body: ArchiveSettings,
+): Promise<ArchiveSettings | null> {
+  if (demo.DEMO) return body;
+  try {
+    const res = await fetch(`${API_BASE}/api/archive-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ArchiveSettings;
+  } catch {
+    return null;
+  }
+}
+
+export interface IdleCleanupSettings {
+  enabled: boolean;
+  idle_days: number;
+}
+
+export function getIdleCleanupSettings(): Promise<IdleCleanupSettings> {
+  if (demo.DEMO) return Promise.resolve({ enabled: true, idle_days: 14 });
+  return getJSON<IdleCleanupSettings>("/api/idle-cleanup-settings", {
+    enabled: false,
+    idle_days: 14,
+  });
+}
+
+export async function putIdleCleanupSettings(
+  body: IdleCleanupSettings,
+): Promise<IdleCleanupSettings | null> {
+  if (demo.DEMO) return body;
+  try {
+    const res = await fetch(`${API_BASE}/api/idle-cleanup-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as IdleCleanupSettings;
+  } catch {
+    return null;
+  }
+}
+
+export type MaterialKind = "resume" | "cover_letter" | "portfolio" | "transcript" | "other";
+
+export interface MaterialVersion {
+  id: string;
+  material_id: string;
+  version_number: number;
+  version_label: string;
+  purpose: string[];
+  file_ref: string;
+  original_filename: string;
+  content_type: string;
+  byte_size: number;
+  url: string;
+  notes: string;
+  archived_at?: string | null;
+  created_at: string;
+  display_label?: string;
+}
+
+export interface Material {
+  id: string;
+  title: string;
+  kind: string;
+  purpose: string[];
+  notes: string;
+  archived_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  versions: MaterialVersion[];
+}
+
+export interface PacketItem {
+  binding: {
+    id: string;
+    application_id: string;
+    material_id: string;
+    material_version_id: string;
+    sort_order: number;
+    created_at: string;
+  };
+  material: Material | null;
+  version: MaterialVersion | null;
+}
+
+export function getMaterials(includeArchived = false): Promise<Material[]> {
+  if (demo.DEMO) {
+    return Promise.resolve(
+      includeArchived ? demo.demoMaterials : demo.demoMaterials.filter((m) => !m.archived_at),
+    );
+  }
+  const q = includeArchived ? "?include_archived=true" : "";
+  return getJSON<Material[]>(`/api/materials${q}`, []);
+}
+
+export async function createMaterial(body: {
+  title: string;
+  kind?: string;
+  purpose?: string[];
+  notes?: string;
+  url?: string;
+  version_label?: string;
+  version_purpose?: string[];
+  version_notes?: string;
+}): Promise<Material | null> {
+  if (demo.DEMO) {
+    const created = demo.makeDemoMaterial(body);
+    demo.demoMaterials.unshift(created);
+    return created;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function uploadMaterial(form: FormData): Promise<Material | null> {
+  if (demo.DEMO) {
+    const title = String(form.get("title") || "Uploaded file");
+    const created = demo.makeDemoMaterial({ title, kind: String(form.get("kind") || "other") });
+    demo.demoMaterials.unshift(created);
+    return created;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials/upload`, {
+      method: "POST",
+      headers: { ...authHeaders() },
+      body: form,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchMaterial(
+  id: string,
+  body: { title?: string; kind?: string; purpose?: string[]; notes?: string },
+): Promise<Material | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === id);
+    if (!found) return null;
+    Object.assign(found, body, { updated_at: new Date().toISOString() });
+    return found;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function archiveMaterial(id: string, restore = false): Promise<Material | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === id);
+    if (!found) return null;
+    found.archived_at = restore ? null : new Date().toISOString();
+    return found;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/materials/${encodeURIComponent(id)}/${restore ? "restore" : "archive"}`,
+      { method: "POST", headers: { ...authHeaders() } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function addMaterialVersion(
+  materialId: string,
+  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string },
+): Promise<MaterialVersion | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === materialId);
+    if (!found) return null;
+    const version = demo.makeDemoVersion(found, body);
+    found.versions.unshift(version);
+    return version;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials/${encodeURIComponent(materialId)}/versions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as MaterialVersion;
+  } catch {
+    return null;
+  }
+}
+
+export async function uploadMaterialVersion(
+  materialId: string,
+  form: FormData,
+): Promise<MaterialVersion | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === materialId);
+    if (!found) return null;
+    const version = demo.makeDemoVersion(found, { version_label: String(form.get("version_label") || "") });
+    found.versions.unshift(version);
+    return version;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/materials/${encodeURIComponent(materialId)}/versions/upload`,
+      { method: "POST", headers: { ...authHeaders() }, body: form },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as MaterialVersion;
+  } catch {
+    return null;
+  }
+}
+
+export function materialVersionFileUrl(versionId: string): string {
+  return `${API_BASE}/api/material-versions/${encodeURIComponent(versionId)}/file`;
+}
+
+export async function getPacket(appId: string): Promise<PacketItem[]> {
+  if (demo.DEMO) return demo.demoPacketFor(appId);
+  const data = await getJSON<{ items: PacketItem[] }>(
+    `/api/applications/${encodeURIComponent(appId)}/packet`,
+    { items: [] },
+  );
+  return data.items;
+}
+
+export async function replacePacket(appId: string, versionIds: string[]): Promise<PacketItem[]> {
+  if (demo.DEMO) {
+    demo.setDemoPacket(appId, versionIds);
+    return demo.demoPacketFor(appId);
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ material_version_ids: versionIds }),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { items: PacketItem[] };
+    return data.items;
+  } catch {
+    return [];
+  }
+}
+
+export async function changePacketVersion(
+  appId: string,
+  bindingId: string,
+  versionId: string,
+): Promise<boolean> {
+  if (demo.DEMO) {
+    demo.changeDemoPacketVersion(appId, bindingId, versionId);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet/bindings/${encodeURIComponent(bindingId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ material_version_id: versionId }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function removePacketBinding(appId: string, bindingId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    demo.removeDemoPacketBinding(appId, bindingId);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet/bindings/${encodeURIComponent(bindingId)}`,
+      { method: "DELETE", headers: { ...authHeaders() } },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function demoJobById(jobId: string): HubJob | undefined {
+  return demo.demoHubJobs.find((j) => j.id === jobId);
+}
+
+export async function createJobTask(
+  jobId: string,
+  body: { title: string; due_at?: string | null },
+): Promise<JobTask | null> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    const created: JobTask = {
+      id: `demo-task-${Date.now()}`,
+      job_id: jobId,
+      title: body.title,
+      due_at: body.due_at ?? null,
+      done: false,
+      sort_order: job?.tasks?.length ?? 0,
+      created_at: new Date().toISOString(),
+    };
+    if (job) job.tasks = [...(job.tasks ?? []), created];
+    return created;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as JobTask;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchJobTask(
+  jobId: string,
+  taskId: string,
+  patch: JobTaskPatch,
+): Promise<JobTask | null> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    const current = (job?.tasks ?? []).find((t) => t.id === taskId);
+    if (!current) return null;
+    const saved: JobTask = {
+      ...current,
+      title: patch.title ?? current.title,
+      due_at: patch.due_at !== undefined ? patch.due_at : current.due_at,
+      done: patch.done ?? current.done,
+      sort_order: patch.sort_order ?? current.sort_order,
+    };
+    if (job) job.tasks = (job.tasks ?? []).map((t) => (t.id === taskId ? saved : t));
+    return saved;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(patch),
+      },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as JobTask;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteJobTask(jobId: string, taskId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    if (job) job.tasks = (job.tasks ?? []).filter((t) => t.id !== taskId);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function startApplicationForJob(
+  jobId: string,
+): Promise<{ job: HubJob; application: Application } | null> {
+  if (demo.DEMO) {
+    return {
+      job: {
+        id: jobId,
+        title: "",
+        company: "",
+        location: "",
+        source: "",
+        job_url: "",
+        published_at: null,
+        discovered_at: "",
+        engagement: null,
+        status: null,
+        match_score: null,
+      },
+      application: {
+        ...demo.demoApplications[0],
+        id: `demo-${Date.now()}`,
+        job_id: jobId,
+        stage: "draft",
+      },
+    };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/start-application`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { job: HubJob; application: Application };
+  } catch {
+    return null;
+  }
+}
+
+export async function dismissHubJob(jobId: string): Promise<HubJob | null> {
+  const job = await postJobAction(jobId, "dismiss");
+  if (demo.DEMO && job) {
+        return { ...job, filter_state: "excluded", filter_reasons: ["manual_dismiss"], favorite: false, reference: false, engagement: null, status: null };
+  }
+  return job;
 }
 
 export async function undismissHubJob(jobId: string): Promise<HubJob | null> {
@@ -307,22 +890,16 @@ export async function undismissHubJob(jobId: string): Promise<HubJob | null> {
       job_url: "",
       published_at: null,
       discovered_at: "",
+      engagement: null,
       status: null,
+      favorite: false,
+      dismissed_at: null,
       match_score: null,
       filter_state: "included",
       filter_reasons: [],
     };
   }
-  try {
-    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/undismiss`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as HubJob;
-  } catch {
-    return null;
-  }
+  return postJobAction(jobId, "undismiss");
 }
 
 export async function tailorResume(jobDescription: string): Promise<TailorResult | null> {
@@ -705,16 +1282,51 @@ export async function buildResume(jobDescription = "", ai = false): Promise<Buil
 
 // ── Application tracker ──────────────────────────────────────────────────────
 
-export type ApplicationStage =
-  | "saved"
-  | "applied"
-  | "interviewing"
-  | "offer"
-  | "rejected"
-  | "archived";
+export type ApplicationStage = "draft" | "applied" | "interview" | "offer" | "closed";
+
+export type CloseReason = "not_selected" | "no_response" | "withdrew" | "other";
+
+export const CLOSE_REASON_LABELS_ZH: Record<CloseReason, string> = {
+  not_selected: "未录用",
+  no_response: "无回复",
+  withdrew: "主动结束",
+  other: "其他",
+};
+
+export interface PacketSnapshotItem {
+  binding_id: string;
+  material_id: string;
+  material_version_id: string;
+  title: string;
+  kind: string;
+  version_number: number;
+  version_label: string;
+  original_filename: string;
+  file_ref: string;
+  url: string;
+  material_purpose: string[];
+  version_purpose: string[];
+  material_notes: string;
+  version_notes: string;
+}
+
+export interface ApplicationSubmission {
+  id: string;
+  application_id: string;
+  submitted_at: string;
+  channel: string;
+  packet_snapshot?: {
+    binding_ids: string[];
+    material_version_ids: string[];
+    items?: PacketSnapshotItem[];
+    note: string;
+  };
+  notes: string;
+}
 
 export interface Application {
   id: string;
+  job_id?: string | null;
   title: string;
   employer: string;
   location: string;
@@ -725,14 +1337,20 @@ export interface Application {
   applied_date: string;
   deadline: string;
   notes: string;
+  close_reason?: CloseReason | null;
+  close_note?: string;
+  stale_applied?: boolean;
+  exclude_from_idle?: boolean;
   posting_id: string | null;
   resume_document_id: string | null;
   created_at: string;
   updated_at: string;
   raw_data: Record<string, unknown>;
+  submissions?: ApplicationSubmission[];
 }
 
 export interface ApplicationCreateBody {
+  job_id?: string;
   posting_id?: string;
   title?: string;
   employer?: string;
@@ -759,6 +1377,7 @@ export interface ApplicationPatch {
   location?: string;
   url?: string;
   source?: string;
+  exclude_from_idle?: boolean;
 }
 
 export type DocumentKind = "resume" | "cover_letter";
@@ -785,14 +1404,26 @@ export interface GeneratedDocument {
 export function getApplications(
   stage?: ApplicationStage,
   limit = 200,
+  query: { view?: "open" | "closed" | "all"; staleApplied?: boolean } = {},
 ): Promise<Application[]> {
-  if (demo.DEMO)
-    return Promise.resolve(
-      stage ? demo.demoApplications.filter((a) => a.stage === stage) : demo.demoApplications,
-    );
+  if (demo.DEMO) {
+    let rows = demo.demoApplications;
+    if (stage) rows = rows.filter((a) => a.stage === stage);
+    if (query.view === "open") {
+      rows = rows.filter((a) => a.stage !== "closed");
+    } else if (query.view === "closed") {
+      rows = rows.filter((a) => a.stage === "closed");
+    }
+    if (query.staleApplied) {
+      rows = rows.filter((a) => a.stale_applied && !a.exclude_from_idle && a.stage === "applied");
+    }
+    return Promise.resolve(rows);
+  }
   const params = new URLSearchParams();
   if (stage) params.set("stage", stage);
   params.set("limit", String(limit));
+  if (query.view && query.view !== "all") params.set("view", query.view);
+  if (query.staleApplied) params.set("stale_applied", "true");
   return getJSON<Application[]>(`/api/applications?${params}`, []);
 }
 
@@ -807,7 +1438,7 @@ export async function createApplication(body: ApplicationCreateBody): Promise<Ap
       location: body.location ?? "",
       url: body.url ?? "",
       source: body.source ?? "",
-      stage: body.stage ?? "saved",
+      stage: body.stage ?? "draft",
     };
   try {
     const res = await fetch(`${API_BASE}/api/applications`, {
@@ -833,8 +1464,10 @@ export async function updateApplication(
   patch: ApplicationPatch,
 ): Promise<Application | null> {
   if (demo.DEMO) {
-    const found = demo.demoApplications.find((a) => a.id === id) ?? demo.demoApplications[0];
-    return { ...found, ...patch };
+    const found = demo.demoApplications.find((a) => a.id === id);
+    if (!found) return Promise.resolve(null);
+    Object.assign(found, patch);
+    return Promise.resolve({ ...found });
   }
   try {
     const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}`, {
@@ -849,18 +1482,64 @@ export async function updateApplication(
   }
 }
 
-/** Delete a tracked application. Returns true on success. */
-export async function deleteApplication(id: string): Promise<boolean> {
+export async function submitApplication(
+  id: string,
+  body: { channel?: string; notes?: string } = {},
+): Promise<Application | null> {
+  if (demo.DEMO) {
+    return Promise.resolve(demo.recordDemoSubmission(id, body.notes ?? ""));
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/submit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Application;
+  } catch {
+    return null;
+  }
+}
+
+export async function closeApplication(
+  id: string,
+  close_reason: CloseReason | null = null,
+  close_note = "",
+): Promise<Application | null> {
+  if (demo.DEMO) {
+    const found = demo.demoApplications.find((a) => a.id === id) ?? demo.demoApplications[0];
+    return { ...found, stage: "closed", close_reason, close_note };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ close_reason, close_note }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Application;
+  } catch {
+    return null;
+  }
+}
+
+export async function abandonApplication(id: string): Promise<boolean> {
   if (demo.DEMO) return true;
   try {
-    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      headers: authHeaders(),
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/abandon`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
     });
     return res.ok;
   } catch {
     return false;
   }
+}
+
+/** Delete a never-submitted draft. Submitted applications must be Closed, not deleted. */
+export async function deleteApplication(id: string): Promise<boolean> {
+  return abandonApplication(id);
 }
 
 /** Count of applications per stage plus total. */
@@ -899,12 +1578,11 @@ export function getApplicationAnalytics(): Promise<ApplicationAnalytics> {
   if (demo.DEMO)
     return Promise.resolve({
       funnel: [
-        { stage: "saved", count: 5, pct_of_applied: null },
+        { stage: "draft", count: 5, pct_of_applied: null },
         { stage: "applied", count: 12, pct_of_applied: null },
-        { stage: "interviewing", count: 3, pct_of_applied: 25.0 },
+        { stage: "interview", count: 3, pct_of_applied: 25.0 },
         { stage: "offer", count: 1, pct_of_applied: 8.3 },
-        { stage: "rejected", count: 4, pct_of_applied: 33.3 },
-        { stage: "archived", count: 2, pct_of_applied: null },
+        { stage: "closed", count: 4, pct_of_applied: 33.3 },
       ],
       overall_response_rate: 33.3,
       by_source: [

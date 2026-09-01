@@ -33,6 +33,7 @@ function job(info?: SponsorshipInfo | null): HubJob {
     job_url: "https://example.test/job",
     published_at: null,
     discovered_at: "2026-08-30T00:00:00Z",
+    engagement: null,
     status: null,
     match_score: null,
     sponsorship: info ?? undefined,

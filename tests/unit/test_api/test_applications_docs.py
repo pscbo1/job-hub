@@ -75,7 +75,7 @@ def test_list_applications_with_data(tmp_path: Path) -> None:
 
 def test_list_applications_stage_filter(tmp_path: Path) -> None:
     _seed_app(tmp_path, stage=ApplicationStage.APPLIED)
-    _seed_app(tmp_path, stage=ApplicationStage.SAVED)
+    _seed_app(tmp_path, stage=ApplicationStage.DRAFT)
     resp = _client(tmp_path).get("/api/applications?stage=applied")
     assert resp.status_code == 200
     assert len(resp.json()) == 1
@@ -85,27 +85,15 @@ def test_list_applications_stage_filter(tmp_path: Path) -> None:
 # ── POST /api/applications ────────────────────────────────────────────────────
 
 
-def test_create_application_manual(tmp_path: Path) -> None:
+def test_create_application_requires_job_id(tmp_path: Path) -> None:
     resp = _client(tmp_path).post(
         "/api/applications",
-        json={"title": "Backend Eng", "employer": "BigCo", "stage": "saved"},
+        json={"title": "Backend Eng", "employer": "BigCo", "stage": "draft"},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["title"] == "Backend Eng"
-    assert body["stage"] == "saved"
-    assert "id" in body
+    assert resp.status_code == 422
 
 
-def test_create_application_from_posting_404(tmp_path: Path) -> None:
-    resp = _client(tmp_path).post(
-        "/api/applications",
-        json={"posting_id": "nonexistent-id"},
-    )
-    assert resp.status_code == 404
-
-
-def test_create_application_from_posting(tmp_path: Path) -> None:
+def test_create_application_from_posting_rejected(tmp_path: Path) -> None:
     from job_sentinel.core.models import JobPosting
 
     db = tmp_path / "j.db"
@@ -122,12 +110,7 @@ def test_create_application_from_posting(tmp_path: Path) -> None:
     repo.close()
 
     resp = _client(tmp_path).post("/api/applications", json={"posting_id": "p-001"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["title"] == "ML Engineer"
-    assert body["employer"] == "AI Corp"
-    assert body["posting_id"] == "p-001"
-    assert body["stage"] == "applied"  # defaults to APPLIED when sourced from a posting
+    assert resp.status_code == 422
 
 
 # ── GET /api/applications/{id} ────────────────────────────────────────────────
@@ -149,10 +132,10 @@ def test_get_application_not_found(tmp_path: Path) -> None:
 
 
 def test_patch_application_stage(tmp_path: Path) -> None:
-    app = _seed_app(tmp_path)
-    resp = _client(tmp_path).patch(f"/api/applications/{app.id}", json={"stage": "interviewing"})
+    app = _seed_app(tmp_path, stage=ApplicationStage.APPLIED)
+    resp = _client(tmp_path).patch(f"/api/applications/{app.id}", json={"stage": "interview"})
     assert resp.status_code == 200
-    assert resp.json()["stage"] == "interviewing"
+    assert resp.json()["stage"] == "interview"
 
 
 def test_patch_application_notes(tmp_path: Path) -> None:
@@ -177,8 +160,19 @@ def test_delete_application(tmp_path: Path) -> None:
     resp = _client(tmp_path).delete(f"/api/applications/{app.id}")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
-    # Confirm it's gone.
+    # Confirm it's gone from the default list and GET.
+    listed = _client(tmp_path).get("/api/applications")
+    assert all(row["id"] != app.id for row in listed.json())
     assert _client(tmp_path).get(f"/api/applications/{app.id}").status_code == 404
+
+
+def test_delete_submitted_application_rejected(tmp_path: Path) -> None:
+    app = _seed_app(tmp_path, stage=ApplicationStage.APPLIED)
+    resp = _client(tmp_path).delete(f"/api/applications/{app.id}")
+    assert resp.status_code == 409
+    still = _client(tmp_path).get(f"/api/applications/{app.id}")
+    assert still.status_code == 200
+    assert still.json()["id"] == app.id
 
 
 def test_delete_application_not_found(tmp_path: Path) -> None:
@@ -194,18 +188,18 @@ def test_applications_stats_empty(tmp_path: Path) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["total"] == 0
-    assert "saved" in body
+    assert "draft" in body
 
 
 def test_applications_stats_counts(tmp_path: Path) -> None:
     _seed_app(tmp_path, stage=ApplicationStage.APPLIED)
     _seed_app(tmp_path, stage=ApplicationStage.APPLIED)
-    _seed_app(tmp_path, stage=ApplicationStage.SAVED)
+    _seed_app(tmp_path, stage=ApplicationStage.DRAFT)
     resp = _client(tmp_path).get("/api/applications/stats")
     assert resp.status_code == 200
     body = resp.json()
     assert body["applied"] == 2
-    assert body["saved"] == 1
+    assert body["draft"] == 1
     assert body["total"] == 3
 
 
@@ -276,9 +270,9 @@ def test_analytics_empty_db(tmp_path: Path) -> None:
 def test_analytics_funnel_counts(tmp_path: Path) -> None:
     _seed_app(tmp_path, stage=ApplicationStage.APPLIED, applied_date="2026-06-01")
     _seed_app(tmp_path, stage=ApplicationStage.APPLIED, applied_date="2026-06-02")
-    _seed_app(tmp_path, stage=ApplicationStage.INTERVIEWING, applied_date="2026-06-03")
+    _seed_app(tmp_path, stage=ApplicationStage.INTERVIEW, applied_date="2026-06-03")
     _seed_app(tmp_path, stage=ApplicationStage.OFFER, applied_date="2026-06-04")
-    _seed_app(tmp_path, stage=ApplicationStage.REJECTED, applied_date="2026-06-05")
+    _seed_app(tmp_path, stage=ApplicationStage.CLOSED, applied_date="2026-06-05")
 
     resp = _client(tmp_path).get("/api/applications/analytics")
     assert resp.status_code == 200
@@ -286,22 +280,21 @@ def test_analytics_funnel_counts(tmp_path: Path) -> None:
 
     stage_map = {e["stage"]: e for e in body["funnel"]}
     assert stage_map["applied"]["count"] == 2
-    assert stage_map["interviewing"]["count"] == 1
+    assert stage_map["interview"]["count"] == 1
     assert stage_map["offer"]["count"] == 1
-    assert stage_map["rejected"]["count"] == 1
+    assert stage_map["closed"]["count"] == 1
 
-    # pct_of_applied: interviewing = 1/2 = 50%, offer = 1/2 = 50%
-    assert stage_map["interviewing"]["pct_of_applied"] == 50.0
+    # pct_of_applied: interview = 1/2 = 50%, offer = 1/2 = 50%
+    assert stage_map["interview"]["pct_of_applied"] == 50.0
     assert stage_map["offer"]["pct_of_applied"] == 50.0
-    # saved/archived have no pct
-    assert stage_map["saved"]["pct_of_applied"] is None
+    assert stage_map["draft"]["pct_of_applied"] is None
 
 
 def test_analytics_overall_response_rate(tmp_path: Path) -> None:
     # 4 applied, 1 interviewing, 1 offer → 2 responded / 4 applied = 50%
     for _ in range(4):
         _seed_app(tmp_path, stage=ApplicationStage.APPLIED, applied_date="2026-06-10")
-    _seed_app(tmp_path, stage=ApplicationStage.INTERVIEWING)
+    _seed_app(tmp_path, stage=ApplicationStage.INTERVIEW)
     _seed_app(tmp_path, stage=ApplicationStage.OFFER)
 
     resp = _client(tmp_path).get("/api/applications/analytics")
@@ -316,7 +309,7 @@ def test_analytics_by_source(tmp_path: Path) -> None:
         Application(title="A", employer="X", source="adzuna", stage=ApplicationStage.APPLIED)
     )
     repo.create_application(
-        Application(title="B", employer="X", source="adzuna", stage=ApplicationStage.INTERVIEWING)
+        Application(title="B", employer="X", source="adzuna", stage=ApplicationStage.INTERVIEW)
     )
     repo.create_application(
         Application(title="C", employer="X", source="wellfound", stage=ApplicationStage.APPLIED)

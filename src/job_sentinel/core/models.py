@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from job_sentinel.sponsorship.models import SponsorshipInfo
 
@@ -54,14 +54,60 @@ class ApplicationStatus(StrEnum):
     CLOSED = "closed"  # No longer visible on the portal
 
 
-class JobStatus(StrEnum):
-    """V0 Job Pool lifecycle. ``None`` in the DB means unset (new ingest)."""
+class JobEngagement(StrEnum):
+    """Legacy Job-side intent. Read-compat only.
 
-    SAVED = "saved"
-    TO_DO = "to_do"
-    APPLIED = "applied"
-    CLOSED = "closed"
+    Sealed Part 1 (2026-09-01): Reference is an independent boolean. Under Study
+    and To Do are not user-facing. New writes should leave ``engagement`` null.
+    Applied / interview / offer / closed live on Application, never on Job.
+    """
+
     REFERENCE = "reference"
+    UNDER_STUDY = "under_study"
+    TO_DO = "to_do"
+
+
+class CloseReason(StrEnum):
+    """Application close reasons. Never ``rejected``."""
+
+    NOT_SELECTED = "not_selected"
+    NO_RESPONSE = "no_response"
+    WITHDREW = "withdrew"
+    OTHER = "other"
+
+
+CLOSE_REASON_LABELS_ZH: dict[CloseReason, str] = {
+    CloseReason.NOT_SELECTED: "未录用",
+    CloseReason.NO_RESPONSE: "无回复",
+    CloseReason.WITHDREW: "主动结束",
+    CloseReason.OTHER: "其他",
+}
+
+
+class JobTask(BaseModel):
+    """Checklist item on a Job (OA, interview prep). Not an Application stage."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    job_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    due_at: date | None = Field(default=None)
+    done: bool = Field(default=False)
+    sort_order: int = Field(default=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> str:
+        return str(v).strip() if v else ""
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    model_config = {"frozen": False}
 
 
 def compute_job_fingerprint(company: str, title: str, location: str) -> str:
@@ -214,7 +260,28 @@ class Job(BaseModel):
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     fingerprint: str = Field(default="")
-    status: JobStatus | None = Field(default=None)
+    engagement: JobEngagement | None = Field(
+        default=None,
+        description="Legacy read-compat only. New writes leave this null.",
+    )
+    favorite: bool = Field(default=False, description="Product Save. Independent of Reference.")
+    reference: bool = Field(
+        default=False,
+        description="Independent keep-aside. Can coexist with Save and Application.",
+    )
+    comment: str = Field(default="")
+    next_step: str = Field(default="")
+    deadline: datetime | None = Field(default=None)
+    follow_up_at: datetime | None = Field(default=None)
+    dismissed_at: datetime | None = Field(default=None)
+    dismissed_note: str = Field(default="")
+    archived_at: datetime | None = Field(default=None)
+    archive_reason: str = Field(default="")
+    last_activity_at: datetime | None = Field(
+        default=None,
+        description="Last user tracking or task edit. Collectors never bump this.",
+    )
+    tasks: list[JobTask] = Field(default_factory=list)
     match_score: float | None = Field(default=None)
     market: str = Field(
         default="",
@@ -230,12 +297,53 @@ class Job(BaseModel):
     country_name: str = Field(default="")
     is_remote: bool = Field(default=False)
 
-    @field_validator("status", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _blank_status_is_none(cls, v: object) -> object:
+    def _accept_legacy_status(cls, data: object) -> object:
+        """Map constructor ``status`` onto ``engagement``. Reject lifecycle values."""
+        if not isinstance(data, dict):
+            return data
+        if "engagement" in data:
+            data.pop("status", None)
+            return data
+        if "status" not in data:
+            return data
+        raw = data.pop("status")
+        if raw is None or raw == "":
+            data["engagement"] = None
+            return data
+        value = raw.value if isinstance(raw, StrEnum) else str(raw)
+        if value == "saved":
+            data.setdefault("favorite", True)
+            data["engagement"] = None
+            return data
+        if value == "reference":
+            data.setdefault("reference", True)
+            data["engagement"] = None
+            return data
+        data["engagement"] = value
+        return data
+
+    @model_validator(mode="after")
+    def _promote_legacy_reference_engagement(self) -> Job:
+        """engagement=reference → reference=true, engagement=null."""
+        if self.engagement == JobEngagement.REFERENCE:
+            self.reference = True
+            self.engagement = None
+        return self
+
+    @field_validator("engagement", mode="before")
+    @classmethod
+    def _blank_engagement_is_none(cls, v: object) -> object:
         if v is None or v == "":
             return None
         return v
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status(self) -> JobEngagement | None:
+        """Serialized alias of engagement for older Job Pool clients."""
+        return self.engagement
 
     model_config = {"frozen": False}
 
@@ -272,88 +380,230 @@ class JobRaw(BaseModel):
 
 
 class ApplicationStage(StrEnum):
-    """
-    Lifecycle stages for a tracked job application (Huntr/Teal-style).
+    """Application lifecycle. Packet is not a stage. No rejected / archived stage."""
 
-    State machine is intentionally open-ended — the user drives transitions.
-    """
-
-    SAVED = "saved"
+    DRAFT = "draft"
     APPLIED = "applied"
-    INTERVIEWING = "interviewing"
+    INTERVIEW = "interview"
     OFFER = "offer"
-    REJECTED = "rejected"
-    ARCHIVED = "archived"
+    CLOSED = "closed"
+
+
+_LEGACY_APPLICATION_STAGES: dict[str, ApplicationStage] = {
+    "saved": ApplicationStage.DRAFT,
+    "draft": ApplicationStage.DRAFT,
+    "applied": ApplicationStage.APPLIED,
+    "interviewing": ApplicationStage.INTERVIEW,
+    "interview": ApplicationStage.INTERVIEW,
+    "offer": ApplicationStage.OFFER,
+    "closed": ApplicationStage.CLOSED,
+    # Never keep rejected as a stage — map to closed; caller should set close_reason.
+    "rejected": ApplicationStage.CLOSED,
+    "archived": ApplicationStage.CLOSED,
+}
+
+
+class PacketSnapshotItem(BaseModel):
+    """Denormalized Packet row frozen at Mark Submitted. File refs stay immutable."""
+
+    binding_id: str = Field(default="")
+    material_id: str = Field(default="")
+    material_version_id: str = Field(default="")
+    title: str = Field(default="")
+    kind: str = Field(default="other")
+    version_number: int = Field(default=1)
+    version_label: str = Field(default="")
+    original_filename: str = Field(default="")
+    file_ref: str = Field(default="")
+    url: str = Field(default="")
+    material_purpose: list[str] = Field(default_factory=list)
+    version_purpose: list[str] = Field(default_factory=list)
+    material_notes: str = Field(default="")
+    version_notes: str = Field(default="")
+
+
+class PacketSnapshot(BaseModel):
+    """MaterialVersion bindings captured at Mark Submitted. Packet is not a stage."""
+
+    binding_ids: list[str] = Field(default_factory=list)
+    material_version_ids: list[str] = Field(default_factory=list)
+    items: list[PacketSnapshotItem] = Field(default_factory=list)
+    note: str = Field(default="")
+
+
+class ApplicationSubmission(BaseModel):
+    """One Mark Submitted / re-apply event. History is append-only."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    application_id: str
+    submitted_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    channel: str = Field(default="")
+    packet_snapshot: PacketSnapshot = Field(default_factory=PacketSnapshot)
+    notes: str = Field(default="")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
+class ApplicationEvent(BaseModel):
+    """Append-only stage / close history. Current Application fields are a projection."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    application_id: str
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class Application(BaseModel):
-    """
-    A tracked job application, either linked to a scraped JobPosting or entered
-    manually.
+    """One Application per Job. Stage is draft | applied | interview | offer | closed.
 
-    Attributes
-    ----------
-    id : str
-        UUID4 hex, primary key.
-    title : str
-        Job/position title.
-    employer : str
-        Company or department name.
-    location : str
-        Work location.
-    url : str
-        Direct link to the posting.
-    source : str
-        Where the application came from (e.g. "12twenty", "manual", "adzuna").
-    stage : ApplicationStage
-        Current stage in the application funnel.
-    salary : str
-        Salary range / offer (free-form).
-    applied_date : str
-        ISO date string when the user submitted the application.
-    deadline : str
-        Application deadline.
-    notes : str
-        Free-form notes.
-    posting_id : str | None
-        FK into job_postings.posting_id when created from a scraped posting.
-    resume_document_id : str | None
-        FK into generated_documents.id for the résumé used.
-    created_at : datetime
-        UTC timestamp of record creation.
-    updated_at : datetime
-        UTC timestamp of the most recent update.
-    raw_data : dict
-        Catch-all for extra fields.
+    Closed is history/archive. ``close_reason`` is optional.
     """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    job_id: str | None = Field(default=None)
     title: str = Field(default="")
     employer: str = Field(default="")
     location: str = Field(default="")
     url: str = Field(default="")
     source: str = Field(default="")
-    stage: ApplicationStage = Field(default=ApplicationStage.SAVED)
+    stage: ApplicationStage = Field(default=ApplicationStage.DRAFT)
     salary: str = Field(default="")
     applied_date: str = Field(default="")
     deadline: str = Field(default="")
     notes: str = Field(default="")
+    close_reason: CloseReason | None = Field(default=None)
+    close_note: str = Field(default="")
     posting_id: str | None = Field(default=None)
     resume_document_id: str | None = Field(default=None)
+    deleted_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     raw_data: dict[str, Any] = Field(default_factory=dict)
+    submissions: list[ApplicationSubmission] = Field(default_factory=list)
+    exclude_from_idle: bool = Field(
+        default=False,
+        description="Manual exemption from idle / no-update cleanup.",
+    )
+    stale_applied: bool = Field(
+        default=False,
+        description="Computed: Applied with no meaningful update for N days.",
+    )
 
-    @field_validator("title", "employer", "location", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def _remap_legacy_stage(cls, data: object) -> object:
+        if not isinstance(data, dict) or "stage" not in data:
+            return data
+        raw = data["stage"]
+        if raw is None or raw == "":
+            data["stage"] = ApplicationStage.DRAFT
+            return data
+        value = raw.value if isinstance(raw, StrEnum) else str(raw)
+        if value in _LEGACY_APPLICATION_STAGES:
+            data["stage"] = _LEGACY_APPLICATION_STAGES[value]
+            if value == "rejected" and not data.get("close_reason"):
+                data["close_reason"] = CloseReason.NOT_SELECTED
+        return data
+
+    @field_validator(
+        "title",
+        "employer",
+        "location",
+        "url",
+        "source",
+        "salary",
+        "applied_date",
+        "deadline",
+        "notes",
+        "close_note",
+        mode="before",
+    )
     @classmethod
     def _strip(cls, v: object) -> str:
         return str(v).strip() if v else ""
+
+    @field_validator("job_id", "close_reason", mode="before")
+    @classmethod
+    def _blank_optional(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
 
     def touch(self) -> None:
         """Update ``updated_at`` to now (UTC)."""
         object.__setattr__(self, "updated_at", datetime.now(tz=UTC))
 
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+    @property
+    def has_been_submitted(self) -> bool:
+        return bool(self.submissions) or self.stage != ApplicationStage.DRAFT
+
     model_config = {"frozen": False}
+
+
+class MaterialKind(StrEnum):
+    """Library kinds for file materials. Knowledge kinds are Part 3."""
+
+    RESUME = "resume"
+    COVER_LETTER = "cover_letter"
+    PORTFOLIO = "portfolio"
+    TRANSCRIPT = "transcript"
+    OTHER = "other"
+
+
+class MaterialVersion(BaseModel):
+    """A version of a Material. Application Packet binds these, not the parent."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    material_id: str
+    version_number: int = Field(default=1, ge=1)
+    version_label: str = Field(default="")
+    purpose: list[str] = Field(default_factory=list)
+    file_ref: str = Field(default="")
+    original_filename: str = Field(default="")
+    content_type: str = Field(default="")
+    byte_size: int = Field(default=0, ge=0)
+    url: str = Field(default="")
+    notes: str = Field(default="")
+    archived_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def display_label(self) -> str:
+        extra = self.version_label.strip()
+        return f"v{self.version_number} · {extra}" if extra else f"v{self.version_number}"
+
+
+class Material(BaseModel):
+    """Materials Library item. Versions hold the takeable files or URLs."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    title: str = Field(default="")
+    kind: str = Field(default="other")
+    purpose: list[str] = Field(default_factory=list)
+    notes: str = Field(default="")
+    archived_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    versions: list[MaterialVersion] = Field(default_factory=list)
+
+    def touch(self) -> None:
+        object.__setattr__(self, "updated_at", datetime.now(tz=UTC))
+
+
+class ApplicationMaterialBinding(BaseModel):
+    """Packet membership: Application ↔ one Version of a Material."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    application_id: str
+    material_id: str
+    material_version_id: str
+    sort_order: int = Field(default=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

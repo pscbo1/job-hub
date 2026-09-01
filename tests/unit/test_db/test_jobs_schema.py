@@ -10,10 +10,11 @@ import sqlite_utils
 from pydantic import ValidationError
 
 from job_sentinel.core.models import (
+    ApplicationStage,
     Job,
+    JobEngagement,
     JobPosting,
     JobRaw,
-    JobStatus,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
 )
@@ -22,11 +23,9 @@ from job_sentinel.db.repository import SCHEMA_VERSION, JobRepository
 if TYPE_CHECKING:
     from pathlib import Path
 
-_FORBIDDEN = {
-    "favorite",
-    "next_step",
-    "comment",
+_DROP = {
     "applied_at",
+    "close_reason",
 }
 
 
@@ -60,12 +59,18 @@ class TestMigration:
         assert "jobs_raw" in names
         assert "job_postings" in names
         jobs_cols = _column_names(repo, "jobs")
-        assert _FORBIDDEN.isdisjoint(jobs_cols)
+        assert _DROP.isdisjoint(jobs_cols)
+        assert "favorite" in jobs_cols
+        assert "reference" in jobs_cols
+        assert "engagement" in jobs_cols
+        assert "dismissed_at" in jobs_cols
+        assert "archived_at" in jobs_cols
         assert "filter_state" in jobs_cols
         assert "filter_reasons" in jobs_cols
         assert "sponsorship" in jobs_cols
         assert "sponsor_employers" in names
         assert "sponsor_registry_sync" in names
+        assert "job_tasks" in names
         assert "market" in jobs_cols
         assert "fingerprint" in jobs_cols
         raw_cols = _column_names(repo, "jobs_raw")
@@ -95,6 +100,133 @@ class TestMigration:
         assert legacy.title == "Intern"
         assert int(version) == SCHEMA_VERSION
 
+    def test_v5_status_migrates_to_engagement(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "v5.db"
+        raw = sqlite_utils.Database(str(db_path))
+        raw["sentinel_meta"].insert({"key": "schema_version", "value": "5"}, pk="key")
+        raw["job_postings"].create({"posting_id": str, "title": str}, pk="posting_id")
+        raw["applications"].create(
+            {
+                "id": str,
+                "title": str,
+                "employer": str,
+                "location": str,
+                "url": str,
+                "source": str,
+                "stage": str,
+                "salary": str,
+                "applied_date": str,
+                "deadline": str,
+                "notes": str,
+                "posting_id": str,
+                "resume_document_id": str,
+                "created_at": str,
+                "updated_at": str,
+                "raw_data": str,
+            },
+            pk="id",
+        )
+        raw["generated_documents"].create({"id": str}, pk="id")
+        raw.execute(
+            """
+            CREATE TABLE jobs (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                source_job_id TEXT NOT NULL,
+                job_url TEXT NOT NULL DEFAULT '',
+                canonical_url TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                company TEXT NOT NULL DEFAULT '',
+                location TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                employment_type TEXT NOT NULL DEFAULT '',
+                salary TEXT NOT NULL DEFAULT '',
+                published_at TEXT,
+                discovered_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                fingerprint TEXT NOT NULL DEFAULT '',
+                status TEXT DEFAULT NULL,
+                match_score REAL,
+                market TEXT NOT NULL DEFAULT '',
+                filter_state TEXT NOT NULL DEFAULT 'included',
+                filter_reasons TEXT NOT NULL DEFAULT '[]',
+                CHECK (
+                    status IS NULL
+                    OR status IN ('saved', 'to_do', 'applied', 'closed', 'reference')
+                )
+            )
+            """
+        )
+        now = "2026-08-01T00:00:00+00:00"
+
+        def insert(
+            job_id: str, source_job_id: str, status: str | None, reasons: str = "[]"
+        ) -> None:
+            raw["jobs"].insert(
+                {
+                    "id": job_id,
+                    "source": "zhaopin",
+                    "source_job_id": source_job_id,
+                    "title": source_job_id,
+                    "company": "Acme",
+                    "discovered_at": now,
+                    "last_seen_at": now,
+                    "updated_at": now,
+                    "status": status,
+                    "filter_reasons": reasons,
+                }
+            )
+
+        insert("j-saved", "saved", "saved")
+        insert("j-applied", "applied", "applied")
+        insert("j-ref", "ref", "reference")
+        insert("j-null", "plain", None)
+        insert("j-dismiss", "dismissed", "saved", '["manual_dismiss"]')
+        raw["applications"].insert(
+            {
+                "id": "legacy-rejected",
+                "title": "Legacy",
+                "employer": "OldCo",
+                "stage": "rejected",
+                "created_at": now,
+                "updated_at": now,
+                "raw_data": "{}",
+            }
+        )
+        raw.conn.close()
+
+        repo = JobRepository(db_path)
+        saved = repo.get_hub_job("j-saved")
+        applied = repo.get_hub_job("j-applied")
+        ref = repo.get_hub_job("j-ref")
+        plain = repo.get_hub_job("j-null")
+        dismissed = repo.get_hub_job("j-dismiss")
+        assert saved is not None and saved.favorite is True and saved.engagement is None
+        assert applied is not None and applied.engagement is None
+        app = repo.get_application_for_job("j-applied")
+        assert app is not None
+        assert app.stage == ApplicationStage.APPLIED
+        assert app.submissions
+        assert ref is not None and ref.reference is True and ref.engagement is None
+        assert plain is not None and plain.engagement is None
+        assert dismissed is not None
+        assert dismissed.dismissed_at is not None
+        assert dismissed.favorite is False
+        reviewed = repo.update_hub_job_tracking("j-null", engagement=JobEngagement.UNDER_STUDY)
+        assert reviewed is not None
+        assert reviewed.engagement == JobEngagement.UNDER_STUDY
+        row = dict(repo._db["jobs"].get("j-null"))
+        assert row["status"] is None
+        remapped = repo.get_application("legacy-rejected")
+        assert remapped is not None
+        assert remapped.stage == ApplicationStage.CLOSED
+        assert remapped.close_reason is not None
+        assert remapped.close_reason.value == "not_selected"
+        version = repo._db["sentinel_meta"].get("schema_version")["value"]
+        repo.close()
+        assert int(version) == SCHEMA_VERSION
+
     def test_job_postings_write_still_works(self, repo: JobRepository) -> None:
         posting = JobPosting(posting_id="p-1", title="Legacy scrape")
         assert repo.save_job(posting) is True
@@ -103,21 +235,27 @@ class TestMigration:
         assert fetched.title == "Legacy scrape"
 
 
-class TestJobStatus:
-    def test_status_defaults_to_null(self, repo: JobRepository) -> None:
+class TestJobEngagement:
+    def test_engagement_defaults_to_null(self, repo: JobRepository) -> None:
         stored = repo.upsert_job(_job())
-        assert stored.status is None
+        assert stored.engagement is None
+        assert stored.last_activity_at is None
         row = dict(repo._db["jobs"].get(stored.id))
-        assert row["status"] is None
+        assert row["engagement"] is None
+        assert row["last_activity_at"] is None
 
-    def test_invalid_status_rejected(self) -> None:
+    def test_invalid_engagement_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            Job(source="x", source_job_id="1", status="under_study")  # type: ignore[arg-type]
+            Job(source="x", source_job_id="1", engagement="applied")  # type: ignore[arg-type]
 
-    @pytest.mark.parametrize("value", list(JobStatus))
-    def test_allowed_statuses(self, value: JobStatus) -> None:
-        job = Job(source="x", source_job_id="1", status=value)
-        assert job.status == value
+    @pytest.mark.parametrize("value", list(JobEngagement))
+    def test_allowed_engagements(self, value: JobEngagement) -> None:
+        job = Job(source="x", source_job_id="1", engagement=value)
+        if value is JobEngagement.REFERENCE:
+            assert job.reference is True
+            assert job.engagement is None
+        else:
+            assert job.engagement == value
 
 
 class TestUpsertInvariants:
@@ -135,18 +273,18 @@ class TestUpsertInvariants:
         assert second.discovered_at == first.discovered_at
         assert second.title == "v2"
 
-    def test_upsert_does_not_overwrite_status_or_match_score(self, repo: JobRepository) -> None:
-        first = repo.upsert_job(_job(status=JobStatus.APPLIED, match_score=0.82, title="old"))
+    def test_upsert_does_not_overwrite_engagement_or_match_score(self, repo: JobRepository) -> None:
+        first = repo.upsert_job(_job(engagement=JobEngagement.TO_DO, match_score=0.82, title="old"))
         second = repo.upsert_job(
             first.model_copy(
                 update={
-                    "status": JobStatus.TO_DO,
+                    "engagement": JobEngagement.REFERENCE,
                     "match_score": 0.1,
                     "title": "new",
                 }
             )
         )
-        assert second.status == JobStatus.APPLIED
+        assert second.engagement == JobEngagement.TO_DO
         assert second.match_score == pytest.approx(0.82)
         assert second.title == "new"
 

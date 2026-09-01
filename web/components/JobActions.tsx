@@ -1,79 +1,139 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
-import { type HubJobStatus, patchHubJobStatus } from "@/lib/api";
+import {
+  referenceHubJob,
+  saveHubJob,
+  startApplicationForJob,
+  undismissHubJob,
+  unreferenceHubJob,
+  unsaveHubJob,
+  type HubJob,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const STATUSES: HubJobStatus[] = ["saved", "to_do", "applied", "closed", "reference"];
-
-const STATUS_STYLES: Record<string, string> = {
-  saved: "bg-sky-100 text-sky-700",
-  to_do: "bg-amber-100 text-amber-700",
-  applied: "bg-violet-100 text-violet-700",
-  closed: "bg-stone-200 text-stone-500",
-  reference: "bg-emerald-100 text-emerald-700",
-};
-
 export function JobActions({
-  jobId,
-  status,
+  job,
+  variant = "discover",
   onChange,
 }: {
-  jobId: string;
-  status: HubJobStatus | null;
-  onChange?: (next: HubJobStatus | null) => void;
+  job: HubJob;
+  variant?: "discover" | "tasks";
+  onChange?: (next: HubJob) => void;
 }) {
-  const [current, setCurrent] = useState<HubJobStatus | null>(status);
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const saved = Boolean(job.favorite);
+  const referenced = Boolean(job.reference);
+  const excluded = Boolean(job.dismissed_at) || job.filter_state === "excluded";
 
-  async function update(next: HubJobStatus | null) {
-    if (busy || next === current) return;
+  async function run(op: () => Promise<HubJob | null>) {
+    if (busy) return;
     setBusy(true);
     setFailed(false);
-    const saved = await patchHubJobStatus(jobId, next);
-    if (saved) {
-      setCurrent(next);
-      onChange?.(next);
+    const next = await op();
+    if (next) onChange?.(next);
+    else setFailed(true);
+    setBusy(false);
+  }
+
+  async function onStartApplication(toPacket = false) {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    const result = await startApplicationForJob(job.id);
+    if (result) {
+      onChange?.(result.job);
+      const qs = toPacket
+        ? `id=${encodeURIComponent(result.application.id)}&tab=packet`
+        : `id=${encodeURIComponent(result.application.id)}`;
+      router.push(`/applications?${qs}`);
     } else {
       setFailed(true);
     }
     setBusy(false);
   }
 
-  const label = current ?? "No status";
+  function onOpenMaterials() {
+    if (job.application_id) {
+      router.push(`/applications?id=${encodeURIComponent(job.application_id)}&tab=packet`);
+      return;
+    }
+    router.push(`/applications?job=${encodeURIComponent(job.id)}&tab=packet`);
+  }
+
+  if (excluded && variant === "discover") {
+    return (
+      <>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void run(() => undismissHubJob(job.id))}
+          className="inline-flex h-8 items-center rounded-lg border border-ink bg-ink px-3 text-xs font-medium text-white disabled:opacity-50"
+        >
+          Restore
+        </button>
+        {failed && <span className="text-xs text-amber-600">Update failed</span>}
+      </>
+    );
+  }
 
   return (
     <>
-      <label className="inline-flex h-8 items-center gap-2 text-xs text-muted">
-        Status
-        <select
-          value={current ?? ""}
-          disabled={busy}
-          aria-label="Job status"
-          onChange={(e) => {
-            const v = e.target.value;
-            void update(v === "" ? null : (v as HubJobStatus));
-          }}
-          className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-ink disabled:opacity-50"
-        >
-          <option value="">No status</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </label>
-      <span
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void run(() => (saved ? unsaveHubJob(job.id) : saveHubJob(job.id)))}
         className={cn(
-          "ml-auto inline-flex h-8 items-center rounded-full px-3 text-xs font-medium",
-          STATUS_STYLES[label] ?? "bg-stone-100 text-stone-500",
+          "inline-flex h-8 items-center rounded-lg border px-3 text-xs font-medium transition-colors disabled:opacity-50",
+          saved
+            ? "border-ink bg-ink text-white"
+            : "border-line text-ink hover:border-ink/30 hover:bg-bg",
         )}
       >
-        {label}
-      </span>
+        {saved ? "Saved" : "Save"}
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() =>
+          void run(() => (referenced ? unreferenceHubJob(job.id) : referenceHubJob(job.id)))
+        }
+        className={cn(
+          "inline-flex h-8 items-center rounded-lg border px-3 text-xs font-medium transition-colors disabled:opacity-50",
+          referenced
+            ? "border-emerald-700 bg-emerald-700 text-white"
+            : "border-line text-ink hover:border-ink/30 hover:bg-bg",
+        )}
+      >
+        {referenced ? "Referenced" : "Reference"}
+      </button>
+      {variant === "discover" && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void onStartApplication()}
+          className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink transition-colors hover:border-ink/30 hover:bg-bg disabled:opacity-50"
+        >
+          Start application
+        </button>
+      )}
+      {variant === "tasks" && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            if (job.application_id) onOpenMaterials();
+            else void onStartApplication(true);
+          }}
+          className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink transition-colors hover:border-ink/30 hover:bg-bg disabled:opacity-50"
+        >
+          Open materials
+        </button>
+      )}
       {failed && <span className="text-xs text-amber-600">Update failed</span>}
     </>
   );

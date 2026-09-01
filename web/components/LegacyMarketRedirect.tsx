@@ -7,13 +7,17 @@ import { jobsPoolHref } from "@/lib/discoveredRange";
 import { searchPath, type MarketId } from "@/lib/markets";
 import { readLastMarket, readPoolPrefs } from "@/lib/marketPrefs";
 
-export function LegacyMarketRedirect({ page }: { page: "jobs" | "search" }) {
+export function LegacyMarketRedirect({ page }: { page: "jobs" | "search" | "my-jobs" }) {
   const router = useRouter();
 
   useEffect(() => {
     const market: MarketId = readLastMarket();
     if (page === "search") {
       router.replace(searchPath(market));
+      return;
+    }
+    if (page === "my-jobs") {
+      router.replace("/tasks");
       return;
     }
     const prefs = readPoolPrefs(market);
@@ -34,7 +38,7 @@ export function LegacyMarketRedirect({ page }: { page: "jobs" | "search" }) {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-12 text-sm text-muted">
-      Opening {page === "search" ? "Collect Jobs" : "Job Pool"}…
+      Opening {page === "search" ? "Collect Jobs" : page === "my-jobs" ? "Tasks" : "Discover"}…
     </div>
   );
 }

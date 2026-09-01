@@ -10,11 +10,11 @@
 
 ## Current objective
 
-Deliver the smallest usable Job Hub V0:
+Deliver the smallest usable Job Hub V0, then the sealed Part 1 product model (2026-09-01):
 
-`Channel / Manual Import → jobs_raw → Normalize → Trust Gate → Dedup → Rule Filter → Job Pool → Return to Source → Status / Next Step / Comment`
+`Collect → Discover → (Dismiss/Excluded | Save | Reference | Start Application → Draft → Mark Submitted → Applied → Interview → Offer → Closed)`
 
-V0 is complete only when the Exit Criteria and Acceptance Criteria in `docs/PRD.md` pass.
+Nav is **Collect Jobs · Discover · Tasks · Applications** only. Reference is an independent boolean (can coexist with Save and Application). To Do / Under Study are not user-facing. Application Closed is history. `close_reason` is optional. Idle auto-archive applies only to Excluded/Dismissed jobs (Settings default OFF, 14 days). Tasks membership is next_step OR deadline OR unfinished job_task OR Application.stage=draft.
 
 ## Implementation strategy
 
@@ -35,7 +35,7 @@ Do not implement these without an explicit request:
 - Agent runtime or MCP integration
 - Resume, profile, document, or cover-letter generation
 - Telegram or email notifications
-- Full application CRM or communication history
+- Full application CRM or communication history (V0). Part 1 tracking is in scope: 1:1 Application, submissions, Tasks, excluded auto-archive.
 - Grok Cloud collection
 - ATS autofill or automatic application submission
 - Supabase, Vercel, or cloud scheduling
@@ -51,12 +51,16 @@ Disable or remove upstream surfaces that expose these features in the V0 UI. Pre
 - Raw records are stored before normalization.
 - Repeated ingestion is idempotent.
 - High-confidence duplicate rules may merge automatically; uncertain matches enter Review.
-- Human-set Status, Favorite, Next Step, Comment, and applied_at are never overwritten by a collector run.
-- Favorite is independent from lifecycle Status.
-- New jobs default to `NULL` (no lifecycle status until the user sets one).
-- Valid Status values are `saved`, `to_do`, `applied`, `closed`, and `reference`.
-- Setting Status to `Applied` writes applied_at when it is empty.
-- Excluded jobs remain stored with filter reasons and stay hidden from the default view.
+- Human-set Favorite (Save), Reference, Next Step, Comment, dismissed_at, archived_at, and Application fields are never overwritten by a collector run.
+- Favorite (Save) and Reference are independent booleans. They can coexist with each other and with an Application. New jobs default to both false. Collectors never write a lifecycle Status onto Job and never bump `last_activity_at`.
+- Do not write `engagement=under_study` or `to_do`. `engagement` is legacy read-compat only. Migrated `engagement=reference` becomes `reference=true`, `engagement=null`.
+- Application stages are `draft`, `applied`, `interview`, `offer`, and `closed`. Never rejected. Closed is history (no separate Application archived stage).
+- 1 Job ↔ 1 Application. Start Application is allowed from any normal Discover job. Re-apply appends a submission event and reopens Applied.
+- Dismiss and Save/Reference are mutually exclusive.
+- Setting Application to Closed does not require close_reason. Never use a required Close modal.
+- Idle auto-archive (default off, 14 days) sets `jobs.archived_at` only for Excluded/Dismissed jobs. Never Saved, Reference, active Applications, or plain included jobs. Archived excluded jobs remain listed under Discover Excluded. CLI: `job-sentinel archive [--force] [--dry-run]`.
+- Tasks membership is next_step OR deadline OR unfinished job_task OR Application.stage=draft. Save-only / Reference-only / plain Discover jobs are not Tasks.
+- Excluded / dismissed / archived jobs remain stored and stay hidden from the default view.
 - A failing source never aborts other sources or discards successful records.
 - CAPTCHA and login expiry require visible human action; do not bypass them.
 - External application and communication actions return the user to the original source.

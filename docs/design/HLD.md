@@ -4,6 +4,8 @@
 **Author:** Harshit Wandhare  
 **Last updated:** 2026
 
+Job Hub product law lives in `docs/PRD.md` (PRD02 sealed 2026-09-01). This HLD is the upstream Job Sentinel design reference. Where it mentions Job-level saved/applied/closed or Rejected, follow the PRD: Job engagement is `null | reference | under_study | to_do`; Applied…Closed live on Application; Archive is `jobs.archived_at`; there is no Rejected.
+
 ---
 
 ## 1. Purpose

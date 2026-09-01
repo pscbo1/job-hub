@@ -11,17 +11,16 @@ import { jobsPath, marketFromPath, searchPath, type MarketId } from "@/lib/marke
 import { readLastMarket } from "@/lib/marketPrefs";
 import { cn } from "@/lib/utils";
 
-const PRIMARY = [
-  { href: "/search", label: "Collect Jobs", page: "search" as const },
-  { href: "/jobs", label: "Job Pool", page: "jobs" as const },
+const PRIMARY: { href: string; label: string; page?: "search" | "jobs" }[] = [
+  { href: "/search", label: "Collect Jobs", page: "search" },
+  { href: "/jobs", label: "Discover", page: "jobs" },
   { href: "/applications", label: "Applications" },
-  { href: "/resumes", label: "Documents" },
+  { href: "/tasks", label: "Tasks" },
+  { href: "/materials", label: "Materials" },
 ];
 
 const SECONDARY = [
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/studio", label: "Studio" },
-  { href: "/profile", label: "Profile" },
   { href: "/chat", label: "Chat" },
   { href: "/interview", label: "Interview Prep" },
   { href: "/settings", label: "Settings" },
@@ -111,7 +110,7 @@ export function Nav() {
     return l.href;
   }
   function itemActive(l: (typeof PRIMARY)[number]): boolean {
-    if (l.page === "jobs") return /\/jobs(?:\/|$)/.test(pathname);
+    if (l.page === "jobs") return /\/jobs(?:\/|$)/.test(pathname) && !pathname.includes("my-jobs");
     if (l.page === "search") return /\/search(?:\/|$)/.test(pathname);
     return isActive(l.href);
   }

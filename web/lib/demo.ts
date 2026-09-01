@@ -16,7 +16,10 @@ import type {
   JobSourceStatus,
   LlmStatus,
   MatchResult,
+  Material,
+  MaterialVersion,
   OpsStatus,
+  PacketItem,
   Profile,
   SearchResponse,
   TailorResult,
@@ -153,7 +156,9 @@ export const demoHubJobs: HubJob[] = [
     job_url: "http://www.zhaopin.com/jobdetail/CC383625320J40878294709.htm",
     published_at: null,
     discovered_at: "2026-08-25T00:00:00Z",
+    engagement: null,
     status: null,
+    favorite: false,
     match_score: null,
     salary: "面议",
   },
@@ -166,9 +171,25 @@ export const demoHubJobs: HubJob[] = [
     job_url: "https://www.liepin.com/job/1985138523.shtml",
     published_at: null,
     discovered_at: "2026-08-25T00:00:00Z",
-    status: "saved",
+    status: null,
+    engagement: null,
+    favorite: true,
+    reference: true,
     match_score: null,
     salary: "23-50k·15薪",
+    deadline: "2026-09-12",
+    next_step: "Prep OA",
+    tasks: [
+      {
+        id: "demo-task-oa",
+        job_id: "demo-hub-2",
+        title: "OA",
+        due_at: "2026-09-05",
+        done: false,
+        sort_order: 0,
+        created_at: "2026-08-25T00:00:00Z",
+      },
+    ],
   },
 ];
 
@@ -179,12 +200,19 @@ function uid(): string {
 }
 
 export const demoApplications: Application[] = [
-  app("Backend Engineer (Python)", "Stripe", "Remote", "remoteok", "applied", { applied_date: "2026-06-09", salary: "$120k–$160k" }),
-  app("ML Engineer", "Hugging Face", "Remote", "himalayas", "interviewing", { applied_date: "2026-06-05" }),
-  app("Platform Engineer", "Datadog", "New York, NY", "adzuna", "saved", {}),
-  app("SWE Intern — Summer 2026", "Google", "Mountain View, CA", "manual", "applied", { applied_date: "2026-06-01" }),
+  app("Backend Engineer (Python)", "Stripe", "Remote", "remoteok", "applied", {
+    applied_date: "2026-06-09",
+    salary: "$120k–$160k",
+    stale_applied: true,
+  }),
+  app("ML Engineer", "Hugging Face", "Remote", "himalayas", "interview", { applied_date: "2026-06-05" }),
+  app("Platform Engineer", "Datadog", "New York, NY", "adzuna", "draft", {}),
+  app("SWE Intern — Summer 2026", "Google", "Mountain View, CA", "manual", "applied", {
+    applied_date: "2026-06-01",
+    exclude_from_idle: true,
+  }),
   app("Backend Intern", "Cloudflare", "Remote", "remoteok", "offer", { applied_date: "2026-05-20" }),
-  app("Data Engineer", "Snowflake", "Austin, TX", "adzuna", "rejected", { applied_date: "2026-05-15" }),
+  app("Data Engineer", "Snowflake", "Austin, TX", "adzuna", "closed", { applied_date: "2026-05-15", close_reason: "not_selected" }),
 ];
 
 function app(
@@ -210,6 +238,11 @@ function app(
     notes: "",
     posting_id: null,
     resume_document_id: null,
+    close_reason: opts.close_reason ?? null,
+    close_note: opts.close_note ?? "",
+    exclude_from_idle: opts.exclude_from_idle ?? false,
+    stale_applied: opts.stale_applied ?? false,
+    submissions: opts.submissions ?? [],
     created_at: now,
     updated_at: now,
     raw_data: {},
@@ -217,12 +250,11 @@ function app(
 }
 
 export const demoStats: Record<string, number> = {
-  saved: 1,
+  draft: 1,
   applied: 2,
-  interviewing: 1,
+  interview: 1,
   offer: 1,
-  rejected: 1,
-  archived: 0,
+  closed: 1,
   total: 6,
 };
 
@@ -307,6 +339,237 @@ export const demoLlmStatus: LlmStatus = {
 };
 
 export const demoAuth: AuthStatus = { mode: "off", users_exist: false, user: null };
+
+function material(
+  id: string,
+  title: string,
+  kind: string,
+  purpose: string[],
+  versions: MaterialVersion[],
+): Material {
+  return {
+    id,
+    title,
+    kind,
+    purpose,
+    notes: "",
+    archived_at: null,
+    created_at: "2026-06-01T10:00:00Z",
+    updated_at: "2026-06-12T10:00:00Z",
+    versions,
+  };
+}
+
+function version(
+  id: string,
+  materialId: string,
+  n: number,
+  label: string,
+  filename: string,
+  purpose: string[],
+  url = "",
+): MaterialVersion {
+  return {
+    id,
+    material_id: materialId,
+    version_number: n,
+    version_label: label,
+    purpose,
+    file_ref: filename ? `demo/${id}/${filename}` : "",
+    original_filename: filename,
+    content_type: filename.endsWith(".pdf") ? "application/pdf" : "",
+    byte_size: 12000,
+    url,
+    notes: "",
+    archived_at: null,
+    created_at: "2026-06-01T10:00:00Z",
+    display_label: label ? `v${n} · ${label}` : `v${n}`,
+  };
+}
+
+export const demoMaterials: Material[] = [
+  material("mat-en-resume", "英文简历", "resume", ["research"], [
+    version("ver-en-2", "mat-en-resume", 2, "研究岗版", "en-resume-v2.pdf", ["研究岗"]),
+    version("ver-en-1", "mat-en-resume", 1, "", "en-resume-v1.pdf", []),
+  ]),
+  material("mat-cn-resume", "中文简历", "resume", ["校招"], [
+    version("ver-cn-1", "mat-cn-resume", 1, "", "cn-resume.pdf", []),
+  ]),
+  material("mat-portfolio", "作品集", "portfolio", ["backend"], [
+    version("ver-port-1", "mat-portfolio", 1, "", "", [], "https://example.com/portfolio"),
+  ]),
+];
+
+const demoPacketIds: Record<string, string[]> = {
+  [demoApplications[0].id]: ["ver-en-2", "ver-port-1"],
+  [demoApplications[2].id]: ["ver-en-1"],
+};
+
+{
+  const first = demoApplications[0];
+  const packet = demoPacketFor(first.id);
+  first.submissions = [
+    {
+      id: "demo-sub-1",
+      application_id: first.id,
+      submitted_at: "2026-06-09T12:00:00Z",
+      channel: "",
+      notes: "",
+      packet_snapshot: {
+        binding_ids: packet.map((item) => item.binding.id),
+        material_version_ids: packet.map((item) => item.binding.material_version_id),
+        items: packet.map((item) => ({
+          binding_id: item.binding.id,
+          material_id: item.material?.id ?? "",
+          material_version_id: item.version?.id ?? "",
+          title: item.material?.title ?? "",
+          kind: item.material?.kind ?? "other",
+          version_number: item.version?.version_number ?? 1,
+          version_label: item.version?.version_label ?? "",
+          original_filename: item.version?.original_filename ?? "",
+          file_ref: item.version?.file_ref ?? "",
+          url: item.version?.url ?? "",
+          material_purpose: item.material?.purpose ?? [],
+          version_purpose: item.version?.purpose ?? [],
+          material_notes: item.material?.notes ?? "",
+          version_notes: item.version?.notes ?? "",
+        })),
+        note: "",
+      },
+    },
+  ];
+}
+
+export function makeDemoMaterial(body: {
+  title: string;
+  kind?: string;
+  purpose?: string[];
+  notes?: string;
+  url?: string;
+  version_label?: string;
+}): Material {
+  const id = uid();
+  const v = makeDemoVersion(
+    { id, versions: [] } as unknown as Material,
+    { url: body.url, version_label: body.version_label, purpose: body.purpose },
+  );
+  return {
+    id,
+    title: body.title || "Untitled material",
+    kind: body.kind || "other",
+    purpose: body.purpose ?? [],
+    notes: body.notes ?? "",
+    archived_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    versions: [v],
+  };
+}
+
+export function makeDemoVersion(
+  materialRow: Material,
+  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string },
+): MaterialVersion {
+  const n = (materialRow.versions[0]?.version_number ?? 0) + 1;
+  const id = uid();
+  const label = body.version_label ?? "";
+  return {
+    id,
+    material_id: materialRow.id,
+    version_number: n,
+    version_label: label,
+    purpose: body.purpose ?? [],
+    file_ref: body.url ? "" : `demo/${id}/file.pdf`,
+    original_filename: body.url ? "" : "file.pdf",
+    content_type: body.url ? "" : "application/pdf",
+    byte_size: 1,
+    url: body.url ?? "",
+    notes: body.notes ?? "",
+    archived_at: null,
+    created_at: new Date().toISOString(),
+    display_label: label ? `v${n} · ${label}` : `v${n}`,
+  };
+}
+
+export function demoPacketFor(appId: string): PacketItem[] {
+  const ids = demoPacketIds[appId] ?? [];
+  const items: PacketItem[] = [];
+  ids.forEach((versionId, index) => {
+    const materialRow = demoMaterials.find((m) => m.versions.some((v) => v.id === versionId));
+    const versionRow = materialRow?.versions.find((v) => v.id === versionId);
+    if (!materialRow || !versionRow) return;
+    items.push({
+      binding: {
+        id: `bind-${appId}-${versionId}`,
+        application_id: appId,
+        material_id: materialRow.id,
+        material_version_id: versionRow.id,
+        sort_order: index,
+        created_at: "2026-06-12T10:00:00Z",
+      },
+      material: materialRow,
+      version: versionRow,
+    });
+  });
+  return items;
+}
+
+export function setDemoPacket(appId: string, versionIds: string[]): void {
+  demoPacketIds[appId] = [...versionIds];
+}
+
+export function changeDemoPacketVersion(appId: string, bindingId: string, versionId: string): void {
+  const items = demoPacketFor(appId);
+  const next = items.map((item) =>
+    item.binding.id === bindingId ? versionId : item.binding.material_version_id,
+  );
+  demoPacketIds[appId] = next;
+}
+
+export function removeDemoPacketBinding(appId: string, bindingId: string): void {
+  const items = demoPacketFor(appId).filter((item) => item.binding.id !== bindingId);
+  demoPacketIds[appId] = items.map((item) => item.binding.material_version_id);
+}
+
+export function recordDemoSubmission(appId: string, notes = ""): Application | null {
+  const found = demoApplications.find((a) => a.id === appId);
+  if (!found) return null;
+  const packet = demoPacketFor(appId);
+  const submission = {
+    id: uid(),
+    application_id: appId,
+    submitted_at: new Date().toISOString(),
+    channel: "",
+    notes,
+    packet_snapshot: {
+      binding_ids: packet.map((item) => item.binding.id),
+      material_version_ids: packet.map((item) => item.binding.material_version_id),
+      items: packet.map((item) => ({
+        binding_id: item.binding.id,
+        material_id: item.material?.id ?? "",
+        material_version_id: item.version?.id ?? "",
+        title: item.material?.title ?? "",
+        kind: item.material?.kind ?? "other",
+        version_number: item.version?.version_number ?? 1,
+        version_label: item.version?.version_label ?? "",
+        original_filename: item.version?.original_filename ?? "",
+        file_ref: item.version?.file_ref ?? "",
+        url: item.version?.url ?? "",
+        material_purpose: item.material?.purpose ?? [],
+        version_purpose: item.version?.purpose ?? [],
+        material_notes: item.material?.notes ?? "",
+        version_notes: item.version?.notes ?? "",
+      })),
+      note: "",
+    },
+  };
+  found.stage = "applied";
+  found.close_reason = null;
+  found.close_note = "";
+  found.applied_date = found.applied_date || new Date().toISOString().slice(0, 10);
+  found.submissions = [...(found.submissions ?? []), submission];
+  return { ...found };
+}
 
 export const demoOps: OpsStatus = {
   config_ok: true,

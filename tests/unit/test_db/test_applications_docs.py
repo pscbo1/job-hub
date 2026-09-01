@@ -43,8 +43,8 @@ def _doc(**kwargs: object) -> GeneratedDocument:
 # ── schema version ────────────────────────────────────────────────────────────
 
 
-def test_schema_version_is_5() -> None:
-    assert SCHEMA_VERSION == 5
+def test_schema_version_is_9() -> None:
+    assert SCHEMA_VERSION == 9
 
 
 def test_migration_creates_tables(tmp_path: Path) -> None:
@@ -78,7 +78,7 @@ class TestApplicationCRUD:
         assert fetched is not None
         assert fetched.title == "SWE Intern"
         assert fetched.employer == "Acme"
-        assert fetched.stage == ApplicationStage.SAVED
+        assert fetched.stage == ApplicationStage.DRAFT
 
     def test_get_missing_returns_none(self, repo: JobRepository) -> None:
         assert repo.get_application("does-not-exist") is None
@@ -91,7 +91,7 @@ class TestApplicationCRUD:
 
     def test_list_filtered_by_stage(self, repo: JobRepository) -> None:
         a1 = _app(stage=ApplicationStage.APPLIED)
-        a2 = _app(stage=ApplicationStage.SAVED)
+        a2 = _app(stage=ApplicationStage.DRAFT)
         repo.create_application(a1)
         repo.create_application(a2)
         applied = repo.list_applications(stage=ApplicationStage.APPLIED)
@@ -111,10 +111,10 @@ class TestApplicationCRUD:
     def test_update_fields(self, repo: JobRepository) -> None:
         app = _app()
         repo.create_application(app)
-        assert repo.update_application(app.id, stage=ApplicationStage.INTERVIEWING, notes="wow")
+        assert repo.update_application(app.id, stage=ApplicationStage.INTERVIEW, notes="wow")
         fetched = repo.get_application(app.id)
         assert fetched is not None
-        assert fetched.stage == ApplicationStage.INTERVIEWING
+        assert fetched.stage == ApplicationStage.INTERVIEW
         assert fetched.notes == "wow"
 
     def test_update_missing_returns_false(self, repo: JobRepository) -> None:
@@ -163,15 +163,15 @@ class TestApplicationStats:
     def test_empty_stats_zero(self, repo: JobRepository) -> None:
         stats = repo.application_stats()
         assert stats["total"] == 0
-        assert stats["saved"] == 0
+        assert stats["draft"] == 0
 
     def test_counts_per_stage(self, repo: JobRepository) -> None:
         repo.create_application(_app(stage=ApplicationStage.APPLIED))
         repo.create_application(_app(stage=ApplicationStage.APPLIED))
-        repo.create_application(_app(stage=ApplicationStage.SAVED))
+        repo.create_application(_app(stage=ApplicationStage.DRAFT))
         stats = repo.application_stats()
         assert stats["applied"] == 2
-        assert stats["saved"] == 1
+        assert stats["draft"] == 1
         assert stats["total"] == 3
 
 

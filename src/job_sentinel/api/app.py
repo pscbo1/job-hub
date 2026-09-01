@@ -19,11 +19,11 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from loguru import logger
@@ -33,14 +33,16 @@ from job_sentinel.api.chat import ChatMessage, ChatReply
 from job_sentinel.api.chat import answer as chat_answer
 from job_sentinel.api.ops import OpsConfigError, OpsConflictError, get_runner
 from job_sentinel.core.models import (
-    Application,
     ApplicationStage,
     ApplicationStatus,
+    CloseReason,
     DocumentKind,
     GeneratedDocument,
     Job,
+    JobEngagement,
     JobPosting,
-    JobStatus,
+    JobTask,
+    PacketSnapshot,
 )
 from job_sentinel.documents.match import MatchResult, match_profile_to_job
 from job_sentinel.documents.tailor import KeywordTailor, TailorResult
@@ -112,13 +114,63 @@ class StatusRequest(BaseModel):
 
 
 class HubJobStatusRequest(BaseModel):
-    """V0 Job Pool status. ``null`` clears the field (unset)."""
+    """Job Pool tracking patch. ``status`` is accepted as a legacy engagement alias."""
 
-    status: JobStatus | None = None
+    engagement: JobEngagement | None = None
+    status: JobEngagement | None = None
+    favorite: bool | None = None
+    reference: bool | None = None
+    comment: str | None = None
+    next_step: str | None = None
+    deadline: datetime | None = None
+    follow_up_at: datetime | None = None
 
-    @field_validator("status", mode="before")
+    @field_validator("engagement", "status", mode="before")
     @classmethod
-    def _blank_status(cls, v: object) -> object:
+    def _blank_engagement(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    @field_validator("deadline", "follow_up_at", mode="before")
+    @classmethod
+    def _blank_dates(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+
+class JobTaskCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    due_at: date | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> object:
+        return str(v).strip() if v is not None else v
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+
+class JobTaskPatchRequest(BaseModel):
+    title: str | None = None
+    due_at: date | None = None
+    done: bool | None = None
+    sort_order: int | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> object:
+        return str(v).strip() if isinstance(v, str) else v
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
         if v is None or v == "":
             return None
         return v
@@ -257,6 +309,7 @@ class CompanyBoardRequest(BaseModel):
 
 class ApplicationCreateRequest(BaseModel):
     # From a tracked posting — if provided, fields are copied from it.
+    job_id: str | None = Field(default=None)
     posting_id: str | None = Field(default=None)
     # Manual fields (also used when overriding posting-sourced values).
     title: str = Field(default="")
@@ -264,7 +317,7 @@ class ApplicationCreateRequest(BaseModel):
     location: str = Field(default="")
     url: str = Field(default="")
     source: str = Field(default="")
-    stage: ApplicationStage = Field(default=ApplicationStage.SAVED)
+    stage: ApplicationStage = Field(default=ApplicationStage.DRAFT)
     salary: str = Field(default="")
     applied_date: str = Field(default="")
     deadline: str = Field(default="")
@@ -284,6 +337,75 @@ class ApplicationPatchRequest(BaseModel):
     location: str | None = Field(default=None)
     url: str | None = Field(default=None)
     source: str | None = Field(default=None)
+    close_reason: CloseReason | None = Field(default=None)
+    close_note: str | None = Field(default=None)
+    exclude_from_idle: bool | None = Field(default=None)
+
+
+class MarkSubmittedRequest(BaseModel):
+    channel: str = ""
+    notes: str = ""
+    packet_snapshot: PacketSnapshot | None = None
+
+
+class CloseApplicationRequest(BaseModel):
+    close_reason: CloseReason | None = None
+    close_note: str = ""
+
+
+class ArchiveJobRequest(BaseModel):
+    reason: str = ""
+
+
+class ArchiveSettingsRequest(BaseModel):
+    enabled: bool = False
+    idle_days: int = Field(default=14, ge=1, le=365)
+    force: bool = False
+    dry_run: bool = False
+
+
+class IdleCleanupSettingsRequest(BaseModel):
+    enabled: bool = False
+    idle_days: int = Field(default=14, ge=1, le=365)
+
+
+class MaterialWriteRequest(BaseModel):
+    title: str = ""
+    kind: str = "other"
+    purpose: list[str] = Field(default_factory=list)
+    notes: str = ""
+    url: str = ""
+    version_label: str = ""
+    version_purpose: list[str] = Field(default_factory=list)
+    version_notes: str = ""
+
+
+class MaterialPatchRequest(BaseModel):
+    title: str | None = None
+    kind: str | None = None
+    purpose: list[str] | None = None
+    notes: str | None = None
+
+
+class MaterialVersionWriteRequest(BaseModel):
+    url: str = ""
+    version_label: str = ""
+    purpose: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class MaterialVersionPatchRequest(BaseModel):
+    version_label: str | None = None
+    purpose: list[str] | None = None
+    notes: str | None = None
+
+
+class PacketReplaceRequest(BaseModel):
+    material_version_ids: list[str] = Field(default_factory=list)
+
+
+class PacketBindRequest(BaseModel):
+    material_version_id: str
 
 
 def _summary(p: Profile) -> ProfileSummary:
@@ -297,6 +419,42 @@ def _summary(p: Profile) -> ProfileSummary:
         awards=len(p.awards),
         publications=len(p.publications),
     )
+
+
+def _job_action(db_path: Path, job_id: str, op: Any) -> Job:
+    from job_sentinel.db.repository import JobRepository
+    from job_sentinel.jobs.actions import TrackingError
+
+    repo = JobRepository(db_path)
+    try:
+        try:
+            job = op(repo)
+        except TrackingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    finally:
+        repo.close()
+    if not isinstance(job, Job):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return job
+
+
+def _parse_purpose_json(raw: str) -> list[str]:
+    import json
+
+    try:
+        parsed = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return []
+
+
+def _json_object(model: BaseModel) -> dict[str, Any]:
+    dumped = model.model_dump(mode="json")
+    if not isinstance(dumped, dict):
+        raise TypeError("expected JSON object")
+    return dumped
 
 
 def _parse_since(value: str | None) -> datetime | None:
@@ -347,11 +505,13 @@ def create_app(
     profile_path: Path | None = None,
     db_path: Path | None = None,
     auth_dir: Path | None = None,
+    materials_dir: Path | None = None,
 ) -> FastAPI:
     """Build the FastAPI app. Paths are injectable so tests stay isolated."""
     profile_path = profile_path or DEFAULT_PROFILE_PATH
     db_path = db_path or (_DATA_DIR / "jobs.db")
     auth_dir = auth_dir or _DATA_DIR
+    materials_dir = materials_dir or (_DATA_DIR / "materials")
 
     app = FastAPI(
         title="Job Sentinel API",
@@ -497,6 +657,11 @@ def create_app(
         sources: str | None = None,
         remote: bool | None = None,
         posted_days: int | None = None,
+        view: str = "discover",
+        include_dismissed: bool = False,
+        include_archived: bool = False,
+        q: str = "",
+        has_draft: bool | None = None,
     ) -> list[Job]:
         """Job Pool: canonical ``jobs`` rows (not legacy ``job_postings``)."""
         from job_sentinel.db.repository import JobRepository
@@ -514,6 +679,11 @@ def create_app(
             raise HTTPException(
                 status_code=422, detail="filter_state must be included, excluded, or all"
             )
+        view_key = view.strip().lower()
+        if view_key == "my_jobs":
+            view_key = "tasks"
+        if view_key not in {"discover", "tasks"}:
+            raise HTTPException(status_code=422, detail="view must be discover or tasks")
         since_dt = _parse_since(since)
         mid = _parse_market_param(market)
         source_filter = _parse_source_list(sources)
@@ -545,6 +715,11 @@ def create_app(
                 posted_since=_posted_since(posted_days),
                 country=country,
                 remote=remote,
+                view=view_key,
+                include_dismissed=include_dismissed,
+                include_archived=include_archived,
+                q=q,
+                has_draft=has_draft,
             )
         finally:
             repo.close()
@@ -554,47 +729,180 @@ def create_app(
 
     @app.patch("/api/jobs/{job_id}", response_model=Job)
     def patch_hub_job(job_id: str, req: HubJobStatusRequest) -> Job:
-        """Update Job Pool status only. Null clears status."""
+        """Update Job tracking: Save, Reference, comment, next step, deadline."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, save_job, set_reference
+
+        repo = JobRepository(db_path)
+        try:
+            if repo.get_hub_job(job_id) is None:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            job = repo.get_hub_job(job_id)
+            assert job is not None
+            try:
+                if req.favorite is not None:
+                    job = save_job(repo, job_id, saved=req.favorite)
+                if req.reference is not None:
+                    job = set_reference(repo, job_id, referenced=req.reference)
+                fields_set = req.model_fields_set
+                if "engagement" in fields_set or (
+                    "status" in fields_set and req.favorite is None and req.engagement is None
+                ):
+                    requested = req.engagement if "engagement" in fields_set else req.status
+                    if requested == JobEngagement.REFERENCE:
+                        job = set_reference(repo, job_id, referenced=True)
+                    elif requested in {JobEngagement.UNDER_STUDY, JobEngagement.TO_DO}:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="under_study and to_do are not writable.",
+                        )
+                    elif requested is None:
+                        job = repo.update_hub_job_tracking(job_id, engagement=None) or job
+                tracking: dict[str, Any] = {}
+                if req.comment is not None:
+                    tracking["comment"] = req.comment
+                if req.next_step is not None:
+                    tracking["next_step"] = req.next_step
+                if req.deadline is not None or "deadline" in fields_set:
+                    tracking["deadline"] = req.deadline
+                if req.follow_up_at is not None or "follow_up_at" in fields_set:
+                    tracking["follow_up_at"] = req.follow_up_at
+                if tracking:
+                    job = repo.update_hub_job_tracking(job_id, **tracking) or job
+            except TrackingError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return job
+
+    @app.post("/api/jobs/{job_id}/save", response_model=Job)
+    def save_hub_job(job_id: str) -> Job:
+        from job_sentinel.jobs.actions import save_job
+
+        return _job_action(db_path, job_id, lambda repo: save_job(repo, job_id, saved=True))
+
+    @app.post("/api/jobs/{job_id}/unsave", response_model=Job)
+    def unsave_hub_job(job_id: str) -> Job:
+        from job_sentinel.jobs.actions import save_job
+
+        return _job_action(db_path, job_id, lambda repo: save_job(repo, job_id, saved=False))
+
+    @app.post("/api/jobs/{job_id}/start-review", response_model=Job)
+    def start_review_hub_job(job_id: str) -> Job:
+        del job_id
+        raise HTTPException(
+            status_code=410,
+            detail="Start Review / Under Study is not part of the sealed workflow.",
+        )
+
+    @app.post("/api/jobs/{job_id}/reference", response_model=Job)
+    def reference_hub_job(job_id: str) -> Job:
+        from job_sentinel.jobs.actions import set_reference
+
+        return _job_action(
+            db_path, job_id, lambda repo: set_reference(repo, job_id, referenced=True)
+        )
+
+    @app.post("/api/jobs/{job_id}/unreference", response_model=Job)
+    def unreference_hub_job(job_id: str) -> Job:
+        from job_sentinel.jobs.actions import set_reference
+
+        return _job_action(
+            db_path, job_id, lambda repo: set_reference(repo, job_id, referenced=False)
+        )
+
+    @app.get("/api/jobs/{job_id}/tasks", response_model=list[JobTask])
+    def list_hub_job_tasks(job_id: str) -> list[JobTask]:
         from job_sentinel.db.repository import JobRepository
 
         repo = JobRepository(db_path)
         try:
-            job = repo.update_hub_job_status(job_id, req.status)
+            if repo.get_hub_job(job_id) is None:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            return repo.list_job_tasks(job_id)
         finally:
             repo.close()
-        if job is None:
+
+    @app.post("/api/jobs/{job_id}/tasks", response_model=JobTask)
+    def create_hub_job_task(job_id: str, req: JobTaskCreateRequest) -> JobTask:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.create_job_task(job_id, title=req.title, due_at=req.due_at)
+        finally:
+            repo.close()
+        if task is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-        return job
+        return task
+
+    @app.patch("/api/jobs/{job_id}/tasks/{task_id}", response_model=JobTask)
+    def patch_hub_job_task(job_id: str, task_id: str, req: JobTaskPatchRequest) -> JobTask:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.update_job_task(job_id, task_id, req.model_dump(exclude_unset=True))
+        finally:
+            repo.close()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return task
+
+    @app.delete("/api/jobs/{job_id}/tasks/{task_id}")
+    def delete_hub_job_task(job_id: str, task_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            deleted = repo.delete_job_task(job_id, task_id)
+        finally:
+            repo.close()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"ok": True}
+
+    @app.post("/api/jobs/{job_id}/start-application")
+    def start_application_hub_job(job_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, start_application
+
+        repo = JobRepository(db_path)
+        try:
+            job, app = start_application(repo, job_id)
+        except TrackingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return {"job": job.model_dump(mode="json"), "application": app.model_dump(mode="json")}
+
+    @app.post("/api/jobs/{job_id}/archive", response_model=Job)
+    def archive_hub_job(job_id: str, req: ArchiveJobRequest) -> Job:
+        from job_sentinel.jobs.actions import archive_job
+
+        return _job_action(
+            db_path, job_id, lambda repo: archive_job(repo, job_id, reason=req.reason)
+        )
+
+    @app.post("/api/jobs/{job_id}/unarchive", response_model=Job)
+    def unarchive_hub_job(job_id: str) -> Job:
+        from job_sentinel.jobs.actions import restore_archive
+
+        return _job_action(db_path, job_id, lambda repo: restore_archive(repo, job_id))
 
     @app.post("/api/jobs/{job_id}/dismiss", response_model=Job)
     def dismiss_hub_job_route(job_id: str) -> Job:
-        """Exclude this job from the default pool. Status and jobs_raw are unchanged."""
-        from job_sentinel.db.repository import JobRepository
-        from job_sentinel.ingestion.filters import dismiss_hub_job
+        """Dismiss is Discovery noise. Clears Save and engagement."""
+        from job_sentinel.jobs.actions import dismiss_job
 
-        repo = JobRepository(db_path)
-        try:
-            job = dismiss_hub_job(repo, job_id)
-        finally:
-            repo.close()
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-        return job
+        return _job_action(db_path, job_id, lambda repo: dismiss_job(repo, job_id))
 
     @app.post("/api/jobs/{job_id}/undismiss", response_model=Job)
     def undismiss_hub_job_route(job_id: str) -> Job:
-        """Remove a manual dismiss and re-apply stored filter rules."""
-        from job_sentinel.db.repository import JobRepository
-        from job_sentinel.ingestion.filters import undismiss_hub_job
+        """Clear dismissed_at only. Does not restore Save or engagement."""
+        from job_sentinel.jobs.actions import restore_dismiss
 
-        repo = JobRepository(db_path)
-        try:
-            job = undismiss_hub_job(repo, job_id)
-        finally:
-            repo.close()
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-        return job
+        return _job_action(db_path, job_id, lambda repo: restore_dismiss(repo, job_id))
 
     @app.post("/api/jobs/{posting_id}/status", response_model=JobPosting)
     def set_job_status(posting_id: str, req: StatusRequest) -> JobPosting:
@@ -613,6 +921,68 @@ def create_app(
         if job is None:  # pragma: no cover - defensive
             raise HTTPException(status_code=404, detail=f"Posting {posting_id} not found")
         return job
+
+    @app.get("/api/archive-settings")
+    def get_archive_settings() -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.archive import load_archive_settings
+
+        repo = JobRepository(db_path)
+        try:
+            return load_archive_settings(repo).model_dump()
+        finally:
+            repo.close()
+
+    @app.put("/api/archive-settings")
+    def put_archive_settings(req: ArchiveSettingsRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.archive import ArchiveSettings, save_archive_settings
+
+        repo = JobRepository(db_path)
+        try:
+            settings = save_archive_settings(
+                repo, ArchiveSettings(enabled=req.enabled, idle_days=req.idle_days)
+            )
+            return settings.model_dump()
+        finally:
+            repo.close()
+
+    @app.get("/api/idle-cleanup-settings")
+    def get_idle_cleanup_settings() -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.idle import load_idle_cleanup_settings
+
+        repo = JobRepository(db_path)
+        try:
+            return load_idle_cleanup_settings(repo).model_dump()
+        finally:
+            repo.close()
+
+    @app.put("/api/idle-cleanup-settings")
+    def put_idle_cleanup_settings(req: IdleCleanupSettingsRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.idle import IdleCleanupSettings, save_idle_cleanup_settings
+
+        repo = JobRepository(db_path)
+        try:
+            settings = save_idle_cleanup_settings(
+                repo, IdleCleanupSettings(enabled=req.enabled, idle_days=req.idle_days)
+            )
+            return settings.model_dump()
+        finally:
+            repo.close()
+
+    @app.post("/api/jobs/archive-run")
+    def run_archive_now(req: ArchiveSettingsRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.archive import run_idle_archive
+
+        repo = JobRepository(db_path)
+        try:
+            result = run_idle_archive(repo, force=req.force, dry_run=req.dry_run)
+            return result.model_dump()
+        finally:
+            repo.close()
 
     @app.get("/api/collect/sources")
     def list_collect_sources(market: str | None = None) -> dict[str, Any]:
@@ -828,73 +1198,56 @@ def create_app(
     def list_applications(
         stage: ApplicationStage | None = None,
         limit: int = 200,
+        view: str = "all",
+        stale_applied: bool = False,
     ) -> list[dict[str, Any]]:
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.membership import OPEN_APPLICATION_STAGES, enrich_application_stale
 
+        view_key = view.strip().lower()
+        if view_key not in {"all", "open", "closed"}:
+            raise HTTPException(status_code=422, detail="view must be all, open, or closed")
         repo = JobRepository(db_path)
         try:
             apps = repo.list_applications(stage=stage, limit=limit)
+            apps = [enrich_application_stale(repo, a) for a in apps]
         finally:
             repo.close()
+        if view_key == "open":
+            apps = [a for a in apps if a.stage in OPEN_APPLICATION_STAGES]
+        elif view_key == "closed":
+            apps = [a for a in apps if a.stage == ApplicationStage.CLOSED]
+        if stale_applied:
+            apps = [a for a in apps if a.stale_applied]
         return [a.model_dump(mode="json") for a in apps]
 
     @app.post("/api/applications")
     def create_application(req: ApplicationCreateRequest, request: Request) -> dict[str, Any]:
-        """
-        Create a tracked application.
-
-        Pass ``posting_id`` to populate fields from a stored JobPosting (stage
-        defaults to APPLIED in that case).  Otherwise supply manual fields.
-        """
+        """Create a draft via Start Application. Requires a stable job_id."""
         if auth_mode != "off" and _bearer_user(request) is None:
             raise HTTPException(status_code=401, detail="Login required.")
 
+        if not req.job_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Application drafts are created with Start Application on a Job. "
+                    "Pass job_id, or POST /api/jobs/{id}/start-application. "
+                    "Search results cannot create an orphan draft."
+                ),
+            )
+
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, start_application
 
         repo = JobRepository(db_path)
         try:
-            if req.posting_id:
-                posting = repo.get_job(req.posting_id)
-                if posting is None:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Posting {req.posting_id} not found.",
-                    )
-                app = Application(
-                    title=req.title or posting.title,
-                    employer=req.employer or posting.employer,
-                    location=req.location or posting.location,
-                    url=req.url or posting.portal_url,
-                    source=req.source or posting.source_adapter,
-                    stage=req.stage
-                    if req.stage != ApplicationStage.SAVED
-                    else ApplicationStage.APPLIED,
-                    salary=req.salary,
-                    applied_date=req.applied_date,
-                    deadline=req.deadline or posting.deadline,
-                    notes=req.notes,
-                    posting_id=req.posting_id,
-                    resume_document_id=req.resume_document_id,
-                )
-            else:
-                app = Application(
-                    title=req.title,
-                    employer=req.employer,
-                    location=req.location,
-                    url=req.url,
-                    source=req.source,
-                    stage=req.stage,
-                    salary=req.salary,
-                    applied_date=req.applied_date,
-                    deadline=req.deadline,
-                    notes=req.notes,
-                    posting_id=req.posting_id,
-                    resume_document_id=req.resume_document_id,
-                )
-            result = repo.create_application(app)
+            _job, app = start_application(repo, req.job_id)
+        except TrackingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         finally:
             repo.close()
-        return result.model_dump(mode="json")
+        return app.model_dump(mode="json")
 
     @app.get("/api/applications/export")
     def export_applications(fmt: str = "csv") -> StreamingResponse:
@@ -963,9 +1316,60 @@ def create_app(
             app = repo.get_application(app_id)
         finally:
             repo.close()
-        if app is None:
+        if app is None or app.deleted_at is not None:
             raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
         return app.model_dump(mode="json")
+
+    @app.post("/api/applications/{app_id}/submit")
+    def submit_application(app_id: str, req: MarkSubmittedRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, mark_submitted
+
+        repo = JobRepository(db_path)
+        try:
+            app = mark_submitted(
+                repo,
+                app_id,
+                channel=req.channel,
+                notes=req.notes,
+                materials_dir=materials_dir,
+            )
+        except TrackingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return app.model_dump(mode="json")
+
+    @app.post("/api/applications/{app_id}/close")
+    def close_application_route(app_id: str, req: CloseApplicationRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, close_application
+
+        repo = JobRepository(db_path)
+        try:
+            app = close_application(repo, app_id, reason=req.close_reason, note=req.close_note)
+        except TrackingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return app.model_dump(mode="json")
+
+    @app.post("/api/applications/{app_id}/abandon")
+    def abandon_application(app_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, abandon_draft
+
+        repo = JobRepository(db_path)
+        try:
+            job = abandon_draft(repo, app_id)
+        except TrackingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return {
+            "ok": True,
+            "job": job.model_dump(mode="json") if job is not None else None,
+        }
 
     @app.patch("/api/applications/{app_id}")
     def patch_application(
@@ -977,17 +1381,34 @@ def create_app(
             raise HTTPException(status_code=401, detail="Login required.")
 
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, set_application_stage
 
-        updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None}
+        updates = {
+            k: v
+            for k, v in req.model_dump(exclude_unset=True).items()
+            if v is not None and k not in {"stage", "close_reason", "close_note"}
+        }
         repo = JobRepository(db_path)
         try:
-            found = repo.update_application(app_id, **updates)
-            if not found:
-                raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
+            if req.stage is not None:
+                try:
+                    set_application_stage(
+                        repo,
+                        app_id,
+                        req.stage,
+                        close_reason=req.close_reason,
+                        close_note=req.close_note or "",
+                    )
+                except TrackingError as exc:
+                    raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+            if updates:
+                found = repo.update_application(app_id, **updates)
+                if not found:
+                    raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
             app = repo.get_application(app_id)
         finally:
             repo.close()
-        if app is None:  # pragma: no cover — defensive
+        if app is None:
             raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
         return app.model_dump(mode="json")
 
@@ -997,14 +1418,347 @@ def create_app(
             raise HTTPException(status_code=401, detail="Login required.")
 
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import (
+            TrackingError,
+            abandon_draft,
+            application_was_submitted,
+        )
 
         repo = JobRepository(db_path)
         try:
-            found = repo.delete_application(app_id)
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
+            if application_was_submitted(app):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Submitted applications cannot be deleted. Close the Application instead."
+                    ),
+                )
+            try:
+                abandon_draft(repo, app_id)
+            except TrackingError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         finally:
             repo.close()
-        if not found:
-            raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
+        return {"ok": True}
+
+    def _materials() -> Any:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.service import MaterialsService
+        from job_sentinel.materials.storage import MaterialStorage
+
+        repo = JobRepository(db_path)
+        return repo, MaterialsService(repo, MaterialStorage(materials_dir))
+
+    @app.get("/api/materials")
+    def list_materials(include_archived: bool = False) -> list[dict[str, Any]]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            rows = repo.list_materials(include_archived=include_archived)
+        finally:
+            repo.close()
+        return [m.model_dump(mode="json") for m in rows]
+
+    @app.post("/api/materials")
+    def create_material(req: MaterialWriteRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            material = service.create_material(
+                title=req.title,
+                kind=req.kind,
+                purpose=req.purpose,
+                notes=req.notes,
+                url=req.url,
+                version_label=req.version_label,
+                version_purpose=req.version_purpose,
+                version_notes=req.version_notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.post("/api/materials/upload")
+    async def upload_material(
+        file: UploadFile,
+        title: str = Form(""),
+        kind: str = Form("other"),
+        purpose: str = Form("[]"),
+        notes: str = Form(""),
+        version_label: str = Form(""),
+        version_purpose: str = Form("[]"),
+        version_notes: str = Form(""),
+    ) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        data = await file.read()
+        repo, service = _materials()
+        try:
+            material = service.create_material(
+                title=title,
+                kind=kind,
+                purpose=_parse_purpose_json(purpose),
+                notes=notes,
+                version_label=version_label,
+                version_purpose=_parse_purpose_json(version_purpose),
+                version_notes=version_notes,
+                filename=file.filename or "upload",
+                data=data,
+                content_type=file.content_type or "",
+            )
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.get("/api/materials/{material_id}")
+    def get_material(material_id: str, include_archived: bool = True) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            material = repo.get_material(material_id, include_archived=include_archived)
+        finally:
+            repo.close()
+        if material is None:
+            raise HTTPException(status_code=404, detail="Material not found")
+        return _json_object(material)
+
+    @app.patch("/api/materials/{material_id}")
+    def patch_material(material_id: str, req: MaterialPatchRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            material = service.update_material(
+                material_id,
+                title=req.title,
+                kind=req.kind,
+                purpose=req.purpose,
+                notes=req.notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.post("/api/materials/{material_id}/archive")
+    def archive_material(material_id: str) -> dict[str, Any]:
+        return _material_archive(material_id, archived=True)
+
+    @app.post("/api/materials/{material_id}/restore")
+    def restore_material(material_id: str) -> dict[str, Any]:
+        return _material_archive(material_id, archived=False)
+
+    def _material_archive(material_id: str, *, archived: bool) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            material = service.set_material_archived(material_id, archived)
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.post("/api/materials/{material_id}/versions")
+    def add_material_version(material_id: str, req: MaterialVersionWriteRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            version = service.add_version(
+                material_id,
+                url=req.url,
+                version_label=req.version_label,
+                purpose=req.purpose,
+                notes=req.notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.post("/api/materials/{material_id}/versions/upload")
+    async def upload_material_version(
+        material_id: str,
+        file: UploadFile,
+        version_label: str = Form(""),
+        purpose: str = Form("[]"),
+        notes: str = Form(""),
+    ) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        data = await file.read()
+        repo, service = _materials()
+        try:
+            version = service.add_version(
+                material_id,
+                version_label=version_label,
+                purpose=_parse_purpose_json(purpose),
+                notes=notes,
+                filename=file.filename or "upload",
+                data=data,
+                content_type=file.content_type or "",
+            )
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.patch("/api/material-versions/{version_id}")
+    def patch_material_version(version_id: str, req: MaterialVersionPatchRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            version = service.update_version(
+                version_id,
+                version_label=req.version_label,
+                purpose=req.purpose,
+                notes=req.notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.post("/api/material-versions/{version_id}/archive")
+    def archive_material_version(version_id: str) -> dict[str, Any]:
+        return _version_archive(version_id, archived=True)
+
+    @app.post("/api/material-versions/{version_id}/restore")
+    def restore_material_version(version_id: str) -> dict[str, Any]:
+        return _version_archive(version_id, archived=False)
+
+    def _version_archive(version_id: str, *, archived: bool) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            version = service.set_version_archived(version_id, archived)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.get("/api/material-versions/{version_id}/file")
+    def material_version_file(version_id: str) -> FileResponse:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.storage import MaterialStorage, StorageError
+
+        repo = JobRepository(db_path)
+        try:
+            version = repo.get_material_version(version_id)
+        finally:
+            repo.close()
+        if version is None or not version.file_ref:
+            raise HTTPException(status_code=404, detail="File not found")
+        storage = MaterialStorage(materials_dir)
+        try:
+            path = storage.resolve(version.file_ref)
+        except StorageError as exc:
+            raise HTTPException(status_code=404, detail="File not found") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        filename = version.original_filename or path.name
+        return FileResponse(
+            path,
+            media_type=version.content_type or "application/octet-stream",
+            filename=filename,
+        )
+
+    @app.get("/api/applications/{app_id}/packet")
+    def get_packet(app_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            bindings = repo.list_application_bindings(app_id)
+            items = []
+            for binding in bindings:
+                version = repo.get_material_version(binding.material_version_id)
+                material = repo.get_material(binding.material_id, include_archived=True)
+                items.append(
+                    {
+                        "binding": binding.model_dump(mode="json"),
+                        "material": material.model_dump(mode="json") if material else None,
+                        "version": version.model_dump(mode="json") if version else None,
+                    }
+                )
+        finally:
+            repo.close()
+        return {"application_id": app_id, "items": items}
+
+    @app.put("/api/applications/{app_id}/packet")
+    def replace_packet(app_id: str, req: PacketReplaceRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            service.replace_packet(app_id, req.material_version_ids)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return get_packet(app_id)
+
+    @app.post("/api/applications/{app_id}/packet/bindings")
+    def add_packet_binding(app_id: str, req: PacketBindRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            binding = service.add_binding(app_id, req.material_version_id)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(binding)
+
+    @app.patch("/api/applications/{app_id}/packet/bindings/{binding_id}")
+    def change_packet_version(
+        app_id: str, binding_id: str, req: PacketBindRequest
+    ) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            binding = service.change_binding_version(app_id, binding_id, req.material_version_id)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(binding)
+
+    @app.delete("/api/applications/{app_id}/packet/bindings/{binding_id}")
+    def delete_packet_binding(app_id: str, binding_id: str) -> dict[str, bool]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            service.remove_binding(app_id, binding_id)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
         return {"ok": True}
 
     # ── Generated Documents ───────────────────────────────────────────────
@@ -1385,8 +2139,8 @@ def create_app(
         """
         Search for jobs across enabled sources.
 
-        Results are ephemeral — not written to the DB. The user later
-        "tracks" one via POST /api/applications.
+        Results are ephemeral — not written to the DB. Collect into Discover,
+        then Save / Start Review / Start Application on the Job.
         """
         from job_sentinel.config.settings import get_settings
         from job_sentinel.sources.base import JobQuery

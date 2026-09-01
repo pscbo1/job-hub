@@ -1,11 +1,12 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import Link from "next/link";
 import { useState } from "react";
 
 import { AiMatch } from "@/components/AiMatch";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
-import { createApplication, type JobPosting } from "@/lib/api";
+import type { JobPosting } from "@/lib/api";
 import { ATS_COLORS, detectAts } from "@/lib/atsDetect";
 import { detectGhostSignal, GHOST_LABELS } from "@/lib/ghostSignal";
 import { cn, externalUrl } from "@/lib/utils";
@@ -25,13 +26,11 @@ function Monogram({ name }: { name: string }) {
 
 /**
  * A single search result (from any source). Results are ephemeral — not in the
- * DB — so the only mutating action is "Track", which creates an Application.
+ * DB. Open the source or go to Discover; drafts are created only via Start
+ * Application on a stable Job.
  */
 export function SearchResultCard({ job, index }: { job: JobPosting; index: number }) {
   const reduced = useReducedMotion();
-  const [tracked, setTracked] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [showDetails, setShowDetails] = useState(false);
 
   const raw = job.raw_data ?? {};
@@ -40,22 +39,6 @@ export function SearchResultCard({ job, index }: { job: JobPosting; index: numbe
   const tags = Array.isArray(raw.tags) ? (raw.tags as unknown[]).filter((t) => typeof t === "string") : [];
   const detail = (raw.detail ?? {}) as { description?: string };
   const description = (detail.description || job.description_snippet || "").trim();
-
-  async function onTrack() {
-    setBusy(true);
-    setError("");
-    const created = await createApplication({
-      title: job.title,
-      employer: job.employer,
-      location: job.location,
-      url: job.portal_url,
-      source: job.source_adapter,
-      stage: "saved",
-    });
-    setBusy(false);
-    if (created) setTracked(true);
-    else setError("Couldn't save — is the local API running?");
-  }
 
   const ghostSignal = detectGhostSignal({
     postedDate: job.posted_date,
@@ -75,7 +58,6 @@ export function SearchResultCard({ job, index }: { job: JobPosting; index: numbe
       transition={{ duration: 0.28, delay: Math.min(index * 0.025, 0.25) }}
     >
       <Card className="space-y-0">
-        {/* Header — monogram + title/meta/chips */}
         <div className="flex items-start gap-3.5 pb-3">
           <Monogram name={job.employer || job.title} />
           <div className="min-w-0 flex-1">
@@ -130,20 +112,7 @@ export function SearchResultCard({ job, index }: { job: JobPosting; index: numbe
           </div>
         </div>
 
-        {/* Action row — primary actions only */}
         <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
-          <button
-            onClick={onTrack}
-            disabled={busy || tracked}
-            className={cn(
-              "inline-flex h-8 items-center rounded-lg px-3 text-xs font-medium transition-colors disabled:opacity-60",
-              tracked
-                ? "bg-emerald-100 text-emerald-700"
-                : "bg-brand text-white hover:bg-brand-500",
-            )}
-          >
-            {tracked ? "✓ Tracked" : busy ? "Saving…" : "Track"}
-          </button>
           {job.portal_url && (
             <a
               href={externalUrl(job.portal_url)}
@@ -151,11 +120,18 @@ export function SearchResultCard({ job, index }: { job: JobPosting; index: numbe
               rel="noopener noreferrer"
               className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink transition-colors hover:border-ink/30 hover:bg-bg"
             >
-              View posting ↗
+              Open source ↗
             </a>
           )}
+          <Link
+            href="/jobs"
+            className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink transition-colors hover:border-ink/30 hover:bg-bg"
+          >
+            Open Discover
+          </Link>
           {description && (
             <button
+              type="button"
               onClick={() => setShowDetails((v) => !v)}
               aria-expanded={showDetails}
               className="inline-flex h-8 items-center gap-1 rounded-lg border border-line px-3 text-xs font-medium text-muted transition-colors hover:border-ink/30 hover:text-ink"
@@ -166,10 +142,8 @@ export function SearchResultCard({ job, index }: { job: JobPosting; index: numbe
               </span>
             </button>
           )}
-          {error && <span className="w-full text-xs text-amber-600">{error}</span>}
         </div>
 
-        {/* Description panel — animated */}
         <AnimatePresence initial={false}>
           {showDetails && description && (
             <motion.div
@@ -186,7 +160,6 @@ export function SearchResultCard({ job, index }: { job: JobPosting; index: numbe
           )}
         </AnimatePresence>
 
-        {/* AI match — full-width collapsible section */}
         <AiMatch jobText={jobText} />
       </Card>
     </motion.div>

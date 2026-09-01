@@ -13,7 +13,18 @@ import {
 } from "@/components/JobPoolActions";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
-import type { HubJob, HubJobStatus } from "@/lib/api";
+import {
+  getArchiveSettings,
+  putArchiveSettings,
+  type ArchiveSettings,
+  type HubJob,
+} from "@/lib/api";
+import {
+  DISCOVER_CHIPS,
+  discoverChipLabel,
+  jobMatchesDiscoverChip,
+  type DiscoverChip,
+} from "@/lib/jobPipeline";
 import {
   DISCOVERED_RANGE_OPTIONS,
   jobsPoolHref,
@@ -33,21 +44,6 @@ import {
   sponsorshipStatusChip,
 } from "@/lib/sponsorshipDisplay";
 import { cn, externalUrl } from "@/lib/utils";
-
-const STATUSES: HubJobStatus[] = ["saved", "to_do", "applied", "closed", "reference"];
-
-function statusChipLabel(key: string): string {
-  return key === "unset" ? "No status" : key;
-}
-
-const ACCENT: Record<string, string> = {
-  unset: "bg-stone-300",
-  saved: "bg-sky-500",
-  to_do: "bg-amber-500",
-  applied: "bg-violet-500",
-  closed: "bg-stone-400",
-  reference: "bg-emerald-500",
-};
 
 function dayStamp(iso: string): string {
   return iso.slice(0, 10);
@@ -91,10 +87,12 @@ export function JobsExplorer({
   const router = useRouter();
   const reduced = useReducedMotion();
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<string>("all");
-  const [sort, setSort] = useState<"newest" | "published">("newest");
+  const [filter, setFilter] = useState<DiscoverChip>("all");
+  const [showMore, setShowMore] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showSponsorship, setShowSponsorship] = useState(false);
-  const [overrides, setOverrides] = useState<Record<string, HubJobStatus | null>>({});
+  const [overrides, setOverrides] = useState<Record<string, HubJob>>({});
+  const [archive, setArchive] = useState<ArchiveSettings>({ enabled: false, idle_days: 14 });
   const poolActions = useJobPoolActions();
   const closeMenu = () => poolActions.setMenu(null);
   const menuRef = useDismissOutside(!!poolActions.menu, closeMenu);
@@ -112,6 +110,10 @@ export function JobsExplorer({
     }
     if (market === "en") setShowSponsorship(readShowSponsorshipInfo());
   }, [market]);
+
+  useEffect(() => {
+    void getArchiveSettings().then(setArchive);
+  }, []);
 
   const countryOptions = useMemo(() => countryFilterOptions(jobs), [jobs]);
   const sourceOptions = useMemo(() => {
@@ -161,169 +163,128 @@ export function JobsExplorer({
     router.push(href(next));
   }
 
-  const statusOf = (j: HubJob): HubJobStatus | null =>
-    Object.prototype.hasOwnProperty.call(overrides, j.id) ? overrides[j.id] : j.status;
+  const merged = (j: HubJob): HubJob => overrides[j.id] ?? j;
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: jobs.length, unset: 0 };
+    const c: Record<DiscoverChip, number> = { all: jobs.length, saved: 0, reference: 0 };
     for (const j of jobs) {
-      const s = statusOf(j);
-      const key = s ?? "unset";
-      c[key] = (c[key] ?? 0) + 1;
+      const row = merged(j);
+      if (row.favorite) c.saved += 1;
+      if (row.reference) c.reference += 1;
     }
     return c;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, overrides]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = jobs.filter((j) => {
-      const s = statusOf(j);
-      if (filter === "unset" && s !== null) return false;
-      if (filter !== "all" && filter !== "unset" && s !== filter) return false;
+      const row = merged(j);
+      if (!jobMatchesDiscoverChip(row, filter)) return false;
       if (!q) return true;
-      return [j.title, j.company, j.location, j.source]
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
+      return [j.title, j.company, j.location, j.source].join(" ").toLowerCase().includes(q);
     });
-    const sorted = [...filtered];
-    if (sort === "published") {
-      sorted.sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""));
-    } else {
-      sorted.sort((a, b) => b.discovered_at.localeCompare(a.discovered_at));
-    }
+    const sorted = [...filtered].sort((a, b) => b.discovered_at.localeCompare(a.discovered_at));
     if (pool === "excluded") return sorted;
     return sorted.filter((j) => !poolActions.isHidden(j));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    jobs,
-    query,
-    filter,
-    sort,
-    overrides,
-    pool,
-    poolActions.hiddenIds,
-    poolActions.hiddenCompanies,
-  ]);
+  }, [jobs, query, filter, overrides, pool, poolActions.hiddenIds, poolActions.hiddenCompanies]);
 
-  function setRange(next: DiscoveredRange) {
-    persistAndGo({ range: next, customSince: next === "custom" ? customSince : "" });
-  }
-
-  function setCustomSince(value: string) {
-    persistAndGo({ range: "custom", customSince: value });
-  }
-
-  function setPool(next: PoolView) {
-    persistAndGo({ pool: next });
+  async function saveArchive(next: ArchiveSettings) {
+    setArchive(next);
+    await putArchiveSettings(next);
   }
 
   return (
     <div className="space-y-4">
       <div className="sticky top-14 z-10 -mx-1 space-y-3 rounded-2xl border border-line bg-bg/90 p-3 backdrop-blur-md md:top-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowMore((v) => !v)}
+            className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-muted hover:border-ink/30 hover:text-ink"
+          >
+            Filter ▾
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSettings((v) => !v)}
+            className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-muted hover:border-ink/30 hover:text-ink"
+          >
+            More
+          </button>
+          {pool === "excluded" && (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900">
+              Viewing excluded
+            </span>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-0 flex-1">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-              aria-hidden="true"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="m20 20-3.5-3.5" />
-            </svg>
             <input
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search title, company, location…"
               aria-label="Search jobs"
-              className="h-10 w-full rounded-lg border border-line bg-surface pl-9 pr-3 text-sm text-ink shadow-sm placeholder:text-muted/70 focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+              className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm placeholder:text-muted/70 focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             />
           </div>
-          <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
-            Discovered
-            <PopoverSelect
-              value={range}
-              onChange={(v) => setRange(v as DiscoveredRange)}
-              aria-label="Discovered date range"
-              className="w-40"
-              options={DISCOVERED_RANGE_OPTIONS}
-            />
-          </label>
-          {range === "custom" && (
+        </div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by save or reference">
+          {DISCOVER_CHIPS.map((s) => (
+            <button
+              key={s}
+              onClick={() => setFilter(s)}
+              aria-pressed={filter === s}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                filter === s
+                  ? "border-ink bg-ink text-white"
+                  : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
+              )}
+            >
+              {discoverChipLabel(s)}
+              <span className={cn("ml-1.5 tabular-nums", filter === s ? "text-white/60" : "text-muted/60")}>
+                {counts[s]}
+              </span>
+            </button>
+          ))}
+        </div>
+        {showMore && (
+          <div className="space-y-3 border-t border-line pt-3">
             <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
-              On or after
-              <input
-                type="date"
-                value={customSince}
-                onChange={(e) => setCustomSince(e.target.value)}
-                aria-label="Jobs discovered on or after this date"
-                className="h-10 rounded-lg border border-line bg-surface px-2 text-sm text-ink"
+              Date
+              <PopoverSelect
+                value={range}
+                onChange={(v) =>
+                  persistAndGo({
+                    range: v as DiscoveredRange,
+                    customSince: v === "custom" ? customSince : "",
+                  })
+                }
+                aria-label="Discovered date range"
+                className="w-40"
+                options={DISCOVERED_RANGE_OPTIONS}
               />
             </label>
-          )}
-          <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
-            Sort
-            <PopoverSelect
-              value={sort}
-              onChange={(v) => setSort(v as "newest" | "published")}
-              aria-label="Sort jobs"
-              className="w-40"
-              options={[
-                { value: "newest", label: "Discovered" },
-                { value: "published", label: "Published" },
-              ]}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => setPool(pool === "excluded" ? "included" : "excluded")}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-              pool === "excluded"
-                ? "border-ink bg-ink text-white"
-                : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
+            {range === "custom" && (
+              <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
+                On or after
+                <input
+                  type="date"
+                  value={customSince}
+                  onChange={(e) => persistAndGo({ range: "custom", customSince: e.target.value })}
+                  aria-label="Jobs discovered on or after this date"
+                  className="h-10 rounded-lg border border-line bg-surface px-2 text-sm text-ink"
+                />
+              </label>
             )}
-          >
-            {pool === "excluded" ? "Back to Job Pool" : `Excluded ${otherCount}`}
-          </button>
-          {showSponsorToggle && (
-          <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
-            <input
-              type="checkbox"
-              checked={showSponsorship}
-              onChange={(e) => {
-                const next = e.target.checked;
-                setShowSponsorship(next);
-                writeShowSponsorshipInfo(next);
-                writePoolPrefs(market, {
-                  country,
-                  sources,
-                  remote,
-                  postedDays,
-                  showSponsorship: next,
-                });
-              }}
-              className="h-4 w-4 rounded border-line"
-            />
-            Show sponsorship info
-          </label>
-          )}
-        </div>
-        {(showCountry || showRemote || showPosted || showSource) && (
-          <div className="flex flex-wrap items-center gap-3">
             {showCountry && (
               <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
-                Country
+                Location
                 <PopoverSelect
                   value={country || "all"}
                   onChange={(v) => persistAndGo({ country: v === "all" ? "" : v })}
-                  aria-label="Country"
+                  aria-label="Location"
                   className="w-48"
                   options={[
                     { value: "all", label: "All" },
@@ -360,69 +321,117 @@ export function JobsExplorer({
                 />
               </label>
             )}
-          </div>
-        )}
-        {showSource && sourceOptions.length > 0 && (
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by source">
-            <button
-              type="button"
-              onClick={() => persistAndGo({ sources: [] })}
-              aria-pressed={sources.length === 0}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                sources.length === 0
-                  ? "border-ink bg-ink text-white"
-                  : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
-              )}
-            >
-              All sources
-            </button>
-            {sourceOptions.map((s) => {
-              const on = sources.includes(s.id);
-              return (
+            {showSource && sourceOptions.length > 0 && (
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by source">
                 <button
-                  key={s.id}
                   type="button"
-                  onClick={() => {
-                    const next = new Set(sources);
-                    if (on) next.delete(s.id);
-                    else next.add(s.id);
-                    persistAndGo({ sources: [...next] });
-                  }}
-                  aria-pressed={on}
+                  onClick={() => persistAndGo({ sources: [] })}
+                  aria-pressed={sources.length === 0}
                   className={cn(
                     "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                    on
+                    sources.length === 0
                       ? "border-ink bg-ink text-white"
                       : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
                   )}
                 >
-                  {s.label}
+                  All sources
                 </button>
-              );
-            })}
+                {sourceOptions.map((s) => {
+                  const on = sources.includes(s.id);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        const next = new Set(sources);
+                        if (on) next.delete(s.id);
+                        else next.add(s.id);
+                        persistAndGo({ sources: [...next] });
+                      }}
+                      aria-pressed={on}
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                        on
+                          ? "border-ink bg-ink text-white"
+                          : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
+                      )}
+                    >
+                      {s.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {showSponsorToggle && (
+              <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
+                <input
+                  type="checkbox"
+                  checked={showSponsorship}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setShowSponsorship(next);
+                    writeShowSponsorshipInfo(next);
+                    writePoolPrefs(market, {
+                      country,
+                      sources,
+                      remote,
+                      postedDays,
+                      showSponsorship: next,
+                    });
+                  }}
+                  className="h-4 w-4 rounded border-line"
+                />
+                Show sponsorship info
+              </label>
+            )}
+            <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
+              <button
+                type="button"
+                onClick={() => persistAndGo({ pool: pool === "excluded" ? "included" : "excluded" })}
+                className={cn(
+                  "rounded-lg border px-3 py-1.5 text-xs font-medium",
+                  pool === "excluded"
+                    ? "border-ink bg-ink text-white"
+                    : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
+                )}
+              >
+                {pool === "excluded" ? "Back to current pool" : `Excluded (${otherCount})`}
+              </button>
+              <p className="text-xs text-muted">Restore dismissed jobs here. Current pool stays the default.</p>
+            </div>
           </div>
         )}
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
-          {["all", "unset", ...STATUSES].map((s) => (
-            <button
-              key={s}
-              onClick={() => setFilter(s)}
-              aria-pressed={filter === s}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                filter === s
-                  ? "border-ink bg-ink text-white"
-                  : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
-              )}
-            >
-              {statusChipLabel(s)}
-              <span className={cn("ml-1.5 tabular-nums", filter === s ? "text-white/60" : "text-muted/60")}>
-                {counts[s] ?? 0}
-              </span>
-            </button>
-          ))}
-        </div>
+        {showSettings && (
+          <div className="space-y-2 border-t border-line pt-3 text-sm text-ink">
+            <p className="font-medium">Auto-archive excluded jobs</p>
+            <label className="flex items-center gap-2 text-muted">
+              <input
+                type="checkbox"
+                checked={archive.enabled}
+                onChange={(e) => void saveArchive({ ...archive, enabled: e.target.checked })}
+                className="h-4 w-4 rounded border-line"
+              />
+              {archive.enabled ? "On" : "Off"} (default off)
+            </label>
+            <label className="flex items-center gap-2 text-muted">
+              After
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={archive.idle_days}
+                onChange={(e) =>
+                  void saveArchive({
+                    ...archive,
+                    idle_days: Math.max(1, Math.min(365, Number(e.target.value) || 14)),
+                  })
+                }
+                className="h-9 w-20 rounded-lg border border-line bg-surface px-2 text-sm text-ink"
+              />
+              days. Only dismissed/excluded jobs; they stay listed under Excluded.
+            </label>
+          </div>
+        )}
       </div>
 
       {visible.length === 0 ? (
@@ -433,13 +442,13 @@ export function JobsExplorer({
               ? pool === "excluded"
                 ? "No excluded jobs for this date range."
                 : "No jobs in the pool yet. Use Collect Jobs, or import with job-sentinel ingest."
-              : "Try a different search, date, or status filter."}
+              : "Try a different search or filter."}
           </CardSub>
         </Card>
       ) : (
         <AnimatePresence initial={false} mode="popLayout">
           {visible.map((j, idx) => {
-            const st = statusOf(j);
+            const row = merged(j);
             return (
               <motion.div
                 key={j.id}
@@ -450,29 +459,27 @@ export function JobsExplorer({
                 transition={{ duration: 0.3, delay: Math.min(idx * 0.03, 0.3) }}
               >
                 <Card
-                  className="group relative overflow-hidden pl-6"
+                  className="group relative overflow-hidden"
                   onContextMenu={(e) => {
                     e.preventDefault();
                     poolActions.openMenu(j, e.clientX, e.clientY);
                   }}
                 >
-                  <span
-                    aria-hidden="true"
-                    className={cn("absolute inset-y-0 left-0 w-1", ACCENT[st ?? "unset"] ?? "bg-stone-300")}
-                  />
-                  <button
-                    type="button"
-                    aria-label={`Actions for ${j.title}`}
-                    aria-haspopup="menu"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      poolActions.openMenu(j, rect.right - 8, rect.bottom + 4);
-                    }}
-                    className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-ink/[0.06] hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
-                  >
-                    ···
-                  </button>
+                  {pool !== "excluded" && (
+                    <button
+                      type="button"
+                      aria-label={`Actions for ${j.title}`}
+                      aria-haspopup="menu"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        poolActions.openMenu(j, rect.right - 8, rect.bottom + 4);
+                      }}
+                      className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-ink/[0.06] hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
+                    >
+                      ···
+                    </button>
+                  )}
                   <div className="min-w-0 pb-3 pr-8">
                     <CardTitle className="leading-snug">{j.title}</CardTitle>
                     <CardSub className="mt-0.5">
@@ -480,28 +487,17 @@ export function JobsExplorer({
                     </CardSub>
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <span className="text-[11px] text-muted">Discovered {dayStamp(j.discovered_at)}</span>
-                      {j.published_at && (
-                        <span className="text-[11px] text-muted">Published {dayStamp(j.published_at)}</span>
-                      )}
                       {j.salary && (
                         <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                           {j.salary}
                         </span>
                       )}
-                      {typeof j.match_score === "number" && (
-                        <span className="text-[11px] text-muted">
-                          Match {(j.match_score * 100).toFixed(0)}%
-                        </span>
-                      )}
                       {pool === "excluded" && (j.filter_reasons?.length ?? 0) > 0 && (
-                        <span className="text-[11px] text-amber-700">
-                          {j.filter_reasons?.join(", ")}
-                        </span>
+                        <span className="text-[11px] text-amber-700">{j.filter_reasons?.join(", ")}</span>
                       )}
                       {showSponsorToggle && showSponsorship && <SponsorshipChips job={j} />}
                     </div>
                   </div>
-
                   <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
                     {j.job_url && (
                       <a
@@ -514,12 +510,11 @@ export function JobsExplorer({
                       </a>
                     )}
                     <JobActions
-                      jobId={j.id}
-                      status={st}
+                      job={row}
+                      variant="discover"
                       onChange={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
                     />
                   </div>
-
                   {(j.description ||
                     (showSponsorToggle &&
                       showSponsorship &&
