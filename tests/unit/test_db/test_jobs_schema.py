@@ -69,6 +69,7 @@ class TestMigration:
         assert "sponsorship" in jobs_cols
         assert "sponsor_employers" in names
         assert "sponsor_registry_sync" in names
+        assert "job_tasks" in names
         assert "market" in jobs_cols
         assert "fingerprint" in jobs_cols
         raw_cols = _column_names(repo, "jobs_raw")
@@ -237,8 +238,10 @@ class TestJobEngagement:
     def test_engagement_defaults_to_null(self, repo: JobRepository) -> None:
         stored = repo.upsert_job(_job())
         assert stored.engagement is None
+        assert stored.last_activity_at is None
         row = dict(repo._db["jobs"].get(stored.id))
         assert row["engagement"] is None
+        assert row["last_activity_at"] is None
 
     def test_invalid_engagement_rejected(self) -> None:
         with pytest.raises(ValidationError):

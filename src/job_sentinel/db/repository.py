@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlite_utils
@@ -43,6 +43,7 @@ from job_sentinel.core.models import (
     JobEngagement,
     JobPosting,
     JobRaw,
+    JobTask,
     PacketSnapshot,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
@@ -55,13 +56,14 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
 _DOC_TABLE = "generated_documents"
 _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
+_JOB_TASKS_TABLE = "job_tasks"
 _SPONSOR_EMPLOYERS = "sponsor_employers"
 _SPONSOR_SYNC = "sponsor_registry_sync"
 _SUBMISSIONS_TABLE = "application_submissions"
@@ -171,6 +173,7 @@ class JobRepository:
         self._ensure_documents_table()
         self._ensure_v0_tables()
         self._ensure_prd02_tables()
+        self._ensure_job_tasks_table()
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -657,6 +660,24 @@ class JobRepository:
         raw.create_index(["collected_at"], if_not_exists=True)
         raw.create_index(["job_id"], if_not_exists=True)
 
+    def _ensure_job_tasks_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_tasks (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                due_at TEXT,
+                done INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        tasks = self._table(_JOB_TASKS_TABLE)
+        tasks.create_index(["job_id"], if_not_exists=True)
+        tasks.create_index(["due_at"], if_not_exists=True)
+
     def _get_meta(self, key: str) -> str | None:
         rows = list(self._table(_META_TABLE).rows_where("key = ?", [key]))
         return rows[0]["value"] if rows else None
@@ -685,6 +706,8 @@ class JobRepository:
             self._ensure_sponsorship_tables()
         if from_version < 6:
             self._ensure_prd02_tables()
+        if from_version < 7:
+            self._ensure_job_tasks_table()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -767,7 +790,11 @@ class JobRepository:
 
         if existing is None:
             prepared = job.model_copy(
-                update={"source_job_id": source_job_id, "fingerprint": fingerprint}
+                update={
+                    "source_job_id": source_job_id,
+                    "fingerprint": fingerprint,
+                    "last_activity_at": None,
+                }
             )
             self._table(_JOBS_TABLE).insert(_hub_job_to_row(prepared))
             stored = self.get_hub_job(prepared.id)
@@ -805,9 +832,9 @@ class JobRepository:
         """Fetch a canonical ``jobs`` row by id."""
         try:
             row = self._table(_JOBS_TABLE).get(job_id)
-            return _hub_job_from_row(dict(row))
         except sqlite_utils.db.NotFoundError:
             return None
+        return self._attach_job_tasks([_hub_job_from_row(dict(row))])[0]
 
     def get_job_by_source_key(self, source: str, source_job_id: str) -> Job | None:
         """Lookup by UNIQUE ``(source, source_job_id)``."""
@@ -912,12 +939,12 @@ class JobRepository:
             jobs = [j for j in jobs if j.is_remote]
         elif remote is False:
             jobs = [j for j in jobs if not j.is_remote]
-        return jobs[: max(1, min(limit, 500))]
+        return self._attach_job_tasks(jobs[: max(1, min(limit, 500))])
 
     def list_all_hub_jobs(self) -> list[Job]:
         """Every canonical job, for reversible re-filtering."""
         rows = self._table(_JOBS_TABLE).rows_where(order_by="discovered_at DESC")
-        return [_hub_job_from_row(dict(r)) for r in rows]
+        return self._attach_job_tasks([_hub_job_from_row(dict(r)) for r in rows])
 
     def update_hub_job_filter(
         self,
@@ -992,8 +1019,92 @@ class JobRepository:
             )
         if archive_reason is not _UNSET:
             payload["archive_reason"] = archive_reason
+        if len(payload) > 1:
+            payload["last_activity_at"] = _now_iso()
         self._table(_JOBS_TABLE).update(job_id, payload)
         return self.get_hub_job(job_id)
+
+    def _attach_job_tasks(self, jobs: list[Job]) -> list[Job]:
+        grouped = self.list_job_tasks_for_jobs([j.id for j in jobs])
+        for job in jobs:
+            job.tasks = grouped.get(job.id, [])
+        return jobs
+
+    def list_job_tasks(self, job_id: str) -> list[JobTask]:
+        rows = self._table(_JOB_TASKS_TABLE).rows_where(
+            "job_id = ?",
+            [job_id],
+            order_by="sort_order ASC, created_at ASC",
+        )
+        return [_job_task_from_row(dict(r)) for r in rows]
+
+    def list_job_tasks_for_jobs(self, job_ids: Sequence[str]) -> dict[str, list[JobTask]]:
+        grouped: dict[str, list[JobTask]] = {jid: [] for jid in job_ids}
+        ids = [jid for jid in job_ids if jid]
+        if not ids:
+            return grouped
+        placeholders = ",".join("?" * len(ids))
+        rows = self._table(_JOB_TASKS_TABLE).rows_where(
+            f"job_id IN ({placeholders})",  # noqa: S608 — placeholders only, ids bound
+            list(ids),
+            order_by="sort_order ASC, created_at ASC",
+        )
+        for row in rows:
+            task = _job_task_from_row(dict(row))
+            grouped.setdefault(task.job_id, []).append(task)
+        return grouped
+
+    def create_job_task(
+        self,
+        job_id: str,
+        *,
+        title: str,
+        due_at: date | None = None,
+        sort_order: int | None = None,
+    ) -> JobTask | None:
+        if self.get_hub_job(job_id) is None:
+            return None
+        order = sort_order
+        if order is None:
+            existing = self.list_job_tasks(job_id)
+            order = (existing[-1].sort_order + 1) if existing else 0
+        task = JobTask(job_id=job_id, title=title, due_at=due_at, sort_order=order)
+        self._table(_JOB_TASKS_TABLE).insert(_job_task_to_row(task))
+        self.touch_hub_job_activity(job_id)
+        return task
+
+    def get_job_task(self, task_id: str) -> JobTask | None:
+        try:
+            row = self._table(_JOB_TASKS_TABLE).get(task_id)
+            return _job_task_from_row(dict(row))
+        except sqlite_utils.db.NotFoundError:
+            return None
+
+    def update_job_task(self, job_id: str, task_id: str, fields: dict[str, Any]) -> JobTask | None:
+        task = self.get_job_task(task_id)
+        if task is None or task.job_id != job_id:
+            return None
+        payload: dict[str, Any] = {}
+        if "title" in fields and fields["title"] is not None:
+            payload["title"] = str(fields["title"]).strip()
+        if "due_at" in fields:
+            payload["due_at"] = _optional_date_str(fields["due_at"])
+        if "done" in fields:
+            payload["done"] = 1 if fields["done"] else 0
+        if "sort_order" in fields and fields["sort_order"] is not None:
+            payload["sort_order"] = int(fields["sort_order"])
+        if payload:
+            self._table(_JOB_TASKS_TABLE).update(task_id, payload)
+            self.touch_hub_job_activity(job_id)
+        return self.get_job_task(task_id)
+
+    def delete_job_task(self, job_id: str, task_id: str) -> bool:
+        task = self.get_job_task(task_id)
+        if task is None or task.job_id != job_id:
+            return False
+        self._table(_JOB_TASKS_TABLE).delete(task_id)
+        self.touch_hub_job_activity(job_id)
+        return True
 
     def touch_hub_job_activity(self, job_id: str) -> None:
         if self.get_hub_job(job_id) is None:
@@ -1611,6 +1722,48 @@ def _parse_sponsorship(value: object) -> SponsorshipInfo:
 
 def _optional_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _optional_date_str(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    return text[:10] if text else None
+
+
+def _job_task_to_row(task: JobTask) -> dict[str, Any]:
+    return {
+        "id": task.id,
+        "job_id": task.job_id,
+        "title": task.title,
+        "due_at": _optional_date_str(task.due_at),
+        "done": 1 if task.done else 0,
+        "sort_order": task.sort_order,
+        "created_at": task.created_at.isoformat(),
+    }
+
+
+def _job_task_from_row(row: dict[str, Any]) -> JobTask:
+    due_raw = row.get("due_at")
+    due_at: date | None = None
+    if due_raw:
+        try:
+            due_at = date.fromisoformat(str(due_raw)[:10])
+        except ValueError:
+            due_at = None
+    return JobTask(
+        id=str(row["id"]),
+        job_id=str(row.get("job_id") or ""),
+        title=str(row.get("title") or ""),
+        due_at=due_at,
+        done=bool(int(row.get("done") or 0)),
+        sort_order=int(row.get("sort_order") or 0),
+        created_at=_parse_dt(row.get("created_at", "")),
+    )
 
 
 def _market_sql(

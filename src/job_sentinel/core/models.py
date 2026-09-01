@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -81,6 +81,32 @@ CLOSE_REASON_LABELS_ZH: dict[CloseReason, str] = {
     CloseReason.WITHDREW: "主动结束",
     CloseReason.OTHER: "其他",
 }
+
+
+class JobTask(BaseModel):
+    """Checklist item on a Job (OA, interview prep). Not an Application stage."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    job_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    due_at: date | None = Field(default=None)
+    done: bool = Field(default=False)
+    sort_order: int = Field(default=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> str:
+        return str(v).strip() if v else ""
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    model_config = {"frozen": False}
 
 
 def compute_job_fingerprint(company: str, title: str, location: str) -> str:
@@ -243,7 +269,11 @@ class Job(BaseModel):
     dismissed_note: str = Field(default="")
     archived_at: datetime | None = Field(default=None)
     archive_reason: str = Field(default="")
-    last_activity_at: datetime | None = Field(default=None)
+    last_activity_at: datetime | None = Field(
+        default=None,
+        description="Last user tracking or task edit. Collectors never bump this.",
+    )
+    tasks: list[JobTask] = Field(default_factory=list)
     match_score: float | None = Field(default=None)
     market: str = Field(
         default="",

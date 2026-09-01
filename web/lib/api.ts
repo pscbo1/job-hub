@@ -177,6 +177,23 @@ export function getProfile(): Promise<Profile | null> {
 export type JobEngagement = "reference" | "under_study" | "to_do";
 export type HubJobStatus = JobEngagement;
 
+export interface JobTask {
+  id: string;
+  job_id: string;
+  title: string;
+  due_at: string | null;
+  done: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface JobTaskPatch {
+  title?: string;
+  due_at?: string | null;
+  done?: boolean;
+  sort_order?: number;
+}
+
 export interface HubJob {
   id: string;
   title: string;
@@ -192,9 +209,12 @@ export interface HubJob {
   comment?: string;
   next_step?: string;
   deadline?: string | null;
+  follow_up_at?: string | null;
   dismissed_at?: string | null;
   archived_at?: string | null;
   application_id?: string | null;
+  last_activity_at?: string | null;
+  tasks?: JobTask[];
   match_score: number | null;
   salary?: string;
   description?: string;
@@ -279,23 +299,40 @@ export async function patchHubJob(
     comment?: string;
     next_step?: string;
     deadline?: string | null;
+    follow_up_at?: string | null;
   },
 ): Promise<HubJob | null> {
   if (demo.DEMO) {
-    return {
-      id: jobId,
-      title: "",
-      company: "",
-      location: "",
-      source: "",
-      job_url: "",
-      published_at: null,
-      discovered_at: "",
-      engagement: body.engagement ?? null,
-      status: body.engagement ?? null,
-      favorite: body.favorite,
-      match_score: null,
+    const current = demo.demoHubJobs.find((j) => j.id === jobId);
+    if (!current) {
+      return {
+        id: jobId,
+        title: "",
+        company: "",
+        location: "",
+        source: "",
+        job_url: "",
+        published_at: null,
+        discovered_at: "",
+        engagement: body.engagement ?? null,
+        status: body.engagement ?? null,
+        favorite: body.favorite,
+        match_score: null,
+      };
+    }
+    const next: HubJob = {
+      ...current,
+      engagement: body.engagement !== undefined ? body.engagement : current.engagement,
+      status: body.engagement !== undefined ? body.engagement : current.status,
+      favorite: body.favorite !== undefined ? body.favorite : current.favorite,
+      comment: body.comment !== undefined ? body.comment : current.comment,
+      next_step: body.next_step !== undefined ? body.next_step : current.next_step,
+      deadline: body.deadline !== undefined ? body.deadline : current.deadline,
+      follow_up_at: body.follow_up_at !== undefined ? body.follow_up_at : current.follow_up_at,
+      tasks: current.tasks,
     };
+    Object.assign(current, next);
+    return next;
   }
   try {
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
@@ -364,6 +401,93 @@ export function archiveHubJob(jobId: string, reason = ""): Promise<HubJob | null
 }
 export function unarchiveHubJob(jobId: string): Promise<HubJob | null> {
   return postJobAction(jobId, "unarchive");
+}
+
+function demoJobById(jobId: string): HubJob | undefined {
+  return demo.demoHubJobs.find((j) => j.id === jobId);
+}
+
+export async function createJobTask(
+  jobId: string,
+  body: { title: string; due_at?: string | null },
+): Promise<JobTask | null> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    const created: JobTask = {
+      id: `demo-task-${Date.now()}`,
+      job_id: jobId,
+      title: body.title,
+      due_at: body.due_at ?? null,
+      done: false,
+      sort_order: job?.tasks?.length ?? 0,
+      created_at: new Date().toISOString(),
+    };
+    if (job) job.tasks = [...(job.tasks ?? []), created];
+    return created;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as JobTask;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchJobTask(
+  jobId: string,
+  taskId: string,
+  patch: JobTaskPatch,
+): Promise<JobTask | null> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    const current = (job?.tasks ?? []).find((t) => t.id === taskId);
+    if (!current) return null;
+    const saved: JobTask = {
+      ...current,
+      title: patch.title ?? current.title,
+      due_at: patch.due_at !== undefined ? patch.due_at : current.due_at,
+      done: patch.done ?? current.done,
+      sort_order: patch.sort_order ?? current.sort_order,
+    };
+    if (job) job.tasks = (job.tasks ?? []).map((t) => (t.id === taskId ? saved : t));
+    return saved;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(patch),
+      },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as JobTask;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteJobTask(jobId: string, taskId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    if (job) job.tasks = (job.tasks ?? []).filter((t) => t.id !== taskId);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function startApplicationForJob(

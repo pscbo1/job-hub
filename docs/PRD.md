@@ -37,9 +37,9 @@ Job 侧跟进意图（engagement）与 Application 投递生命周期分开。Ap
 V0 完成后，用户可以在一个页面完成四件事：
 
 1. 查看今天或某日期之后新增的岗位。
-2. 按 Market、Channel、Keyword、Status 筛选。
+2. 按 Market、Channel、Keyword、engagement 筛选。
 3. 打开原始岗位页完成申请或沟通。
-4. 保存岗位状态、下一步、备注与 Reference。
+4. 保存岗位、下一步、备注与 Reference；投递生命周期在 Application。
 
 AI Match、Agent、完整 Trust Engine、自动投递和多轮沟通管理均作为后续独立模块。
 
@@ -166,7 +166,7 @@ AI Match、Agent、完整 Trust Engine、自动投递和多轮沟通管理均作
 ### 7.2 Should Have
 
 - 岗位详情侧栏或详情页。
-- 批量更新 Status。
+- 批量更新 engagement / Next Step。
 - 过滤原因可见。
 - collection run 最近一次状态可见。
 - CSV / JSONL 导入。
@@ -193,29 +193,17 @@ V0 建立四个产品表面：
 
 ### 8.1 `/jobs`（Discover / Job Pool）
 
-采集后的岗位。出现在此不代表用户要跟进。动作：Save、Start Review / Under Study、Reference、Dismiss、Open Source / Apply。新入库 engagement 为空。
+采集后的岗位。出现在此不代表用户要跟进。动作：Save、Start Review / Under Study、Reference、Dismiss、Open Source / Apply。新入库 engagement 为空（不是 under_study）。卡片可显示 DDL 与未完成 task。
 
 ### 8.2 `/my-jobs`
 
-同一 `jobs` 表过滤：Save（favorite）或 engagement ∈ {reference, under_study, to_do} 或已有 Application（含 draft）。默认排除 dismissed / archived。
+同一 `jobs` 表过滤：Save（favorite）或 engagement ∈ {reference, under_study, to_do} 或已有 Application（含 draft）。默认排除 dismissed / archived。筛选：Active、To Do only，再按 engagement。默认排序 To Do 优先，然后最近 DDL / task due。
 
 ### 8.3 `/applications`
 
-1 Job ↔ 1 Application。阶段：draft | applied | interview | offer | closed。无 Rejected。Packet 是材料绑定，不是 stage。
+1 Job ↔ 1 Application。阶段：draft | applied | interview | offer | closed。无 Rejected。Packet 是材料绑定，不是 stage。Closed 只在已投递过的 Application 上。
 
 ### 8.4 `/sources`
-
-轻量来源与运行状态页。包含：
-
-- Today / Since Date 切换。
-- Market、Channel、Keyword、Status 筛选。
-- 岗位列表或卡片。
-- Job detail drawer。
-- Favorite、engagement、Next Step、Comment 编辑。
-- Open Source / Open Apply Page。
-- Manual Import 入口。
-
-### 8.2 `/sources`
 
 轻量来源与运行状态页。包含：
 
@@ -227,7 +215,7 @@ V0 建立四个产品表面：
 
 V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人工配置。
 
-### 8.3 `/review`
+### 8.5 `/review`
 
 只显示两类记录：
 
@@ -243,9 +231,9 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 ### 9.1 Default View
 
 - 默认打开 `Today`。
-- 默认隐藏 `Closed`。
-- 默认排序：`published_at desc`；缺失时使用 `first_seen_at desc`。
-- 默认展示新采集且未关闭的岗位。
+- 默认隐藏 dismissed / archived（Archive 是 Job 属性，不是 Closed）。
+- 默认排序：To Do 优先，然后最近 DDL / 未完成 task due；否则 `discovered_at desc`。
+- 默认展示新采集且未归档的岗位。
 
 ### 9.2 Job Card
 
@@ -255,11 +243,12 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 - company
 - location
 - market
-- published_at 或 first_seen_at
+- published_at 或 discovered_at
 - primary channel
-- status
-- favorite
+- engagement（可空）
+- Save（favorite）
 - Next Step 摘要
+- DDL 与未完成 task 芯片
 - Open Source
 
 ### 9.3 Job Detail
@@ -307,7 +296,11 @@ Discovery 噪音。Dismiss 时必须：favorite=false、engagement=null、写入
 
 ### 10.5 Archive
 
-仅 Job 级 `archived_at`。与 Closed 正交。Idle auto-archive（默认关）只写 archived_at。
+仅 Job 级 `archived_at`。与 Application Closed 正交。Idle auto-archive（默认关）只写 archived_at，永不写 Closed / auto_archived。跳过：Reference、进行中的 Application（applied/interview/offer）、未完成 checklist task、非空 next_step、未到期的 follow_up_at。采集不写入 `last_activity_at`。CLI：`job-sentinel archive [--force] [--dry-run]`。
+
+### 10.6 Tasks / DDL
+
+Job 可有 checklist tasks（OA / 面试准备）与主 DDL（`deadline`）。`follow_up_at` 是提醒日期，不是列表芯片。Task CRUD 会更新 `last_activity_at`。
 
 ---
 
@@ -614,6 +607,8 @@ V0 不调用付费 Threat Intelligence provider，也不把“未发现异常”
 | comment | text | nullable |
 | next_step | text | nullable |
 | deadline | timestamptz | nullable main DDL |
+| follow_up_at | timestamptz | reminder; not a list chip |
+| last_activity_at | timestamptz | user/task activity only; collectors leave NULL |
 | dismissed_at | timestamptz | Discovery stow |
 | archived_at | timestamptz | Job-level archive |
 | archive_reason | text | nullable |
@@ -626,9 +621,22 @@ V0 不调用付费 Threat Intelligence provider，也不把“未发现异常”
 
 Constraints：
 
-- engagement ∈ NULL / reference / under_study / to_do。
+- engagement ∈ NULL / reference / under_study / to_do。新入库默认 NULL，不是 under_study。
 - 不允许 favorite=true 且 dismissed_at 非空；不允许非空 engagement 与 Dismiss 并存。
+- Job 不承载 Applied / Interview / Offer / Closed；无 Rejected。
 - primary_source_url 必须对应至少一条 job_sources。
+
+### 16.5b `job_tasks`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | text PK | |
+| job_id | text FK | |
+| title | text | required |
+| due_at | date | nullable |
+| done | boolean | default false |
+| sort_order | int | |
+| created_at | timestamptz | |
 
 ### 16.6 `job_sources`
 
@@ -760,7 +768,7 @@ V0 不从空白脚手架开始。主实现基线采用 [Job Sentinel](https://gi
 | auth | Keep available | localhost 默认关闭；公网运行时启用 |
 | Telegram / email notifier | Disable | 不进入 V0 |
 | profile / documents / LLM / chat | Disable | 不进入 V0 |
-| application CRM | Disable | V0 使用 Job 上的 Status / Next Step / Comment |
+| application CRM | Reduce | V0 使用 Job engagement / Next Step / Comment / tasks；投递阶段在 Application |
 
 ### 18.3 Fixed V0 Stack
 
@@ -1020,10 +1028,10 @@ V0 开发期间不删除旧表。
 交付：
 
 - Save（favorite）。
-- engagement（null / reference / under_study / to_do）。
-- Next Step。
-- Comment。
-- Application stages（draft / applied / interview / offer / closed）。
+- engagement（null / reference / under_study / to_do）；新入库默认 null。
+- Next Step、Comment、DDL、job tasks。
+- Application stages（draft / applied / interview / offer / closed）。无 Rejected。
+- Job-level archive（`archived_at`），不是 Job Closed。
 - Reference。
 - Open Apply Page。
 
@@ -1078,7 +1086,7 @@ Then 岗位不进入默认视图，并保存过滤原因。
 
 Given 数据库包含多个日期和渠道的岗位，  
 When 用户选择 Today 或 Since Date，  
-Then 结果时间范围正确，并可继续按 Market、Channel、Keyword、Status 筛选。
+Then 结果时间范围正确，并可继续按 Market、Channel、Keyword、engagement 筛选。
 
 ### AC7｜Tracking
 

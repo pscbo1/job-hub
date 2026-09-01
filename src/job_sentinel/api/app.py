@@ -19,7 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +42,7 @@ from job_sentinel.core.models import (
     Job,
     JobEngagement,
     JobPosting,
+    JobTask,
     PacketSnapshot,
 )
 from job_sentinel.documents.match import MatchResult, match_profile_to_job
@@ -122,10 +123,54 @@ class HubJobStatusRequest(BaseModel):
     comment: str | None = None
     next_step: str | None = None
     deadline: datetime | None = None
+    follow_up_at: datetime | None = None
 
     @field_validator("engagement", "status", mode="before")
     @classmethod
     def _blank_engagement(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    @field_validator("deadline", "follow_up_at", mode="before")
+    @classmethod
+    def _blank_dates(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+
+class JobTaskCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    due_at: date | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> object:
+        return str(v).strip() if v is not None else v
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+
+class JobTaskPatchRequest(BaseModel):
+    title: str | None = None
+    due_at: date | None = None
+    done: bool | None = None
+    sort_order: int | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> object:
+        return str(v).strip() if isinstance(v, str) else v
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
         if v is None or v == "":
             return None
         return v
@@ -641,6 +686,8 @@ def create_app(
                     tracking["next_step"] = req.next_step
                 if req.deadline is not None or "deadline" in fields_set:
                     tracking["deadline"] = req.deadline
+                if req.follow_up_at is not None or "follow_up_at" in fields_set:
+                    tracking["follow_up_at"] = req.follow_up_at
                 if tracking:
                     job = repo.update_hub_job_tracking(job_id, **tracking) or job
             except TrackingError as exc:
@@ -672,6 +719,57 @@ def create_app(
         from job_sentinel.jobs.actions import set_reference
 
         return _job_action(db_path, job_id, lambda repo: set_reference(repo, job_id))
+
+    @app.get("/api/jobs/{job_id}/tasks", response_model=list[JobTask])
+    def list_hub_job_tasks(job_id: str) -> list[JobTask]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            if repo.get_hub_job(job_id) is None:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            return repo.list_job_tasks(job_id)
+        finally:
+            repo.close()
+
+    @app.post("/api/jobs/{job_id}/tasks", response_model=JobTask)
+    def create_hub_job_task(job_id: str, req: JobTaskCreateRequest) -> JobTask:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.create_job_task(job_id, title=req.title, due_at=req.due_at)
+        finally:
+            repo.close()
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return task
+
+    @app.patch("/api/jobs/{job_id}/tasks/{task_id}", response_model=JobTask)
+    def patch_hub_job_task(job_id: str, task_id: str, req: JobTaskPatchRequest) -> JobTask:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.update_job_task(job_id, task_id, req.model_dump(exclude_unset=True))
+        finally:
+            repo.close()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return task
+
+    @app.delete("/api/jobs/{job_id}/tasks/{task_id}")
+    def delete_hub_job_task(job_id: str, task_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            deleted = repo.delete_job_task(job_id, task_id)
+        finally:
+            repo.close()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"ok": True}
 
     @app.post("/api/jobs/{job_id}/start-application")
     def start_application_hub_job(job_id: str) -> dict[str, Any]:

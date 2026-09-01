@@ -173,6 +173,19 @@ export const demoHubJobs: HubJob[] = [
     favorite: true,
     match_score: null,
     salary: "23-50k·15薪",
+    deadline: "2026-09-12",
+    next_step: "Prep OA",
+    tasks: [
+      {
+        id: "demo-task-oa",
+        job_id: "demo-hub-2",
+        title: "OA",
+        due_at: "2026-09-05",
+        done: false,
+        sort_order: 0,
+        created_at: "2026-08-25T00:00:00Z",
+      },
+    ],
   },
 ];
 

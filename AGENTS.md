@@ -14,7 +14,7 @@ Deliver the smallest usable Job Hub V0, then the sealed PRD02 tracking model:
 
 `Channel / Manual Import → jobs_raw → Normalize → Trust Gate → Dedup → Rule Filter → Discover / Job Pool → My Jobs → Application`
 
-Job engagement is `null | reference | under_study | to_do`. Application stages are `draft | applied | interview | offer | closed`. There is no Rejected anywhere. Archive is Job-level (`archived_at`) only.
+Job engagement is `null | reference | under_study | to_do`. Application stages are `draft | applied | interview | offer | closed`. There is no Rejected anywhere. Archive is Job-level (`archived_at`) only — never Application Closed / `auto_archived`. Jobs may carry checklist tasks, a main DDL, and `follow_up_at`; collectors leave `last_activity_at` NULL.
 
 ## Implementation strategy
 
@@ -35,7 +35,7 @@ Do not implement these without an explicit request:
 - Agent runtime or MCP integration
 - Resume, profile, document, or cover-letter generation
 - Telegram or email notifications
-- Full application CRM or communication history (V0). PRD02 tracking is in scope: 1:1 Application, submissions, Job archive.
+- Full application CRM or communication history (V0). PRD02 tracking is in scope: 1:1 Application, submissions, Job archive, job tasks / DDL.
 - Grok Cloud collection
 - ATS autofill or automatic application submission
 - Supabase, Vercel, or cloud scheduling
@@ -52,12 +52,13 @@ Disable or remove upstream surfaces that expose these features in the V0 UI. Pre
 - Repeated ingestion is idempotent.
 - High-confidence duplicate rules may merge automatically; uncertain matches enter Review.
 - Human-set Favorite (Save), engagement, Next Step, Comment, dismissed_at, archived_at, and Application fields are never overwritten by a collector run.
-- Favorite (Save) is independent from engagement. New jobs default to `engagement=null` (not under_study).
+- Favorite (Save) is independent from engagement. New jobs default to `engagement=null` (not under_study). Collectors never write a lifecycle Status onto Job and never bump `last_activity_at`.
 - Valid Job engagement values are `reference`, `under_study`, and `to_do` (or null).
 - Application stages are `draft`, `applied`, `interview`, `offer`, and `closed`. Never rejected.
 - 1 Job ↔ 1 Application. Re-apply appends a submission event and reopens Applied.
 - Dismiss and Save/engagement are mutually exclusive.
-- Setting Application to Closed requires a close_reason on the Application only.
+- Setting Application to Closed requires a close_reason on the Application only. Job has no Closed / Rejected / `close_reason`.
+- Idle auto-archive (default off) sets `jobs.archived_at` only; skip incomplete tasks, Reference, and in-progress Applications. CLI: `job-sentinel archive [--force] [--dry-run]`.
 - Excluded / dismissed / archived jobs remain stored and stay hidden from the default view.
 - A failing source never aborts other sources or discards successful records.
 - CAPTCHA and login expiry require visible human action; do not bypass them.

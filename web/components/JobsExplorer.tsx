@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { JobActions } from "@/components/JobActions";
+import { JobTasks } from "@/components/JobTasks";
 import {
   JobPoolActionMenu,
   JobPoolUndoToast,
@@ -14,6 +15,16 @@ import {
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import type { HubJob, JobEngagement } from "@/lib/api";
+import {
+  compareActiveJobs,
+  engagementChipLabel,
+  isDateOverdue,
+  jobVisibleInPool,
+  openTasksSorted,
+  POOL_ENGAGEMENT_CHIPS,
+  taskChipText,
+  taskDueUrgency,
+} from "@/lib/jobPipeline";
 import {
   DISCOVERED_RANGE_OPTIONS,
   jobsPoolHref,
@@ -34,15 +45,12 @@ import {
 } from "@/lib/sponsorshipDisplay";
 import { cn, externalUrl } from "@/lib/utils";
 
-const ENGAGEMENTS: JobEngagement[] = ["under_study", "to_do", "reference"];
-
-function engagementChipLabel(key: string): string {
-  if (key === "unset") return "Discovery";
-  if (key === "under_study") return "Under study";
-  if (key === "to_do") return "To do";
-  if (key === "reference") return "Reference";
-  return key;
-}
+const TASK_CHIP: Record<string, string> = {
+  overdue: "bg-rose-100 text-rose-800",
+  today: "bg-amber-100 text-amber-900",
+  upcoming: "bg-sky-50 text-sky-800",
+  none: "bg-stone-100 text-stone-700",
+};
 
 const ACCENT: Record<string, string> = {
   unset: "bg-stone-300",
@@ -96,7 +104,7 @@ export function JobsExplorer({
   const reduced = useReducedMotion();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<string>("all");
-  const [sort, setSort] = useState<"newest" | "published">("newest");
+  const [sort, setSort] = useState<"newest" | "published" | "active">("active");
   const [showSponsorship, setShowSponsorship] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, HubJob>>({});
   const poolActions = useJobPoolActions();
@@ -186,8 +194,7 @@ export function JobsExplorer({
     const q = query.trim().toLowerCase();
     const filtered = jobs.filter((j) => {
       const s = engagementOf(j);
-      if (filter === "unset" && s !== null) return false;
-      if (filter !== "all" && filter !== "unset" && s !== filter) return false;
+      if (!jobVisibleInPool(s, filter, true, row.archived_at)) return false;
       if (!q) return true;
       return [j.title, j.company, j.location, j.source]
         .join(" ")
@@ -197,6 +204,8 @@ export function JobsExplorer({
     const sorted = [...filtered];
     if (sort === "published") {
       sorted.sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""));
+    } else if (sort === "active") {
+      sorted.sort((a, b) => compareActiveJobs(merged(a), merged(b)));
     } else {
       sorted.sort((a, b) => b.discovered_at.localeCompare(a.discovered_at));
     }
@@ -278,10 +287,11 @@ export function JobsExplorer({
             Sort
             <PopoverSelect
               value={sort}
-              onChange={(v) => setSort(v as "newest" | "published")}
+              onChange={(v) => setSort(v as "newest" | "published" | "active")}
               aria-label="Sort jobs"
               className="w-40"
               options={[
+                { value: "active", label: "To Do / DDL" },
                 { value: "newest", label: "Discovered" },
                 { value: "published", label: "Published" },
               ]}
@@ -411,7 +421,7 @@ export function JobsExplorer({
           </div>
         )}
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by engagement">
-          {["all", "unset", ...ENGAGEMENTS].map((s) => (
+          {POOL_ENGAGEMENT_CHIPS.map((s) => (
             <button
               key={s}
               onClick={() => setFilter(s)}
@@ -448,6 +458,7 @@ export function JobsExplorer({
           {visible.map((j, idx) => {
             const st = engagementOf(j);
             const row = merged(j);
+            const dueTasks = openTasksSorted(row);
             return (
               <motion.div
                 key={j.id}
@@ -488,6 +499,41 @@ export function JobsExplorer({
                     </CardSub>
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <span className="text-[11px] text-muted">Discovered {dayStamp(j.discovered_at)}</span>
+                      {row.next_step && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                          Next: {row.next_step}
+                        </span>
+                      )}
+                      {row.deadline && (
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                            isDateOverdue(row.deadline)
+                              ? "bg-rose-100 text-rose-800"
+                              : taskDueUrgency(row.deadline) === "today"
+                                ? "bg-amber-100 text-amber-900"
+                                : "bg-sky-50 text-sky-800",
+                          )}
+                        >
+                          DDL {dayStamp(row.deadline)}
+                        </span>
+                      )}
+                      {dueTasks.slice(0, 3).map((task) => (
+                        <span
+                          key={task.id}
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                            TASK_CHIP[taskDueUrgency(task.due_at)],
+                          )}
+                        >
+                          {taskChipText(task.title, task.due_at)}
+                        </span>
+                      ))}
+                      {dueTasks.length > 3 && (
+                        <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[11px] font-medium text-stone-700">
+                          +{dueTasks.length - 3} more
+                        </span>
+                      )}
                       {j.published_at && (
                         <span className="text-[11px] text-muted">Published {dayStamp(j.published_at)}</span>
                       )}
@@ -524,7 +570,23 @@ export function JobsExplorer({
                     <JobActions
                       job={row}
                       variant={variant}
-                      onChange={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
+                      onChange={(next) =>
+                        setOverrides((o) => ({
+                          ...o,
+                          [j.id]: { ...next, tasks: next.tasks ?? o[j.id]?.tasks ?? row.tasks },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="border-t border-line pt-3">
+                    <JobTasks
+                      job={row}
+                      onChange={(tasks) =>
+                        setOverrides((o) => ({
+                          ...o,
+                          [j.id]: { ...(o[j.id] ?? row), tasks },
+                        }))
+                      }
                     />
                   </div>
 

@@ -7,6 +7,8 @@ This document drops a level below the [HLD](HLD.md): module-by-module
 responsibilities, the key data structures, the exact control flow of a scrape
 cycle, and the contracts each component promises to its callers.
 
+Job Hub tracking, schema, and stages follow `docs/PRD.md` (PRD02). Ignore Job Sentinel `ApplicationStage` values such as `saved` / `rejected` / `archived` when they conflict with the sealed model.
+
 ---
 
 ## 1. Module map

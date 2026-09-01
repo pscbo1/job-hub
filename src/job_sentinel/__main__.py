@@ -1010,6 +1010,48 @@ def adapters() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# archive — idle Job stow (cron-friendly). Sets archived_at, never Closed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def archive(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report matches without writing"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Run even when auto-archive is disabled in settings",
+    ),
+) -> None:
+    """Archive idle Job Pool rows (cron-friendly). No-op unless enabled, unless --force.
+
+    Settings: GET/PUT /api/archive-settings (enabled default off, idle_days=14).
+    Writes Job.archived_at only — never Application Closed.
+    """
+    from job_sentinel.config.settings import get_settings
+    from job_sentinel.db.repository import JobRepository
+    from job_sentinel.jobs.archive import load_archive_settings, run_idle_archive
+
+    settings = get_settings()
+    repo = JobRepository(settings.db_path)
+    try:
+        cfg = load_archive_settings(repo)
+        result = run_idle_archive(repo, settings=cfg, dry_run=dry_run, force=force)
+    finally:
+        repo.close()
+    if result.disabled:
+        console.print(
+            "[yellow]Auto-archive is off.[/] Enable it in Job Pool settings or pass --force."
+        )
+        return
+    mode = "dry-run" if result.dry_run else "archived"
+    console.print(
+        f"[green]{mode}[/] scanned={result.scanned} "
+        f"archived={result.archived} skipped={result.skipped}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # apps — application tracker (Huntr/Teal-style)
 # ─────────────────────────────────────────────────────────────────────────────
 
