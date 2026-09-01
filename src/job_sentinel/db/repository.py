@@ -1480,6 +1480,12 @@ class JobRepository:
         fields.pop("submissions", None)
         fields.pop("current_material_count", None)
         fields.pop("comm_notes", None)
+        fields.pop("next_step", None)
+        fields.pop("job_deadline", None)
+        fields.pop("job_description", None)
+        fields.pop("job_comment", None)
+        fields.pop("apply_url", None)
+        fields.pop("job_url", None)
         fields["updated_at"] = _now_iso()
         if "exclude_from_idle" in fields:
             fields["exclude_from_idle"] = 1 if fields["exclude_from_idle"] else 0
@@ -1618,7 +1624,56 @@ class JobRepository:
         app.submissions = self.list_application_submissions(app.id)
         app.current_material_count = self.count_application_bindings(app.id)
         app.comm_notes = self.list_comm_notes(app.id)
+        return self._attach_job_projection(app)
+
+    def _attach_job_projection(self, app: Application) -> Application:
+        """Copy Job next_step / DDL / JD / comment for Applications UI. Not persisted."""
+        if not app.job_id:
+            return app
+        job = self.get_hub_job(app.job_id)
+        if job is None:
+            return app
+        app.next_step = job.next_step or ""
+        if job.deadline is not None:
+            stamp = (
+                job.deadline.date().isoformat()
+                if hasattr(job.deadline, "date")
+                else str(job.deadline)
+            )
+            app.job_deadline = stamp[:10]
+        app.job_description = job.description or ""
+        app.job_comment = job.comment or ""
+        app.apply_url = self._stored_apply_url(app.job_id)
+        app.job_url = (job.job_url or job.canonical_url or "").strip()
         return app
+
+    def _stored_apply_url(self, job_id: str) -> str:
+        """Return a stored apply URL from ingest payload. Do not guess chat/email links."""
+        try:
+            rows = list(
+                self._table(_JOBS_RAW_TABLE).rows_where(
+                    "job_id = ?",
+                    [job_id],
+                    order_by="collected_at DESC",
+                    limit=1,
+                )
+            )
+        except sqlite3.Error:
+            return ""
+        if not rows:
+            return ""
+        raw = rows[0].get("raw_payload") or "{}"
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("application_url", "apply_url"):
+            value = str(payload.get(key) or "").strip()
+            if value.startswith("http://") or value.startswith("https://"):
+                return value
+        return ""
 
     def application_stats(self) -> dict[str, int]:
         """Count of applications per stage, plus a 'total' key."""

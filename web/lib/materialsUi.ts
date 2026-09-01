@@ -1,4 +1,5 @@
 import type { Application, Material, MaterialVersion, PacketSnapshotItem } from "@/lib/api";
+import { formatCalendarDate } from "@/lib/timezone";
 
 export function materialCountLabel(count: number): string {
   if (count <= 0) return "No materials";
@@ -11,10 +12,7 @@ export function currentMaterialCount(app: Application): number {
 
 export function formatAppliedDate(value: string): string {
   if (!value) return "—";
-  const iso = value.length === 10 ? `${value}T00:00:00` : value;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return formatCalendarDate(value.slice(0, 10));
 }
 
 export function snapshotItemLabel(item: PacketSnapshotItem): string {

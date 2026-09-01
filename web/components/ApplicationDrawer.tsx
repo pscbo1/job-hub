@@ -1,0 +1,441 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+import { MaterialsArea, NotesPanel } from "@/components/ApplicationWorkspace";
+import { SourceActionLink } from "@/components/SourceActionLink";
+import { addCommNote, patchHubJob, updateApplication, type Application } from "@/lib/api";
+import {
+  type ApplicationDrawerTab,
+  latestSubmissionLine,
+  nextStepLabel,
+} from "@/lib/applicationUi";
+import { dateInputValue, isDateOverdue } from "@/lib/jobPipeline";
+import { DIRTY_SWITCH_LABELS } from "@/lib/recordDraft";
+import { sourceAction } from "@/lib/sourceAction";
+import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
+import { cn } from "@/lib/utils";
+
+const TABS: { id: ApplicationDrawerTab; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "materials", label: "Materials" },
+  { id: "notes", label: "Notes" },
+];
+
+export function ApplicationDrawer({
+  requestedApp,
+  requestedTab,
+  loading,
+  missing,
+  onClose,
+  onStay,
+  onTabChange,
+  onChanged,
+  onSubmitRequest,
+  onToggleIdleExempt,
+}: {
+  requestedApp: Application | null;
+  requestedTab: ApplicationDrawerTab;
+  loading?: boolean;
+  missing?: boolean;
+  onClose: () => void;
+  onStay: (id: string) => void;
+  onTabChange: (tab: ApplicationDrawerTab) => void;
+  onChanged: () => void;
+  onSubmitRequest: (id: string) => void;
+  onToggleIdleExempt?: (app: Application) => void;
+}) {
+  const [shown, setShown] = useState<Application | null>(requestedApp);
+  const [pending, setPending] = useState<Application | null>(null);
+  const [tab, setTab] = useState<ApplicationDrawerTab>(requestedTab);
+  const [notesDraft, setNotesDraft] = useState(requestedApp?.notes ?? "");
+  const [nextDraft, setNextDraft] = useState(requestedApp?.next_step ?? "");
+  const [ddlDraft, setDdlDraft] = useState(dateInputValue(requestedApp?.job_deadline));
+  const [commDraft, setCommDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [closeArmed, setCloseArmed] = useState(false);
+  const dirtyRef = useRef(false);
+  const shownIdRef = useRef(requestedApp?.id ?? "");
+
+  function syncDrafts(app: Application) {
+    setNotesDraft(app.notes);
+    setNextDraft(app.next_step ?? "");
+    setDdlDraft(dateInputValue(app.job_deadline));
+    setCommDraft("");
+  }
+
+  const isDirty =
+    shown != null &&
+    (notesDraft !== shown.notes ||
+      nextDraft !== (shown.next_step ?? "") ||
+      ddlDraft !== dateInputValue(shown.job_deadline) ||
+      commDraft.trim() !== "");
+  dirtyRef.current = isDirty;
+  shownIdRef.current = shown?.id ?? "";
+
+  useEffect(() => {
+    if (!requestedApp) {
+      if (!dirtyRef.current) {
+        setShown(null);
+        setPending(null);
+      }
+      return;
+    }
+    if (requestedApp.id === shownIdRef.current) {
+      setShown(requestedApp);
+      return;
+    }
+    if (!dirtyRef.current) {
+      setShown(requestedApp);
+      setPending(null);
+      setCloseArmed(false);
+      syncDrafts(requestedApp);
+      return;
+    }
+    setPending(requestedApp);
+  }, [requestedApp]);
+
+  useEffect(() => {
+    if (!pending) setTab(requestedTab);
+  }, [requestedTab, pending]);
+
+  useEffect(() => {
+    if (shown) syncDrafts(shown);
+    // Only reset drafts when the shown record identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown?.id]);
+
+  async function saveShown(): Promise<boolean> {
+    if (!shown) return false;
+    setSaving(true);
+    try {
+      await updateApplication(shown.id, { notes: notesDraft });
+      if (shown.job_id) {
+        await patchHubJob(shown.job_id, {
+          next_step: nextDraft,
+          deadline: ddlDraft.trim() ? ddlDraft : null,
+        });
+      }
+      if (commDraft.trim()) {
+        await addCommNote(shown.id, commDraft.trim());
+        setCommDraft("");
+      }
+      onChanged();
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveAndSwitch() {
+    const target = pending;
+    const ok = await saveShown();
+    if (!ok || !target) return;
+    setShown(target);
+    setPending(null);
+    setCloseArmed(false);
+    syncDrafts(target);
+    setTab(requestedTab);
+  }
+
+  function discardAndSwitch() {
+    const target = pending;
+    if (!target) {
+      setPending(null);
+      return;
+    }
+    setShown(target);
+    setPending(null);
+    setCloseArmed(false);
+    syncDrafts(target);
+    setTab(requestedTab);
+  }
+
+  function stay() {
+    if (!shown) return;
+    setPending(null);
+    setCloseArmed(false);
+    onStay(shown.id);
+  }
+
+  function requestClose() {
+    if (isDirty && shown) {
+      setCloseArmed(true);
+      return;
+    }
+    onClose();
+  }
+
+  const source = shown
+    ? sourceAction({ apply_url: shown.apply_url, url: shown.url, job_url: shown.job_url })
+    : null;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button type="button" className="absolute inset-0 bg-ink/30" aria-label="Close drawer" onClick={requestClose} />
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-[720px] flex-col border-l border-line bg-surface shadow-xl max-sm:inset-0">
+        {pending && shown && pending.id !== shown.id && (
+          <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm">
+            Unsaved changes on this application.
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void saveAndSwitch()}
+                className="h-8 rounded-lg bg-ink px-3 text-xs text-white disabled:opacity-50"
+              >
+                {DIRTY_SWITCH_LABELS.save}
+              </button>
+              <button type="button" onClick={discardAndSwitch} className="h-8 rounded-lg border border-line px-3 text-xs">
+                {DIRTY_SWITCH_LABELS.discard}
+              </button>
+              <button type="button" onClick={stay} className="h-8 rounded-lg border border-line px-3 text-xs">
+                {DIRTY_SWITCH_LABELS.stay}
+              </button>
+            </div>
+          </div>
+        )}
+        {closeArmed && shown && (
+          <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm">
+            Unsaved changes. Save, discard, or stay on this application.
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={async () => {
+                  const ok = await saveShown();
+                  if (ok) {
+                    setCloseArmed(false);
+                    onClose();
+                  }
+                }}
+                className="h-8 rounded-lg bg-ink px-3 text-xs text-white disabled:opacity-50"
+              >
+                Save and close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCloseArmed(false);
+                  onClose();
+                }}
+                className="h-8 rounded-lg border border-line px-3 text-xs"
+              >
+                {DIRTY_SWITCH_LABELS.discard}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCloseArmed(false)}
+                className="h-8 rounded-lg border border-line px-3 text-xs"
+              >
+                {DIRTY_SWITCH_LABELS.stay}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {loading && !shown ? (
+          <div className="p-6 text-sm text-muted">Loading application…</div>
+        ) : missing && !shown ? (
+          <div className="p-6 text-sm text-muted">
+            Application not found.
+            <button type="button" className="ml-2 underline" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        ) : shown ? (
+          <>
+            <header className="border-b border-line px-5 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-ink">{shown.title || "Untitled"}</h2>
+                  <p className="text-sm text-muted">
+                    {[shown.employer, shown.location, shown.stage].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+                <button type="button" onClick={requestClose} className="text-sm text-muted hover:text-ink">
+                  Close
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <SourceActionLink apply_url={shown.apply_url} url={shown.url} job_url={shown.job_url} />
+                {shown.stage === "draft" && (
+                  <button
+                    type="button"
+                    onClick={() => onSubmitRequest(shown.id)}
+                    className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink"
+                  >
+                    Mark submitted
+                  </button>
+                )}
+                {onToggleIdleExempt && (
+                  <details className="text-xs text-muted">
+                    <summary className="cursor-pointer hover:text-ink">More</summary>
+                    {shown.stage !== "draft" && (
+                      <button
+                        type="button"
+                        onClick={() => onSubmitRequest(shown.id)}
+                        className="mt-2 block text-left hover:text-ink"
+                      >
+                        {shown.stage === "closed" ? "Reopen (mark submitted)" : "Record another submission"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onToggleIdleExempt(shown)}
+                      className="mt-2 block text-left hover:text-ink"
+                    >
+                      {shown.exclude_from_idle ? "Include in idle cleanup" : "Exclude from idle cleanup"}
+                    </button>
+                  </details>
+                )}
+              </div>
+              <div className="mt-4 flex gap-1 border-b border-line">
+                {TABS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setTab(item.id);
+                      onTabChange(item.id);
+                    }}
+                    className={cn(
+                      "-mb-px border-b-2 px-3 py-2 text-sm",
+                      tab === item.id
+                        ? "border-ink font-medium text-ink"
+                        : "border-transparent text-muted hover:text-ink",
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </header>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {tab === "overview" && (
+                <OverviewTab
+                  app={shown}
+                  nextDraft={nextDraft}
+                  ddlDraft={ddlDraft}
+                  onNextChange={setNextDraft}
+                  onDdlChange={setDdlDraft}
+                  sourceMissing={source?.kind === "missing"}
+                />
+              )}
+              {tab === "materials" && <MaterialsArea key={shown.id} app={shown} onChanged={onChanged} />}
+              {tab === "notes" && (
+                <NotesPanel
+                  key={shown.id}
+                  app={shown}
+                  notes={notesDraft}
+                  onNotesChange={setNotesDraft}
+                  commDraft={commDraft}
+                  onCommDraftChange={setCommDraft}
+                />
+              )}
+            </div>
+          </>
+        ) : null}
+      </aside>
+    </div>
+  );
+}
+
+function OverviewTab({
+  app,
+  nextDraft,
+  ddlDraft,
+  onNextChange,
+  onDdlChange,
+  sourceMissing,
+}: {
+  app: Application;
+  nextDraft: string;
+  ddlDraft: string;
+  onNextChange: (value: string) => void;
+  onDdlChange: (value: string) => void;
+  sourceMissing: boolean;
+}) {
+  const jd = (app.job_description ?? "").trim();
+  const comment = (app.job_comment ?? "").trim();
+  const summary = latestSubmissionLine(app);
+  const overdue = isDateOverdue(ddlDraft, todayInAppTz());
+
+  return (
+    <div className="space-y-5">
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Source</h3>
+        <div className="mt-1">
+          <SourceActionLink apply_url={app.apply_url} url={app.url} job_url={app.job_url} />
+          {sourceMissing && (
+            <p className="mt-1 text-xs text-muted">No apply or source URL is stored for this job.</p>
+          )}
+        </div>
+      </section>
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Next step</h3>
+        {app.job_id ? (
+          <div className="mt-2 space-y-2">
+            <input
+              value={nextDraft}
+              onChange={(e) => onNextChange(e.target.value)}
+              placeholder="Next step"
+              className="h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm"
+            />
+            <label className="block text-xs text-muted">
+              Deadline
+              <input
+                type="date"
+                value={ddlDraft}
+                onChange={(e) => onDdlChange(e.target.value)}
+                className={cn(
+                  "mt-1 h-9 w-full rounded-lg border border-line bg-bg px-3 text-sm text-ink",
+                  overdue && "text-amber-800",
+                )}
+              />
+            </label>
+            {ddlDraft && (
+              <p className={cn("text-xs", overdue ? "text-amber-800" : "text-muted")}>
+                DDL {formatCalendarDate(ddlDraft)}
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="mt-2 text-sm text-muted">
+            {nextStepLabel(app.next_step)}
+            {app.job_deadline ? ` · DDL ${formatCalendarDate(app.job_deadline)}` : ""}
+            <span className="mt-1 block text-xs">This application has no linked job, so next step cannot be edited here.</span>
+          </p>
+        )}
+      </section>
+      {summary && app.stage !== "draft" && (
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Applied</h3>
+          <p className="mt-1 text-sm text-ink">{summary}</p>
+        </section>
+      )}
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Job description</h3>
+        {jd ? (
+          <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{jd}</p>
+        ) : (
+          <div className="mt-2 rounded-lg border border-dashed border-line p-3 text-sm text-muted">
+            Full JD not saved.
+            <div className="mt-2">
+              <SourceActionLink apply_url={app.apply_url} url={app.url} job_url={app.job_url} />
+            </div>
+          </div>
+        )}
+      </section>
+      <details className="rounded-lg border border-line bg-bg p-3">
+        <summary className="cursor-pointer text-sm font-medium text-ink">Research notes</summary>
+        <p className="mt-1 text-xs text-muted">Stored on the job. Separate from application notes.</p>
+        {comment ? (
+          <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{comment}</p>
+        ) : (
+          <p className="mt-2 text-sm text-muted">No research notes on this job.</p>
+        )}
+      </details>
+    </div>
+  );
+}

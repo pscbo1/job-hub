@@ -355,6 +355,12 @@ export async function patchHubJob(
       tasks: current.tasks,
     };
     Object.assign(current, next);
+    for (const row of demo.demoApplications) {
+      if (row.job_id !== jobId) continue;
+      if (body.next_step !== undefined) row.next_step = body.next_step;
+      if (body.deadline !== undefined) row.job_deadline = body.deadline ?? "";
+      if (body.comment !== undefined) row.job_comment = body.comment;
+    }
     return next;
   }
   try {
@@ -702,12 +708,29 @@ export function submissionSnapshotFileUrl(appId: string, submissionId: string, i
 }
 
 export async function getPacket(appId: string): Promise<PacketItem[]> {
-  if (demo.DEMO) return demo.demoPacketFor(appId);
-  const data = await getJSON<{ items: PacketItem[] }>(
-    `/api/applications/${encodeURIComponent(appId)}/packet`,
-    { items: [] },
-  );
-  return data.items;
+  const result = await loadPacket(appId);
+  return result.ok ? result.items : [];
+}
+
+/** Distinguish empty packet from fetch failure (DBG-02 Retry vs empty). */
+export async function loadPacket(
+  appId: string,
+  signal?: AbortSignal,
+): Promise<{ ok: true; items: PacketItem[] } | { ok: false }> {
+  if (demo.DEMO) return { ok: true, items: demo.demoPacketFor(appId) };
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet`, {
+      cache: "no-store",
+      headers: authHeaders(),
+      signal,
+    });
+    if (!res.ok) return { ok: false };
+    const data = (await res.json()) as { items?: PacketItem[] };
+    return { ok: true, items: data.items ?? [] };
+  } catch {
+    if (signal?.aborted) return { ok: false };
+    return { ok: false };
+  }
 }
 
 export async function replacePacket(appId: string, versionIds: string[]): Promise<PacketItem[]> {
@@ -1402,6 +1425,17 @@ export interface Application {
   submissions?: ApplicationSubmission[];
   current_material_count?: number;
   comm_notes?: ApplicationCommNote[];
+  /** Job.next_step projection. Not stored on the application row. */
+  next_step?: string;
+  /** Job.deadline (YYYY-MM-DD). Distinct from Application.deadline. */
+  job_deadline?: string;
+  job_description?: string;
+  /** Job.comment (research notes). Never merged with Application.notes. */
+  job_comment?: string;
+  /** Stored apply URL from ingest payload when present. Never inferred. */
+  apply_url?: string;
+  /** Job.job_url / canonical_url projection for Open source. */
+  job_url?: string;
 }
 
 export interface ApplicationCreateBody {
@@ -1510,6 +1544,9 @@ export async function createApplication(body: ApplicationCreateBody): Promise<Ap
 
 /** Fetch a single application by id. */
 export function getApplication(id: string): Promise<Application | null> {
+  if (demo.DEMO) {
+    return Promise.resolve(demo.demoApplications.find((row) => row.id === id) ?? null);
+  }
   return getJSON<Application | null>(`/api/applications/${encodeURIComponent(id)}`, null);
 }
 
@@ -1581,11 +1618,27 @@ export async function submitApplication(
 }
 
 export async function listCommNotes(appId: string): Promise<ApplicationCommNote[]> {
-  if (demo.DEMO) return demo.listDemoCommNotes(appId);
-  return getJSON<ApplicationCommNote[]>(
-    `/api/applications/${encodeURIComponent(appId)}/comm-notes`,
-    [],
-  );
+  const result = await loadCommNotes(appId);
+  return result.ok ? result.notes : [];
+}
+
+export async function loadCommNotes(
+  appId: string,
+  signal?: AbortSignal,
+): Promise<{ ok: true; notes: ApplicationCommNote[] } | { ok: false }> {
+  if (demo.DEMO) return { ok: true, notes: demo.listDemoCommNotes(appId) };
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/comm-notes`,
+      { cache: "no-store", headers: authHeaders(), signal },
+    );
+    if (!res.ok) return { ok: false };
+    const data = (await res.json()) as ApplicationCommNote[];
+    return { ok: true, notes: Array.isArray(data) ? data : [] };
+  } catch {
+    if (signal?.aborted) return { ok: false };
+    return { ok: false };
+  }
 }
 
 export async function addCommNote(appId: string, body: string): Promise<ApplicationCommNote | null> {

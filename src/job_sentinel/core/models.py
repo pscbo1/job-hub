@@ -504,6 +504,30 @@ class Application(BaseModel):
         default=False,
         description="Computed: Applied with no meaningful update for N days.",
     )
+    next_step: str = Field(
+        default="",
+        description="Job.next_step projection for Applications list/detail. Not stored.",
+    )
+    job_deadline: str = Field(
+        default="",
+        description="Job.deadline (ISO date) projection. Distinct from Application.deadline.",
+    )
+    job_description: str = Field(
+        default="",
+        description="Job.description projection. Empty means the full JD was not saved.",
+    )
+    job_comment: str = Field(
+        default="",
+        description="Job.comment projection (Research notes). Never merged with Application.notes.",
+    )
+    apply_url: str = Field(
+        default="",
+        description="Existing apply URL when present in stored ingest payload. Never inferred.",
+    )
+    job_url: str = Field(
+        default="",
+        description="Job.job_url or canonical_url projection for Open source. Not stored.",
+    )
 
     @model_validator(mode="before")
     @classmethod

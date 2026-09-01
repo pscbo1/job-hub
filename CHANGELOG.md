@@ -26,6 +26,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Application close reasons remain optional (`not_selected` / `no_response` / `withdrew` / `other`). No required Close modal. No Rejected stage.
 - Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.
 - Applications list shows current material counts. All Mark submitted entry points share one confirm panel; empty materials need explicit confirm on client and server.
+- **Applications Round 1 UX (2026-09-01).** List columns are Role/Company, Stage, Next step (Job.next_step + DDL when set), Applied, visible materials count, Actions. Detail is a right drawer with Overview / Materials / Notes. Mark submitted confirm is a shared modal that previews current bindings only. Source actions use stored apply/source URLs only. Display timestamps default to Asia/Shanghai.
 
 ### Fixed
 
@@ -37,6 +38,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Submission history downloads frozen snapshot bytes for that submission, not the latest library file.
 - Empty-material Mark submitted cannot skip confirm; retries with the same idempotency key create one record.
 - Switching Application notes or Material notes no longer cross-writes the previous record.
+- Application drawer, notes, next step, communication draft, and Mark submitted confirm isolate edit state by record id (Save and switch / Discard / Stay). Packet and comm-note fetches abort on switch and show Retry on failure.
 
 - **Release workflow left the sdist and wheel unattached.** When a release was
   cut by hand before the tag was pushed, `gh release create` failed with

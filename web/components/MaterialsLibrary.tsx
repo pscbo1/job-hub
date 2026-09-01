@@ -22,7 +22,7 @@ import {
   latestVersion,
   versionFileLabel,
 } from "@/lib/materialsUi";
-import { isStaleGeneration } from "@/lib/recordDraft";
+import { DIRTY_SWITCH_LABELS, isStaleGeneration } from "@/lib/recordDraft";
 import { cn } from "@/lib/utils";
 import type { Material, MaterialKind, MaterialVersion } from "@/lib/api";
 
@@ -620,13 +620,13 @@ function MaterialDetail({
     <aside className="fixed inset-y-0 right-0 z-40 w-full max-w-lg overflow-y-auto border-l border-border bg-background p-5 shadow-xl">
       {pending ? (
         <div className="mb-4 rounded-md border border-amber-400 bg-amber-50 p-3 text-sm dark:bg-amber-950/40">
-          Unsaved notes on another material. Keep them, or discard and switch.
+          Unsaved notes on another material.
           <div className="mt-2 flex gap-2">
             <button type="button" className="rounded-md bg-foreground px-2 py-1 text-background" onClick={() => void keep()}>
-              Keep edits
+              {DIRTY_SWITCH_LABELS.save}
             </button>
             <button type="button" className="rounded-md border border-border px-2 py-1" onClick={discard}>
-              Discard
+              {DIRTY_SWITCH_LABELS.discard}
             </button>
             <button
               type="button"
@@ -636,7 +636,7 @@ function MaterialDetail({
                 setPending(null);
               }}
             >
-              Keep editing previous
+              {DIRTY_SWITCH_LABELS.stay}
             </button>
           </div>
         </div>

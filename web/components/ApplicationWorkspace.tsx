@@ -8,13 +8,12 @@ import {
   createMaterial,
   deleteCommNote,
   getMaterials,
-  getPacket,
-  listCommNotes,
+  loadCommNotes,
+  loadPacket,
   materialVersionFileUrl,
   replacePacket,
   removePacketBinding,
   submissionSnapshotFileUrl,
-  updateApplication,
   uploadMaterial,
   type Application,
   type ApplicationCommNote,
@@ -22,259 +21,273 @@ import {
   type PacketItem,
   type PacketSnapshotItem,
 } from "@/lib/api";
-import { isStaleGeneration } from "@/lib/recordDraft";
-import { externalUrl } from "@/lib/utils";
 import { latestVersion, snapshotItemLabel } from "@/lib/materialsUi";
+import { isStaleGeneration } from "@/lib/recordDraft";
+import { formatDateTimeInAppTz } from "@/lib/timezone";
+import { externalUrl } from "@/lib/utils";
 
-export function ApplicationWorkspace({
+export function NotesPanel({
   app,
-  focusMaterials,
-  onChanged,
-  onSubmitRequest,
+  notes,
+  onNotesChange,
+  commDraft,
+  onCommDraftChange,
 }: {
   app: Application;
-  focusMaterials?: boolean;
-  onChanged: () => void;
-  onSubmitRequest: () => void;
+  notes: string;
+  onNotesChange: (value: string) => void;
+  commDraft: string;
+  onCommDraftChange: (value: string) => void;
 }) {
-  const materialsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (focusMaterials) materialsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [app.id, focusMaterials]);
-
-  return (
-    <div className="mt-4 rounded-xl border border-line bg-surface p-4">
-      <div className="mb-3">
-        <h2 className="text-sm font-semibold text-ink">{app.title}</h2>
-        <p className="text-xs text-muted">
-          {[app.employer, app.stage].filter(Boolean).join(" · ")}
-        </p>
-      </div>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Notes</h3>
-      <NotesEditor app={app} onChanged={onChanged} />
-      <CommNotes app={app} />
-      <div ref={materialsRef} id="application-materials" className="mt-6">
-        <MaterialsArea app={app} onChanged={onChanged} onSubmitRequest={onSubmitRequest} />
-      </div>
-    </div>
-  );
-}
-
-function NotesEditor({ app, onChanged }: { app: Application; onChanged: () => void }) {
-  const [recordId, setRecordId] = useState(app.id);
-  const [draft, setDraft] = useState(app.notes);
-  const [dirty, setDirty] = useState(false);
-  const [pending, setPending] = useState<{ id: string; notes: string } | null>(null);
+  const [rows, setRows] = useState<ApplicationCommNote[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
   const gen = useRef(0);
-  const target = useRef(app.id);
 
   useEffect(() => {
-    if (app.id === recordId) {
-      if (!dirty) setDraft(app.notes);
-      return;
-    }
-    if (dirty) {
-      setPending({ id: app.id, notes: app.notes });
-      return;
-    }
-    target.current = app.id;
-    setRecordId(app.id);
-    setDraft(app.notes);
-    gen.current += 1;
-  }, [app.id, app.notes, dirty, recordId]);
+    const ac = new AbortController();
+    const started = ++gen.current;
+    setFailed(false);
+    setRows(null);
+    void loadCommNotes(app.id, ac.signal).then((result) => {
+      if (ac.signal.aborted || isStaleGeneration(started, gen.current)) return;
+      if (!result.ok) {
+        setFailed(true);
+        setRows([]);
+        return;
+      }
+      setRows(result.notes);
+    });
+    return () => {
+      ac.abort();
+      gen.current += 1;
+    };
+  }, [app.id, retry]);
 
-  async function saveTo(id: string, value: string) {
-    const started = gen.current;
-    await updateApplication(id, { notes: value });
-    if (isStaleGeneration(started, gen.current)) return;
-    onChanged();
-  }
-
-  async function keep() {
-    if (!pending) return;
-    await saveTo(recordId, draft);
-    target.current = pending.id;
-    setRecordId(pending.id);
-    setDraft(pending.notes);
-    setDirty(false);
-    setPending(null);
-    gen.current += 1;
-  }
-
-  function discard() {
-    if (!pending) return;
-    target.current = pending.id;
-    setRecordId(pending.id);
-    setDraft(pending.notes);
-    setDirty(false);
-    setPending(null);
-    gen.current += 1;
+  async function refreshNotes() {
+    const result = await loadCommNotes(app.id);
+    if (result.ok) setRows(result.notes);
+    else setFailed(true);
   }
 
   return (
-    <div>
-      {pending && (
-        <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs">
-          Save notes for the previous application?
-          <div className="mt-1 flex gap-2">
-            <button type="button" onClick={() => void keep()} className="font-medium text-ink">
-              Keep edits
-            </button>
-            <button type="button" onClick={discard} className="text-muted">
-              Discard
+    <div className="space-y-4">
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          Application notes
+        </h3>
+        <textarea
+          value={notes}
+          onChange={(e) => onNotesChange(e.target.value)}
+          rows={8}
+          className="w-full rounded-lg border border-line bg-bg p-3 text-sm text-ink"
+          placeholder="Notes for this application. Close reasons can live here."
+        />
+      </div>
+      <details className="rounded-lg border border-line bg-bg p-3">
+        <summary className="cursor-pointer text-sm font-medium text-ink">Communication notes</summary>
+        <p className="mt-1 text-xs text-muted">Optional. This is not a timeline or inbox.</p>
+        {failed ? (
+          <div className="mt-2 text-sm text-muted">
+            Could not load communication notes.
+            <button type="button" className="ml-2 text-ink underline" onClick={() => setRetry((n) => n + 1)}>
+              Retry
             </button>
           </div>
-        </div>
-      )}
-      <textarea
-        value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          setDirty(true);
-        }}
-        onBlur={() => {
-          if (!dirty) return;
-          const id = target.current;
-          void saveTo(id, draft).then(() => {
-            if (target.current === id) setDirty(false);
-          });
-        }}
-        rows={5}
-        className="w-full rounded-lg border border-line bg-bg p-3 text-sm text-ink"
-        placeholder="Optional notes. Close reasons can live here."
-      />
-    </div>
-  );
-}
-
-function CommNotes({ app }: { app: Application }) {
-  const [notes, setNotes] = useState<ApplicationCommNote[]>([]);
-  const [draft, setDraft] = useState("");
-
-  async function refresh() {
-    setNotes(await listCommNotes(app.id));
-  }
-
-  useEffect(() => {
-    void refresh();
-  }, [app.id]);
-
-  return (
-    <div className="mt-4">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-        Communication notes
-      </h3>
-      <div className="flex gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Add note"
-          className="h-9 flex-1 rounded-lg border border-line bg-bg px-2 text-sm"
-        />
-        <button
-          type="button"
-          onClick={async () => {
-            if (!draft.trim()) return;
-            await addCommNote(app.id, draft.trim());
-            setDraft("");
-            await refresh();
-          }}
-          className="h-9 rounded-lg border border-line px-3 text-sm"
-        >
-          Add note
-        </button>
-      </div>
-      {notes.length > 0 && (
-        <ul className="mt-2 space-y-1 text-sm">
-          {notes.map((note) => (
-            <li key={note.id} className="flex items-start justify-between gap-2 rounded-lg bg-bg px-2 py-1">
-              <span>
-                <span className="text-xs text-muted">{note.created_at.slice(0, 16).replace("T", " ")} · </span>
-                {note.body}
-              </span>
+        ) : (
+          <>
+            <div className="mt-2 flex gap-2">
+              <input
+                value={commDraft}
+                onChange={(e) => onCommDraftChange(e.target.value)}
+                placeholder="Add note"
+                className="h-9 flex-1 rounded-lg border border-line bg-surface px-2 text-sm"
+              />
               <button
                 type="button"
-                onClick={() => void deleteCommNote(app.id, note.id).then(refresh)}
-                className="text-xs text-muted hover:text-ink"
+                onClick={async () => {
+                  if (!commDraft.trim()) return;
+                  await addCommNote(app.id, commDraft.trim());
+                  onCommDraftChange("");
+                  await refreshNotes();
+                }}
+                className="h-9 rounded-lg border border-line px-3 text-sm"
               >
-                Remove
+                Add note
               </button>
-            </li>
-          ))}
-        </ul>
-      )}
+            </div>
+            {rows === null ? (
+              <p className="mt-2 text-xs text-muted">Loading…</p>
+            ) : rows.length > 0 ? (
+              <ul className="mt-2 space-y-1 text-sm">
+                {rows.map((note) => (
+                  <li
+                    key={note.id}
+                    className="flex items-start justify-between gap-2 rounded-lg bg-surface px-2 py-1"
+                  >
+                    <span>
+                      <span className="text-xs text-muted">
+                        {formatDateTimeInAppTz(note.created_at)} ·{" "}
+                      </span>
+                      {note.body}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void deleteCommNote(app.id, note.id).then(refreshNotes)}
+                      className="text-xs text-muted hover:text-ink"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-muted">No communication notes yet.</p>
+            )}
+          </>
+        )}
+      </details>
     </div>
   );
 }
 
-function MaterialsArea({
+export function MaterialsArea({
   app,
   onChanged,
-  onSubmitRequest,
 }: {
   app: Application;
   onChanged: () => void;
-  onSubmitRequest: () => void;
 }) {
-  const [items, setItems] = useState<PacketItem[]>([]);
+  const [items, setItems] = useState<PacketItem[] | null>(null);
+  const [failed, setFailed] = useState(false);
   const [picker, setPicker] = useState(false);
   const [openSub, setOpenSub] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const gen = useRef(0);
   const canEdit = app.stage !== "closed";
   const submitted = (app.submissions?.length ?? 0) > 0;
   const subs = [...(app.submissions ?? [])].reverse();
+  const latest = subs[0] ?? null;
+
+  useEffect(() => {
+    const ac = new AbortController();
+    const started = ++gen.current;
+    setFailed(false);
+    setItems(null);
+    void loadPacket(app.id, ac.signal).then((result) => {
+      if (ac.signal.aborted || isStaleGeneration(started, gen.current)) return;
+      if (!result.ok) {
+        setFailed(true);
+        setItems([]);
+        return;
+      }
+      setItems(result.items);
+    });
+    const newest = app.submissions?.[app.submissions.length - 1]?.id ?? null;
+    setOpenSub(newest);
+    return () => {
+      ac.abort();
+      gen.current += 1;
+    };
+  }, [app.id, app.submissions?.length, retry]);
 
   async function refresh(notify = false) {
-    setItems(await getPacket(app.id));
+    const started = gen.current;
+    const result = await loadPacket(app.id);
+    if (isStaleGeneration(started, gen.current)) return;
+    if (!result.ok) {
+      setFailed(true);
+      return;
+    }
+    setFailed(false);
+    setItems(result.items);
     if (notify) onChanged();
   }
 
-  useEffect(() => {
-    void refresh();
-    const latest = app.submissions?.[app.submissions.length - 1]?.id ?? null;
-    setOpenSub(latest);
-  }, [app.id, app.submissions?.length]);
-
   return (
-    <div className="space-y-3 border-t border-line pt-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Current materials</h3>
-        {(app.stage === "draft" || submitted) && canEdit && (
-          <button type="button" onClick={onSubmitRequest} className="text-xs font-medium text-ink underline">
-            {app.stage === "draft" ? "Mark submitted" : "Record another submission"}
+    <div className="space-y-4">
+      {app.stage === "draft" ? (
+        <p className="text-sm text-ink">
+          Link the materials you plan to send. Mark submitted snapshots these bindings.
+        </p>
+      ) : latest ? (
+        <div className="rounded-lg border border-line bg-bg p-3 text-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Latest submission
+          </p>
+          <p className="mt-1 text-ink">
+            {formatDateTimeInAppTz(latest.submitted_at)}
+            {" · "}
+            {(latest.packet_snapshot?.items?.length ?? 0) === 0
+              ? "当次材料未记录"
+              : `${latest.packet_snapshot?.items?.length} used in that submission`}
+          </p>
+        </div>
+      ) : null}
+
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Linked materials</h3>
+        <p className="mt-1 text-xs text-muted">
+          Current bindings. Editing these does not change past submission snapshots.
+        </p>
+        {failed ? (
+          <div className="mt-2 rounded-lg border border-line bg-bg p-3 text-sm text-muted">
+            Could not load linked materials.
+            <button type="button" className="ml-2 text-ink underline" onClick={() => setRetry((n) => n + 1)}>
+              Retry
+            </button>
+          </div>
+        ) : items === null ? (
+          <p className="mt-2 text-sm text-muted">Loading materials…</p>
+        ) : items.length === 0 ? (
+          <div className="mt-2 rounded-lg border border-dashed border-line p-3 text-sm text-muted">
+            No materials bound to this application.
+            {canEdit && (
+              <button type="button" onClick={() => setPicker(true)} className="ml-2 text-ink underline">
+                Add materials
+              </button>
+            )}
+          </div>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {items.map((item) => (
+              <CurrentMaterialRow
+                key={item.binding.id}
+                app={app}
+                item={item}
+                canEdit={canEdit}
+                onRefresh={refresh}
+              />
+            ))}
+          </ul>
+        )}
+        {canEdit && items && items.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setPicker(true)}
+            className="mt-2 h-9 rounded-lg border border-line px-3 text-sm"
+          >
+            Add materials
           </button>
         )}
       </div>
-      {items.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-line p-3 text-sm text-muted">
-          No materials bound to this application.
-          {canEdit && (
-            <button type="button" onClick={() => setPicker(true)} className="ml-2 text-ink underline">
-              Add materials
-            </button>
-          )}
-        </div>
-      ) : (
-        <ul className="space-y-2">
-          {items.map((item) => (
-            <CurrentMaterialRow
-              key={item.binding.id}
-              app={app}
-              item={item}
-              canEdit={canEdit}
-              onRefresh={refresh}
-            />
-          ))}
-        </ul>
-      )}
-      {canEdit && items.length > 0 && (
-        <button type="button" onClick={() => setPicker(true)} className="h-9 rounded-lg border border-line px-3 text-sm">
-          Add materials
-        </button>
-      )}
+
+      <div className="rounded-lg border border-line bg-bg p-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Templates & answers
+        </h3>
+        <p className="mt-1 text-sm text-muted">
+          Copy from Knowledge. Add to Packet stays on the material itself.
+        </p>
+        <a href="/materials" className="mt-2 inline-block text-sm font-medium text-ink underline">
+          Open Knowledge
+        </a>
+      </div>
+
       {submitted && (
-        <div className="border-t border-line pt-3">
+        <div>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Submissions</h3>
+          <p className="mt-1 text-xs text-muted">Read-only snapshots from each Mark submitted.</p>
           <ul className="mt-2 space-y-2">
             {subs.map((row, index) => {
               const itemsSnap = row.packet_snapshot?.items ?? [];
@@ -286,10 +299,11 @@ function MaterialsArea({
                     className="w-full text-left font-medium"
                     onClick={() => setOpenSub(open ? null : row.id)}
                   >
-                    Submission #{subs.length - index} · {row.submitted_at.slice(0, 16).replace("T", " ")}
+                    Submission #{subs.length - index} · {formatDateTimeInAppTz(row.submitted_at)}
                   </button>
                   {open && (
                     <div className="mt-2 space-y-1 text-xs text-muted">
+                      <p className="font-medium text-ink">Materials used in this submission</p>
                       {itemsSnap.length === 0 ? (
                         <p>当次材料未记录</p>
                       ) : (
@@ -311,7 +325,7 @@ function MaterialsArea({
           </ul>
         </div>
       )}
-      {picker && (
+      {picker && items && (
         <PacketPicker
           app={app}
           selected={items}
@@ -375,7 +389,11 @@ function CurrentMaterialRow({
           </label>
         )}
         {canEdit && (
-          <details className="text-xs text-muted" open={more} onToggle={(e) => setMore((e.target as HTMLDetailsElement).open)}>
+          <details
+            className="text-xs text-muted"
+            open={more}
+            onToggle={(e) => setMore((e.target as HTMLDetailsElement).open)}
+          >
             <summary className="cursor-pointer">More</summary>
             <button
               type="button"

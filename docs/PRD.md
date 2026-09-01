@@ -209,11 +209,23 @@ Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配�
 
 仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 More 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。
 
-列表列：Role/Company（打开详情）、Application stage、Materials（当前 bindings 计数，`No materials` / `N materials`，点击跳到详情材料区）、Applied date、Actions（Draft 显示 Mark submitted，其余在 More）。无行内重复 Open materials 按钮。无 Ready/prep 阶段。材料变更不改变申请阶段。
+列表保持表格。列：Role/Company（打开详情）、Stage、**Next step**（`Job.next_step`，空为 `—`；仅当 `Job.deadline` 有值时在下方显示 DDL）、Applied、**Materials**（当前 bindings 计数，默认可见：`No materials` / `1 material` / `N materials`，可排序筛选；点击打开详情 Materials tab）、Actions。Draft 行主按钮：已有 apply URL 则 `Open apply page`，否则已有 job/source URL 则 `Open source`，两者都不可用时显示 `Link missing` 并仍提供 Mark submitted；其余动作在 More。不要根据对话/邮箱/平台私信去猜测入口。页面说明只写 tracking applications / next steps，不写状态机教学文案。
 
-Application Detail 复用侧栏：顶部 role / company / stage，Notes（含可选 Communication notes：轻量 Add note，不是 Timeline/CRM），材料区分为 Current materials（add / change version / remove）与 Submissions（只读快照）。关闭侧栏保留列表筛选与滚动。同一 Material 在同一申请中只有一行；Change version 替换该行；Remove 只解绑当前申请。
+详情为右侧抽屉（桌面约 720px，小屏全屏），不在表下展开整表。Tabs：`Overview / Materials / Notes`，默认 Overview。顶栏：Role、Company、Location、Stage、关闭、source action；Draft 另有次级 Mark submitted。
 
-所有 Mark submitted 入口共用确认面板（职位、提交时间、当前材料版本）。有材料：Confirm submitted。空材料：显示「本次未记录材料」/ Record without materials。Cancel 无操作。成功后写入独立 submission；服务器以当前 bindings 冻结快照。Interview/Offer 保持阶段；Closed 需 reopen 后再 Mark submitted。重复提交用 idempotency_key，空材料需服务端 `confirm_empty`。
+- Overview：source/link → Next Step / DDL（与 Tasks 相同的 Job 字段，PATCH `/api/jobs/{id}`）→ JD 来自 `Job.description`（缺失时写 “full JD not saved” 并给 Open source，不得把 snippet 标成全文）→ Applied 后显示最近一次 submission 摘要。`Job.comment` 为 JD 下可折叠 Research notes。`Application.notes` 只在 Notes tab，禁止与 comment 合并或双写。
+- Materials：Linked materials（add / change version / remove，与今日相同）；Templates & answers 入口仅用于去 Knowledge copy；Submissions 只读冻结快照。Draft 强调当前 Linked materials。Applied+ 优先最近 submission 摘要；当前 bindings 仍可编辑，但标签必须区分 `Linked materials` 与 `Materials used in this submission`。
+- Notes：`Application.notes` 为主；Communication notes 为可选折叠（现有 `application_comm_notes` 表）。
+
+Deep link：`?id=` 即使不在当前页/筛选也必须打开（含 Closed）；`tab=packet` 映射到 Materials。关闭抽屉不得重置列表筛选、排序、分页或滚动。
+
+所有 Mark submitted 入口共用同一个确认 **modal**（职位/公司 + **当前 bindings 只读预览**，即即将快照的内容）。确认框不提供另一套材料选择器；要改版本先改 Linked materials 再打开确认。有材料：Confirm submitted。空材料：显示「本次未记录材料」/ Record without materials，并走已实现的服务端 `confirm_empty`。Cancel 零写入。History 快照不随后续 binding 编辑而变。保留 idempotency_key / expected_version_ids / `materials_changed` 409（若已有）。**本轮不**增加可编辑 `submitted_at`、submit 时自由 channel、或独立于 bindings 的 `material_version_ids` picker。
+
+显示时区默认 Asia/Shanghai（可复用已有 `NEXT_PUBLIC_APP_TZ` / `NEXT_PUBLIC_TIMEZONE`）。本轮无 Settings 页。
+
+跨记录编辑（DBG-01/02）：notes、communication draft、next step、material notes、Knowledge 编辑器、SubmitConfirm 均按 record id 隔离。脏切换：Save and switch / Discard / Stay。切换申请须 abort 进行中的 fetch，失败显示 Retry 而不是空列表。
+
+本轮明确推迟：Knowledge「Use in application」搜索选择器扩容、全局 `border-border` vs `border-line` token 统一、从数据猜测 Open conversation / Copy email、把 materials 列藏到 More、Part3-after P0。
 
 申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
 

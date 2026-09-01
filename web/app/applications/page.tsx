@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { ApplicationWorkspace } from "@/components/ApplicationWorkspace";
-import { SubmitConfirm } from "@/components/SubmitConfirm";
+import { ApplicationDrawer } from "@/components/ApplicationDrawer";
 import { type Column, DataTable } from "@/components/DataTable";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
+import { SourceActionLink } from "@/components/SourceActionLink";
+import { SubmitConfirm } from "@/components/SubmitConfirm";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import {
@@ -14,15 +15,19 @@ import {
   type IdleCleanupSettings,
   abandonApplication,
   closeApplication,
+  getApplication,
   getApplications,
   getApplicationStats,
   getIdleCleanupSettings,
   putIdleCleanupSettings,
   updateApplication,
 } from "@/lib/api";
+import { type ApplicationDrawerTab, nextStepLabel, parseApplicationTab, tabQueryValue } from "@/lib/applicationUi";
 import { applicationWasSubmitted } from "@/lib/applicationLifecycle";
+import { isDateOverdue } from "@/lib/jobPipeline";
 import { currentMaterialCount, formatAppliedDate, materialCountLabel } from "@/lib/materialsUi";
-import { cn, externalUrl } from "@/lib/utils";
+import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
+import { cn } from "@/lib/utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -78,6 +83,17 @@ const STAGE_STYLES: Record<ApplicationStage, string> = {
 
 type BoardView = "open" | "closed";
 
+function replaceAppQuery(id: string | null, tab: ApplicationDrawerTab) {
+  const url = new URL(window.location.href);
+  if (id) url.searchParams.set("id", id);
+  else url.searchParams.delete("id");
+  const tabValue = id ? tabQueryValue(tab) : null;
+  if (tabValue) url.searchParams.set("tab", tabValue);
+  else url.searchParams.delete("tab");
+  url.searchParams.delete("job");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 export default function ApplicationsPage() {
   const [apps, setApps] = useState<Application[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -89,10 +105,12 @@ export default function ApplicationsPage() {
   const [sourceFilter, setSourceFilter] = useState("");
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [focusMaterials, setFocusMaterials] = useState(false);
+  const [activeTab, setActiveTab] = useState<ApplicationDrawerTab>("overview");
   const [submitId, setSubmitId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [idle, setIdle] = useState<IdleCleanupSettings>({ enabled: false, idle_days: 14 });
+  const [fetchedApp, setFetchedApp] = useState<Application | null>(null);
+  const [fetching, setFetching] = useState(false);
 
   async function refresh() {
     const list = await getApplications(undefined, 500, {
@@ -120,12 +138,16 @@ export default function ApplicationsPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const jobId = params.get("job");
-    if (params.get("tab") === "packet" || params.get("tab") === "materials") setFocusMaterials(true);
-    if (params.get("id")) setActiveId(params.get("id"));
+    const id = params.get("id");
+    setActiveTab(parseApplicationTab(params.get("tab")));
+    if (id) setActiveId(id);
     if (jobId) {
       void getApplications(undefined, 500, { view: "all" }).then((list) => {
         const match = list.find((a) => a.job_id === jobId);
-        if (match) setActiveId(match.id);
+        if (match) {
+          setActiveId(match.id);
+          replaceAppQuery(match.id, parseApplicationTab(params.get("tab")));
+        }
       });
     }
   }, []);
@@ -134,6 +156,43 @@ export default function ApplicationsPage() {
     if (!loaded) return;
     void refresh();
   }, [board, staleOnly]);
+
+  useEffect(() => {
+    if (!activeId) {
+      setFetchedApp(null);
+      setFetching(false);
+      return;
+    }
+    const inList = apps.find((row) => row.id === activeId);
+    if (inList) {
+      setFetchedApp(null);
+      setFetching(false);
+      return;
+    }
+    let cancelled = false;
+    setFetching(true);
+    void getApplication(activeId).then((row) => {
+      if (cancelled) return;
+      setFetchedApp(row);
+      setFetching(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, apps]);
+
+  function openApp(id: string, tab: ApplicationDrawerTab = "overview") {
+    setActiveId(id);
+    setActiveTab(tab);
+    replaceAppQuery(id, tab);
+  }
+
+  function closeDrawer() {
+    setActiveId(null);
+    setActiveTab("overview");
+    setFetchedApp(null);
+    replaceAppQuery(null, "overview");
+  }
 
   async function onStage(id: string, stage: ApplicationStage) {
     const row = apps.find((a) => a.id === id);
@@ -144,17 +203,13 @@ export default function ApplicationsPage() {
     if (ok) void refresh();
   }
 
-  async function onSubmit(id: string) {
-    setSubmitId(id);
-  }
-
   async function onCancelDraft(id: string) {
-    const row = apps.find((a) => a.id === id);
+    const row = apps.find((a) => a.id === id) ?? fetchedApp;
     if (!row || applicationWasSubmitted(row)) return;
     if (!window.confirm("Cancel this draft? Materials already in the library are kept.")) return;
     setApps((prev) => prev.filter((a) => a.id !== id));
     await abandonApplication(id);
-    if (activeId === id) setActiveId(null);
+    if (activeId === id) closeDrawer();
     void refresh();
   }
 
@@ -180,9 +235,15 @@ export default function ApplicationsPage() {
       if (stageFilter !== "all" && a.stage !== stageFilter) return false;
       if (sourceFilter && a.source !== sourceFilter) return false;
       if (!q) return true;
-      return [a.title, a.employer, a.location, a.source, a.notes].join(" ").toLowerCase().includes(q);
+      return [a.title, a.employer, a.location, a.source, a.notes, a.next_step].join(" ").toLowerCase().includes(q);
     });
   }, [apps, stageFilter, sourceFilter, query, staleOnly]);
+
+  const requestedApp = apps.find((a) => a.id === activeId) ?? fetchedApp;
+  const submitApp =
+    (submitId && apps.find((a) => a.id === submitId)) ||
+    (submitId && fetchedApp?.id === submitId ? fetchedApp : null) ||
+    (submitId && requestedApp?.id === submitId ? requestedApp : null);
 
   const columns: Column<Application>[] = [
     {
@@ -208,7 +269,7 @@ export default function ApplicationsPage() {
       header: "Role / Company",
       sortValue: (a) => a.title.toLowerCase(),
       render: (a) => (
-        <button type="button" className="min-w-0 text-left" onClick={() => { setActiveId(a.id); setFocusMaterials(false); }}>
+        <button type="button" className="min-w-0 text-left" onClick={() => openApp(a.id, "overview")}>
           <div className="font-medium text-ink">{a.title || "Untitled"}</div>
           <div className="text-xs text-muted">{[a.employer, a.location].filter(Boolean).join(" · ")}</div>
         </button>
@@ -216,7 +277,7 @@ export default function ApplicationsPage() {
     },
     {
       key: "stage",
-      header: "Application stage",
+      header: "Stage",
       sortValue: (a) => ["draft", "applied", "interview", "offer", "closed"].indexOf(a.stage),
       render: (a) => (
         <PopoverSelect
@@ -234,21 +295,22 @@ export default function ApplicationsPage() {
       ),
     },
     {
-      key: "materials",
-      header: "Materials",
-      sortValue: (a) => currentMaterialCount(a),
-      render: (a) => (
-        <button
-          type="button"
-          className="text-left text-sm text-ink hover:underline"
-          onClick={() => {
-            setActiveId(a.id);
-            setFocusMaterials(true);
-          }}
-        >
-          {materialCountLabel(currentMaterialCount(a))}
-        </button>
-      ),
+      key: "next_step",
+      header: "Next step",
+      sortValue: (a) => `${a.next_step ?? ""}${a.job_deadline ?? ""}`,
+      render: (a) => {
+        const overdue = isDateOverdue(a.job_deadline, todayInAppTz());
+        return (
+          <button type="button" className="text-left" onClick={() => openApp(a.id, "overview")}>
+            <div className="text-sm text-ink">{nextStepLabel(a.next_step)}</div>
+            {a.job_deadline ? (
+              <div className={cn("text-xs", overdue ? "text-amber-800" : "text-muted")}>
+                DDL {formatCalendarDate(a.job_deadline)}
+              </div>
+            ) : null}
+          </button>
+        );
+      },
     },
     {
       key: "applied_date",
@@ -257,36 +319,52 @@ export default function ApplicationsPage() {
       render: (a) => <span className="text-muted">{formatAppliedDate(a.applied_date)}</span>,
     },
     {
+      key: "materials",
+      header: "Materials",
+      sortValue: (a) => currentMaterialCount(a),
+      render: (a) => (
+        <button
+          type="button"
+          className="text-left text-sm text-ink hover:underline"
+          onClick={() => openApp(a.id, "materials")}
+        >
+          {materialCountLabel(currentMaterialCount(a))}
+        </button>
+      ),
+    },
+    {
       key: "actions",
       header: "",
-      headerClassName: "w-40",
+      headerClassName: "w-48",
       render: (a) => (
         <div className="flex flex-wrap items-center gap-2">
           {a.stage === "draft" && (
-            <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
-              Mark submitted
-            </button>
+            <>
+              <SourceActionLink apply_url={a.apply_url} url={a.url} job_url={a.job_url} />
+              <button
+                type="button"
+                onClick={() => setSubmitId(a.id)}
+                className="text-xs font-medium text-ink hover:underline"
+              >
+                Mark submitted
+              </button>
+            </>
           )}
           <details className="relative text-xs text-muted">
             <summary className="cursor-pointer hover:text-ink">More</summary>
-            <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
-              {a.url && (
-                <a
-                  href={externalUrl(a.url)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-3 py-2 hover:bg-bg"
-                >
-                  Open source
-                </a>
+            <div className="absolute right-0 z-20 mt-1 w-48 overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
+              {a.stage !== "draft" && (
+                <div className="px-3 py-2">
+                  <SourceActionLink apply_url={a.apply_url} url={a.url} job_url={a.job_url} />
+                </div>
               )}
               {a.stage !== "draft" && a.stage !== "closed" && (
-                <button type="button" onClick={() => onSubmit(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
+                <button type="button" onClick={() => setSubmitId(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
                   Record another submission
                 </button>
               )}
               {a.stage === "closed" && (
-                <button type="button" onClick={() => onSubmit(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
+                <button type="button" onClick={() => setSubmitId(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
                   Reopen (mark submitted)
                 </button>
               )}
@@ -306,7 +384,6 @@ export default function ApplicationsPage() {
     },
   ];
 
-  const active = apps.find((a) => a.id === activeId) ?? null;
   const idleLabel = `No update ${idle.idle_days}d+`;
 
   if (!loaded) {
@@ -325,7 +402,7 @@ export default function ApplicationsPage() {
       <header className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
         <p className="mt-1 text-sm text-muted">
-          Start Application creates a draft. Mark submitted to enter Applied. Closed is history.
+          Track applications, next steps, and the materials you send.
         </p>
       </header>
 
@@ -460,7 +537,7 @@ export default function ApplicationsPage() {
           </div>
           {staleOnly && (
             <p className="text-xs text-muted">
-              Exempt applications stay out of {idleLabel}. Use More on a row in the workspace to exclude from idle cleanup.
+              Exempt applications stay out of {idleLabel}. Use More in the application drawer to exclude from idle cleanup.
             </p>
           )}
         </div>
@@ -482,19 +559,6 @@ export default function ApplicationsPage() {
         </p>
       )}
 
-      {submitId && apps.find((a) => a.id === submitId) && (
-        <div className="mb-4">
-          <SubmitConfirm
-            app={apps.find((a) => a.id === submitId)!}
-            onClose={() => setSubmitId(null)}
-            onDone={() => {
-              setSubmitId(null);
-              void refresh();
-            }}
-          />
-        </div>
-      )}
-
       <DataTable
         rows={visible}
         columns={columns}
@@ -513,34 +577,38 @@ export default function ApplicationsPage() {
         }
       />
 
-      {active && (
-        <div className="mt-2">
-          <div className="mb-2 flex items-start justify-end gap-3">
-            <details className="text-xs text-muted">
-              <summary className="cursor-pointer hover:text-ink">More</summary>
-              <button
-                type="button"
-                onClick={() =>
-                  void updateApplication(active.id, {
-                    exclude_from_idle: !active.exclude_from_idle,
-                  }).then(() => refresh())
-                }
-                className="mt-2 block text-left hover:text-ink"
-              >
-                {active.exclude_from_idle ? "Include in idle cleanup" : "Exclude from idle cleanup"}
-              </button>
-            </details>
-            <button type="button" onClick={() => setActiveId(null)} className="text-xs text-muted">
-              Close
-            </button>
-          </div>
-          <ApplicationWorkspace
-            app={active}
-            focusMaterials={focusMaterials}
-            onChanged={() => void refresh()}
-            onSubmitRequest={() => setSubmitId(active.id)}
-          />
-        </div>
+      {activeId && (
+        <ApplicationDrawer
+          requestedApp={requestedApp}
+          requestedTab={activeTab}
+          loading={fetching && !requestedApp}
+          missing={!fetching && !requestedApp}
+          onClose={closeDrawer}
+          onStay={(id) => {
+            setActiveId(id);
+            replaceAppQuery(id, activeTab);
+          }}
+          onTabChange={(tab) => {
+            setActiveTab(tab);
+            if (activeId) replaceAppQuery(activeId, tab);
+          }}
+          onChanged={() => void refresh()}
+          onSubmitRequest={(id) => setSubmitId(id)}
+          onToggleIdleExempt={(app) =>
+            void updateApplication(app.id, { exclude_from_idle: !app.exclude_from_idle }).then(() => refresh())
+          }
+        />
+      )}
+
+      {submitId && submitApp && (
+        <SubmitConfirm
+          app={submitApp}
+          onClose={() => setSubmitId(null)}
+          onDone={() => {
+            setSubmitId(null);
+            void refresh();
+          }}
+        />
       )}
     </div>
   );

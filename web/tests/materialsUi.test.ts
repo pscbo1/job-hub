@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isStaleGeneration, recordSwitchDecision } from "@/lib/recordDraft";
+import { isStaleGeneration, DIRTY_SWITCH_LABELS, recordSwitchDecision } from "@/lib/recordDraft";
 import {
   currentMaterialCount,
   expectedVersionIdsMatch,
@@ -106,5 +106,10 @@ describe("record switch", () => {
   it("drops stale generations", () => {
     expect(isStaleGeneration(1, 2)).toBe(true);
     expect(isStaleGeneration(4, 4)).toBe(false);
+  });
+
+  it("exposes save / discard / stay labels", () => {
+    expect(DIRTY_SWITCH_LABELS.stay).toBe("Stay");
+    expect(DIRTY_SWITCH_LABELS.save).toBe("Save and switch");
   });
 });
