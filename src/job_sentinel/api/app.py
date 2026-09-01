@@ -19,7 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,11 +36,13 @@ from job_sentinel.core.models import (
     Application,
     ApplicationStage,
     ApplicationStatus,
+    CloseReason,
     DocumentKind,
     GeneratedDocument,
     Job,
     JobPosting,
     JobStatus,
+    JobTask,
 )
 from job_sentinel.documents.match import MatchResult, match_profile_to_job
 from job_sentinel.documents.tailor import KeywordTailor, TailorResult
@@ -111,14 +113,64 @@ class StatusRequest(BaseModel):
     status: ApplicationStatus
 
 
-class HubJobStatusRequest(BaseModel):
-    """V0 Job Pool status. ``null`` clears the field (unset)."""
+class HubJobPatchRequest(BaseModel):
+    """Job Pool tracking fields. Omitted keys are left unchanged."""
 
     status: JobStatus | None = None
+    comment: str | None = None
+    favorite: bool | None = None
+    next_step: str | None = None
+    applied_at: datetime | None = None
+    close_reason: CloseReason | None = None
+    deadline: date | None = None
+    follow_up_at: date | None = None
 
-    @field_validator("status", mode="before")
+    @field_validator("status", "close_reason", mode="before")
     @classmethod
-    def _blank_status(cls, v: object) -> object:
+    def _blank_enum(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    @field_validator("deadline", "follow_up_at", mode="before")
+    @classmethod
+    def _blank_date(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+
+class JobTaskCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    due_at: date | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+
+class JobTaskPatchRequest(BaseModel):
+    title: str | None = None
+    due_at: date | None = None
+    done: bool | None = None
+    sort_order: int | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
         if v is None or v == "":
             return None
         return v
@@ -168,6 +220,16 @@ class FilterSettingsRequest(BaseModel):
     custom_keywords: str | list[str] = ""
     excluded_companies: str | list[str] = ""
     apply: bool = True
+
+
+class ArchiveSettingsRequest(BaseModel):
+    enabled: bool = False
+    idle_days: int = Field(default=14, ge=1, le=365)
+
+
+class ArchiveRunRequest(BaseModel):
+    dry_run: bool = False
+    force: bool = True
 
 
 class SearchPresetWriteRequest(BaseModel):
@@ -269,6 +331,7 @@ class ApplicationCreateRequest(BaseModel):
     applied_date: str = Field(default="")
     deadline: str = Field(default="")
     notes: str = Field(default="")
+    job_id: str | None = Field(default=None)
     resume_document_id: str | None = Field(default=None)
 
 
@@ -553,18 +616,70 @@ def create_app(
         return jobs
 
     @app.patch("/api/jobs/{job_id}", response_model=Job)
-    def patch_hub_job(job_id: str, req: HubJobStatusRequest) -> Job:
-        """Update Job Pool status only. Null clears status."""
+    def patch_hub_job(job_id: str, req: HubJobPatchRequest) -> Job:
+        """Update Job Pool tracking fields (stage, favorite, comment, next step)."""
         from job_sentinel.db.repository import JobRepository
 
+        fields = req.model_dump(exclude_unset=True)
         repo = JobRepository(db_path)
         try:
-            job = repo.update_hub_job_status(job_id, req.status)
+            job = repo.update_hub_job(job_id, fields)
         finally:
             repo.close()
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
         return job
+
+    @app.get("/api/jobs/{job_id}/tasks", response_model=list[JobTask])
+    def list_hub_job_tasks(job_id: str) -> list[JobTask]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            if repo.get_hub_job(job_id) is None:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            return repo.list_job_tasks(job_id)
+        finally:
+            repo.close()
+
+    @app.post("/api/jobs/{job_id}/tasks", response_model=JobTask)
+    def create_hub_job_task(job_id: str, req: JobTaskCreateRequest) -> JobTask:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.create_job_task(job_id, title=req.title, due_at=req.due_at)
+        finally:
+            repo.close()
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return task
+
+    @app.patch("/api/jobs/{job_id}/tasks/{task_id}", response_model=JobTask)
+    def patch_hub_job_task(job_id: str, task_id: str, req: JobTaskPatchRequest) -> JobTask:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.update_job_task(job_id, task_id, req.model_dump(exclude_unset=True))
+        finally:
+            repo.close()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return task
+
+    @app.delete("/api/jobs/{job_id}/tasks/{task_id}")
+    def delete_hub_job_task(job_id: str, task_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            deleted = repo.delete_job_task(job_id, task_id)
+        finally:
+            repo.close()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"ok": True}
 
     @app.post("/api/jobs/{job_id}/dismiss", response_model=Job)
     def dismiss_hub_job_route(job_id: str) -> Job:
@@ -762,6 +877,44 @@ def create_app(
             body["reapplied"] = applied.model_dump()
         return body
 
+    @app.get("/api/archive-settings")
+    def get_archive_settings() -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.archive import load_archive_settings
+
+        repo = JobRepository(db_path)
+        try:
+            return load_archive_settings(repo).model_dump()
+        finally:
+            repo.close()
+
+    @app.put("/api/archive-settings")
+    def put_archive_settings(req: ArchiveSettingsRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.archive import ArchiveSettings, save_archive_settings
+
+        repo = JobRepository(db_path)
+        try:
+            saved = save_archive_settings(
+                repo, ArchiveSettings(enabled=req.enabled, idle_days=req.idle_days)
+            )
+        finally:
+            repo.close()
+        return saved.model_dump()
+
+    @app.post("/api/jobs/archive-run")
+    def run_job_archive(req: ArchiveRunRequest) -> dict[str, Any]:
+        """Sweep idle jobs into Closed/auto_archived. See jobs/archive.py."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.archive import run_auto_archive
+
+        repo = JobRepository(db_path)
+        try:
+            result = run_auto_archive(repo, dry_run=req.dry_run, force=req.force)
+        finally:
+            repo.close()
+        return result.model_dump()
+
     @app.post("/api/ingest/jobs")
     def ingest_collector_jobs(payload: dict[str, Any] | list[Any]) -> dict[str, Any]:
         """Accept mcp-jobs / contract JSON and write jobs_raw then jobs."""
@@ -874,6 +1027,7 @@ def create_app(
                     deadline=req.deadline or posting.deadline,
                     notes=req.notes,
                     posting_id=req.posting_id,
+                    job_id=req.job_id,
                     resume_document_id=req.resume_document_id,
                 )
             else:
@@ -889,6 +1043,7 @@ def create_app(
                     deadline=req.deadline,
                     notes=req.notes,
                     posting_id=req.posting_id,
+                    job_id=req.job_id,
                     resume_document_id=req.resume_document_id,
                 )
             result = repo.create_application(app)

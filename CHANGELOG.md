@@ -14,6 +14,23 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ## [Unreleased]
 
+### Added
+
+- Job Pool pipeline on the Job row: Reference → Under Study → To Do → Applied →
+  Interview → Offer → Closed. New collected jobs default to Under Study.
+  Favorite, comment, next step, and applied_at are restored as Job fields.
+  Entering To Do creates the one Application for that job.
+- Main job **DDL** (deadline), visible and editable in the list.
+- Lightweight **job tasks** checklist (title, optional due date, done) with
+  CRUD API and UI on each Job Pool row. Open/overdue tasks and the main DDL
+  surface in the list so “what to do today” is obvious. Default list is all
+  active jobs; **To Do only** is the quick filter. Closed stays hidden unless
+  shown.
+- Optional idle auto-archive (off by default, 14 days): `PUT /api/archive-settings`,
+  `POST /api/jobs/archive-run`, and `job-sentinel archive`. Skips in-progress
+  stages, Reference, a recorded next step, a future reminder date, or any
+  incomplete checklist task. Task activity bumps last_activity_at.
+
 ### Fixed
 
 - **Release workflow left the sdist and wheel unattached.** When a release was

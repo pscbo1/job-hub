@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -55,13 +55,25 @@ class ApplicationStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
-    """V0 Job Pool lifecycle. ``None`` in the DB means unset (new ingest)."""
+    """Job Pool pipeline. New collected jobs default to ``under_study``."""
 
-    SAVED = "saved"
+    REFERENCE = "reference"
+    UNDER_STUDY = "under_study"
     TO_DO = "to_do"
     APPLIED = "applied"
+    INTERVIEW = "interview"
+    OFFER = "offer"
     CLOSED = "closed"
-    REFERENCE = "reference"
+
+
+class CloseReason(StrEnum):
+    """Why a job was marked Closed. Independent of Favorite."""
+
+    WITHDREW = "withdrew"
+    NOT_SELECTED = "not_selected"
+    NO_RESPONSE = "no_response"
+    AUTO_ARCHIVED = "auto_archived"
+    OTHER = "other"
 
 
 def compute_job_fingerprint(company: str, title: str, location: str) -> str:
@@ -195,6 +207,32 @@ class JobPosting(BaseModel):
     model_config = {"frozen": False}  # allow touch() mutations
 
 
+class JobTask(BaseModel):
+    """Lightweight checklist item on a Job (OA, interview prep, etc.)."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    job_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    due_at: date | None = Field(default=None)
+    done: bool = Field(default=False)
+    sort_order: int = Field(default=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, v: object) -> str:
+        return str(v).strip() if v else ""
+
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def _blank_due(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return v
+
+    model_config = {"frozen": False}
+
+
 class Job(BaseModel):
     """Canonical V0 job-pool row (table ``jobs``). Independent of ``JobPosting``."""
 
@@ -214,7 +252,25 @@ class Job(BaseModel):
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     fingerprint: str = Field(default="")
-    status: JobStatus | None = Field(default=None)
+    status: JobStatus | None = Field(default=JobStatus.UNDER_STUDY)
+    favorite: bool = Field(default=False)
+    next_step: str = Field(default="")
+    comment: str = Field(default="")
+    applied_at: datetime | None = Field(default=None)
+    close_reason: CloseReason | None = Field(default=None)
+    deadline: date | None = Field(
+        default=None,
+        description="Application or next hard deadline (DDL).",
+    )
+    follow_up_at: date | None = Field(
+        default=None,
+        description="Next follow-up / reminder date.",
+    )
+    last_activity_at: datetime | None = Field(
+        default=None,
+        description="Last user tracking edit. Collectors never bump this.",
+    )
+    tasks: list[JobTask] = Field(default_factory=list)
     match_score: float | None = Field(default=None)
     market: str = Field(
         default="",
@@ -230,9 +286,9 @@ class Job(BaseModel):
     country_name: str = Field(default="")
     is_remote: bool = Field(default=False)
 
-    @field_validator("status", mode="before")
+    @field_validator("status", "close_reason", mode="before")
     @classmethod
-    def _blank_status_is_none(cls, v: object) -> object:
+    def _blank_enum_is_none(cls, v: object) -> object:
         if v is None or v == "":
             return None
         return v
@@ -339,6 +395,10 @@ class Application(BaseModel):
     deadline: str = Field(default="")
     notes: str = Field(default="")
     posting_id: str | None = Field(default=None)
+    job_id: str | None = Field(
+        default=None,
+        description="FK into jobs.id when this application tracks a pool job.",
+    )
     resume_document_id: str | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))

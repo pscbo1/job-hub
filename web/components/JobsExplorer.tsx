@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { JobActions } from "@/components/JobActions";
+import { JobTasks } from "@/components/JobTasks";
 import {
   JobPoolActionMenu,
   JobPoolUndoToast,
@@ -13,7 +14,22 @@ import {
 } from "@/components/JobPoolActions";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
-import type { HubJob, HubJobStatus } from "@/lib/api";
+import type { ArchiveSettings, HubJob, HubJobStatus } from "@/lib/api";
+import {
+  getArchiveSettings,
+  runJobArchive,
+  saveArchiveSettings,
+} from "@/lib/api";
+import {
+  POOL_STATUS_CHIPS,
+  compareActiveJobs,
+  isDateOverdue,
+  jobVisibleInPool,
+  openTasksSorted,
+  statusChipLabel,
+  taskDueUrgency,
+  type TaskDueUrgency,
+} from "@/lib/jobPipeline";
 import {
   DISCOVERED_RANGE_OPTIONS,
   jobsPoolHref,
@@ -34,23 +50,33 @@ import {
 } from "@/lib/sponsorshipDisplay";
 import { cn, externalUrl } from "@/lib/utils";
 
-const STATUSES: HubJobStatus[] = ["saved", "to_do", "applied", "closed", "reference"];
-
-function statusChipLabel(key: string): string {
-  return key === "unset" ? "No status" : key;
-}
-
 const ACCENT: Record<string, string> = {
   unset: "bg-stone-300",
-  saved: "bg-sky-500",
+  reference: "bg-emerald-500",
+  under_study: "bg-sky-500",
   to_do: "bg-amber-500",
   applied: "bg-violet-500",
+  interview: "bg-indigo-500",
+  offer: "bg-teal-500",
   closed: "bg-stone-400",
-  reference: "bg-emerald-500",
+};
+
+const TASK_CHIP: Record<TaskDueUrgency, string> = {
+  overdue: "bg-rose-100 text-rose-800",
+  today: "bg-amber-100 text-amber-900",
+  upcoming: "bg-sky-50 text-sky-800",
+  none: "bg-stone-100 text-stone-700",
 };
 
 function dayStamp(iso: string): string {
   return iso.slice(0, 10);
+}
+
+function taskChipText(title: string, dueAt: string | null | undefined): string {
+  const urgency = taskDueUrgency(dueAt);
+  const when =
+    urgency === "overdue" ? "Overdue" : urgency === "today" ? "Today" : dueAt ? dayStamp(dueAt) : "Task";
+  return `${when} ${title}`;
 }
 
 function FactRow({ label, value }: { label: string; value?: string | number | null }) {
@@ -92,9 +118,10 @@ export function JobsExplorer({
   const reduced = useReducedMotion();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<string>("all");
-  const [sort, setSort] = useState<"newest" | "published">("newest");
+  const [sort, setSort] = useState<"active" | "newest" | "published">("active");
   const [showSponsorship, setShowSponsorship] = useState(false);
-  const [overrides, setOverrides] = useState<Record<string, HubJobStatus | null>>({});
+  const [showClosed, setShowClosed] = useState(false);
+  const [overrides, setOverrides] = useState<Record<string, HubJob>>({});
   const poolActions = useJobPoolActions();
   const closeMenu = () => poolActions.setMenu(null);
   const menuRef = useDismissOutside(!!poolActions.menu, closeMenu);
@@ -161,26 +188,29 @@ export function JobsExplorer({
     router.push(href(next));
   }
 
-  const statusOf = (j: HubJob): HubJobStatus | null =>
-    Object.prototype.hasOwnProperty.call(overrides, j.id) ? overrides[j.id] : j.status;
+  const jobOf = (j: HubJob): HubJob =>
+    Object.prototype.hasOwnProperty.call(overrides, j.id) ? { ...j, ...overrides[j.id] } : j;
+
+  const statusOf = (j: HubJob): HubJobStatus | null => jobOf(j).status;
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: jobs.length, unset: 0 };
+    const c: Record<string, number> = { all: 0, unset: 0 };
     for (const j of jobs) {
       const s = statusOf(j);
       const key = s ?? "unset";
       c[key] = (c[key] ?? 0) + 1;
+      if (s !== "closed" || showClosed) c.all += 1;
     }
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs, overrides]);
+  }, [jobs, overrides, showClosed]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = jobs.filter((j) => {
-      const s = statusOf(j);
-      if (filter === "unset" && s !== null) return false;
-      if (filter !== "all" && filter !== "unset" && s !== filter) return false;
+      const merged = jobOf(j);
+      const s = merged.status;
+      if (!jobVisibleInPool(s, filter, showClosed)) return false;
       if (!q) return true;
       return [j.title, j.company, j.location, j.source]
         .join(" ")
@@ -190,8 +220,10 @@ export function JobsExplorer({
     const sorted = [...filtered];
     if (sort === "published") {
       sorted.sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""));
-    } else {
+    } else if (sort === "newest") {
       sorted.sort((a, b) => b.discovered_at.localeCompare(a.discovered_at));
+    } else {
+      sorted.sort((a, b) => compareActiveJobs(jobOf(a), jobOf(b)));
     }
     if (pool === "excluded") return sorted;
     return sorted.filter((j) => !poolActions.isHidden(j));
@@ -203,6 +235,7 @@ export function JobsExplorer({
     sort,
     overrides,
     pool,
+    showClosed,
     poolActions.hiddenIds,
     poolActions.hiddenCompanies,
   ]);
@@ -271,10 +304,11 @@ export function JobsExplorer({
             Sort
             <PopoverSelect
               value={sort}
-              onChange={(v) => setSort(v as "newest" | "published")}
+              onChange={(v) => setSort(v as "active" | "newest" | "published")}
               aria-label="Sort jobs"
               className="w-40"
               options={[
+                { value: "active", label: "To Do & due dates" },
                 { value: "newest", label: "Discovered" },
                 { value: "published", label: "Published" },
               ]}
@@ -314,6 +348,15 @@ export function JobsExplorer({
             Show sponsorship info
           </label>
           )}
+          <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
+            <input
+              type="checkbox"
+              checked={showClosed}
+              onChange={(e) => setShowClosed(e.target.checked)}
+              className="h-4 w-4 rounded border-line"
+            />
+            Show closed
+          </label>
         </div>
         {(showCountry || showRemote || showPosted || showSource) && (
           <div className="flex flex-wrap items-center gap-3">
@@ -404,7 +447,7 @@ export function JobsExplorer({
           </div>
         )}
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
-          {["all", "unset", ...STATUSES].map((s) => (
+          {POOL_STATUS_CHIPS.map((s) => (
             <button
               key={s}
               onClick={() => setFilter(s)}
@@ -413,16 +456,24 @@ export function JobsExplorer({
                 "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
                 filter === s
                   ? "border-ink bg-ink text-white"
-                  : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
+                  : s === "to_do"
+                    ? "border-amber-300 bg-amber-50 text-amber-900 hover:border-amber-400"
+                    : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
               )}
             >
               {statusChipLabel(s)}
-              <span className={cn("ml-1.5 tabular-nums", filter === s ? "text-white/60" : "text-muted/60")}>
+              <span
+                className={cn(
+                  "ml-1.5 tabular-nums",
+                  filter === s ? "text-white/60" : s === "to_do" ? "text-amber-800/70" : "text-muted/60",
+                )}
+              >
                 {counts[s] ?? 0}
               </span>
             </button>
           ))}
         </div>
+        <ArchiveControls />
       </div>
 
       {visible.length === 0 ? (
@@ -439,7 +490,9 @@ export function JobsExplorer({
       ) : (
         <AnimatePresence initial={false} mode="popLayout">
           {visible.map((j, idx) => {
-            const st = statusOf(j);
+            const merged = jobOf(j);
+            const st = merged.status;
+            const dueTasks = openTasksSorted(merged);
             return (
               <motion.div
                 key={j.id}
@@ -474,12 +527,50 @@ export function JobsExplorer({
                     ···
                   </button>
                   <div className="min-w-0 pb-3 pr-8">
-                    <CardTitle className="leading-snug">{j.title}</CardTitle>
+                    <CardTitle className="leading-snug">
+                      {merged.favorite ? <span className="mr-1 text-amber-500">★</span> : null}
+                      {j.title}
+                    </CardTitle>
                     <CardSub className="mt-0.5">
                       {[j.company, j.location, j.source].filter(Boolean).join(" · ")}
                     </CardSub>
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <span className="text-[11px] text-muted">Discovered {dayStamp(j.discovered_at)}</span>
+                      {merged.next_step && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                          Next: {merged.next_step}
+                        </span>
+                      )}
+                      {merged.deadline && (
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                            isDateOverdue(merged.deadline)
+                              ? "bg-rose-100 text-rose-800"
+                              : taskDueUrgency(merged.deadline) === "today"
+                                ? "bg-amber-100 text-amber-900"
+                                : "bg-sky-50 text-sky-800",
+                          )}
+                        >
+                          DDL {dayStamp(merged.deadline)}
+                        </span>
+                      )}
+                      {dueTasks.slice(0, 3).map((task) => (
+                          <span
+                            key={task.id}
+                            className={cn(
+                              "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                              TASK_CHIP[taskDueUrgency(task.due_at)],
+                            )}
+                          >
+                            {taskChipText(task.title, task.due_at)}
+                          </span>
+                        ))}
+                      {dueTasks.length > 3 && (
+                        <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[11px] font-medium text-stone-700">
+                          +{dueTasks.length - 3} more
+                        </span>
+                      )}
                       {j.published_at && (
                         <span className="text-[11px] text-muted">Published {dayStamp(j.published_at)}</span>
                       )}
@@ -514,9 +605,19 @@ export function JobsExplorer({
                       </a>
                     )}
                     <JobActions
-                      jobId={j.id}
-                      status={st}
-                      onChange={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
+                      job={merged}
+                      onPatched={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
+                    />
+                  </div>
+                  <div className="border-t border-line pt-3">
+                    <JobTasks
+                      job={merged}
+                      onChange={(tasks) =>
+                        setOverrides((o) => ({
+                          ...o,
+                          [j.id]: { ...(o[j.id] ?? merged), tasks },
+                        }))
+                      }
                     />
                   </div>
 
@@ -566,6 +667,82 @@ export function JobsExplorer({
           onUndo={() => void poolActions.undo()}
         />
       )}
+    </div>
+  );
+}
+
+function ArchiveControls() {
+  const router = useRouter();
+  const [settings, setSettings] = useState<ArchiveSettings>({ enabled: false, idle_days: 14 });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    void getArchiveSettings().then((s) => {
+      if (s) setSettings(s);
+    });
+  }, []);
+
+  async function persist(next: ArchiveSettings) {
+    setSettings(next);
+    setBusy(true);
+    const saved = await saveArchiveSettings(next);
+    setBusy(false);
+    if (saved) setSettings(saved);
+  }
+
+  async function runNow() {
+    setBusy(true);
+    setNote("");
+    const result = await runJobArchive({ force: true });
+    setBusy(false);
+    if (!result) {
+      setNote("Archive run failed");
+      return;
+    }
+    setNote(`Closed ${result.archived} idle job${result.archived === 1 ? "" : "s"}`);
+    router.refresh();
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={settings.enabled}
+          disabled={busy}
+          onChange={(e) => void persist({ ...settings, enabled: e.target.checked })}
+          className="h-4 w-4 rounded border-line"
+        />
+        Auto-archive idle jobs
+      </label>
+      <label className="flex items-center gap-2">
+        after
+        <input
+          type="number"
+          min={1}
+          max={365}
+          value={settings.idle_days}
+          disabled={busy}
+          aria-label="Idle days before auto-archive"
+          onChange={(e) => {
+            const idle_days = Number(e.target.value) || 14;
+            setSettings((s) => ({ ...s, idle_days }));
+          }}
+          onBlur={() => void persist(settings)}
+          className="h-8 w-16 rounded-lg border border-line bg-surface px-2 text-xs text-ink"
+        />
+        days
+      </label>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void runNow()}
+        className="h-8 rounded-lg border border-line px-3 font-medium text-ink hover:border-ink/30 disabled:opacity-50"
+      >
+        Run now
+      </button>
+      {note && <span className="text-ink">{note}</span>}
     </div>
   );
 }

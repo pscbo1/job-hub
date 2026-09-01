@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from job_sentinel.core.models import Job, compute_job_fingerprint, source_job_id_from_canonical_url
+from job_sentinel.core.models import (
+    Job,
+    JobStatus,
+    compute_job_fingerprint,
+    source_job_id_from_canonical_url,
+)
 from job_sentinel.core.text import strip_html
 
 if TYPE_CHECKING:
@@ -122,7 +127,7 @@ def validation_reasons(record: CollectorRecord) -> list[str]:
 
 
 def normalize_record(record: CollectorRecord) -> Job:
-    """Build a ``Job`` row. Status and match_score stay unset (NULL)."""
+    """Build a ``Job`` row. New jobs default to ``under_study``; match_score stays unset."""
     source = canonicalize_source(record.channel_key)
     job_url = record.source_url.strip()
     canonical = canonicalize_url(job_url)
@@ -159,7 +164,7 @@ def normalize_record(record: CollectorRecord) -> Job:
         last_seen_at=now,
         updated_at=now,
         fingerprint=compute_job_fingerprint(company, title, location),
-        status=None,
+        status=JobStatus.UNDER_STUDY,
         match_score=None,
         market=_source_market_for(source, record.market),
     )

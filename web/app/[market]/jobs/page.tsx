@@ -66,7 +66,9 @@ export default async function MarketJobsPage({
         <MarketSwitch current={market} page="jobs" />
         <h1 className="text-3xl font-bold tracking-tight text-ink">Job Pool</h1>
         <p className="mt-1 text-sm text-muted">
-          {marketLabel(market)} jobs from collectors. Filter by discovered date and set status.
+          {marketLabel(market)} jobs as a list. Default is all active (Closed hidden). Use{" "}
+          <span className="font-medium text-ink">To Do only</span> to focus; DDL and open tasks
+          show what to do today.
         </p>
       </div>
 

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from job_sentinel.api.app import create_app
+from job_sentinel.core.models import JobStatus
 from job_sentinel.db.repository import JobRepository
 from job_sentinel.ingestion.collect import collect_and_ingest
 from job_sentinel.ingestion.collect_sources import resolve_collect_sources
@@ -65,7 +66,7 @@ def test_collect_and_ingest_uses_payload(tmp_path: Path, monkeypatch: pytest.Mon
         assert repo._db["jobs"].count == 1
         stored = repo.get_job_by_source_key("zhaopin", "CC123")
         assert stored is not None
-        assert stored.status is None
+        assert stored.status == JobStatus.UNDER_STUDY
         discovered = stored.discovered_at
 
         second = collect_and_ingest(
@@ -77,7 +78,7 @@ def test_collect_and_ingest_uses_payload(tmp_path: Path, monkeypatch: pytest.Mon
         again = repo.get_hub_job(stored.id)
         assert again is not None
         assert again.discovered_at == discovered
-        assert again.status is None
+        assert again.status == JobStatus.UNDER_STUDY
     finally:
         repo.close()
 

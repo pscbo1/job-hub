@@ -21,7 +21,8 @@ Schema evolution
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import sqlite3
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlite_utils
@@ -32,12 +33,14 @@ from job_sentinel.core.models import (
     Application,
     ApplicationStage,
     ApplicationStatus,
+    CloseReason,
     DocumentKind,
     GeneratedDocument,
     Job,
     JobPosting,
     JobRaw,
     JobStatus,
+    JobTask,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
 )
@@ -49,16 +52,92 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
 _DOC_TABLE = "generated_documents"
 _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
+_JOB_TASKS_TABLE = "job_tasks"
 _SPONSOR_EMPLOYERS = "sponsor_employers"
 _SPONSOR_SYNC = "sponsor_registry_sync"
-_FORBIDDEN_JOB_COLUMNS = frozenset({"favorite", "next_step", "comment", "applied_at"})
+_JOB_STATUS_SQL = "'reference', 'under_study', 'to_do', 'applied', 'interview', 'offer', 'closed'"
+_CLOSE_REASON_SQL = "'withdrew', 'not_selected', 'no_response', 'auto_archived', 'other'"
+_JOBS_CREATE_SQL = f"""
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                source_job_id TEXT NOT NULL,
+                job_url TEXT NOT NULL DEFAULT '',
+                canonical_url TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                company TEXT NOT NULL DEFAULT '',
+                location TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                employment_type TEXT NOT NULL DEFAULT '',
+                salary TEXT NOT NULL DEFAULT '',
+                published_at TEXT,
+                discovered_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                fingerprint TEXT NOT NULL DEFAULT '',
+                status TEXT DEFAULT 'under_study',
+                match_score REAL,
+                market TEXT NOT NULL DEFAULT '',
+                filter_state TEXT NOT NULL DEFAULT 'included',
+                filter_reasons TEXT NOT NULL DEFAULT '[]',
+                sponsorship TEXT NOT NULL DEFAULT '{{}}',
+                favorite INTEGER NOT NULL DEFAULT 0,
+                next_step TEXT NOT NULL DEFAULT '',
+                comment TEXT NOT NULL DEFAULT '',
+                applied_at TEXT,
+                close_reason TEXT,
+                deadline TEXT,
+                follow_up_at TEXT,
+                last_activity_at TEXT,
+                CHECK (
+                    status IS NULL
+                    OR status IN ({_JOB_STATUS_SQL})
+                ),
+                CHECK (
+                    close_reason IS NULL
+                    OR close_reason IN ({_CLOSE_REASON_SQL})
+                )
+            )
+            """
+_JOBS_COLUMN_ORDER = (
+    "id",
+    "source",
+    "source_job_id",
+    "job_url",
+    "canonical_url",
+    "title",
+    "company",
+    "location",
+    "description",
+    "employment_type",
+    "salary",
+    "published_at",
+    "discovered_at",
+    "last_seen_at",
+    "updated_at",
+    "fingerprint",
+    "status",
+    "match_score",
+    "market",
+    "filter_state",
+    "filter_reasons",
+    "sponsorship",
+    "favorite",
+    "next_step",
+    "comment",
+    "applied_at",
+    "close_reason",
+    "deadline",
+    "follow_up_at",
+    "last_activity_at",
+)
 
 
 class JobRepository:
@@ -161,6 +240,7 @@ class JobRepository:
                     "deadline": str,
                     "notes": str,
                     "posting_id": str,
+                    "job_id": str,
                     "resume_document_id": str,
                     "created_at": str,
                     "updated_at": str,
@@ -171,6 +251,7 @@ class JobRepository:
             self._table(_APP_TABLE).create_index(["stage"], if_not_exists=True)
             self._table(_APP_TABLE).create_index(["created_at"], if_not_exists=True)
             logger.debug("applications table created")
+        self._ensure_application_job_id()
 
     def _ensure_documents_table(self) -> None:
         if _DOC_TABLE not in self._db.table_names():
@@ -201,48 +282,18 @@ class JobRepository:
     def _ensure_v0_tables(self) -> None:
         self._ensure_jobs_table()
         self._ensure_jobs_raw_table()
+        self._ensure_job_tasks_table()
         self._ensure_sponsorship_tables()
 
     def _ensure_jobs_table(self) -> None:
-        self._db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                source TEXT NOT NULL,
-                source_job_id TEXT NOT NULL,
-                job_url TEXT NOT NULL DEFAULT '',
-                canonical_url TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                company TEXT NOT NULL DEFAULT '',
-                location TEXT NOT NULL DEFAULT '',
-                description TEXT NOT NULL DEFAULT '',
-                employment_type TEXT NOT NULL DEFAULT '',
-                salary TEXT NOT NULL DEFAULT '',
-                published_at TEXT,
-                discovered_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                fingerprint TEXT NOT NULL DEFAULT '',
-                status TEXT DEFAULT NULL,
-                match_score REAL,
-                market TEXT NOT NULL DEFAULT '',
-                filter_state TEXT NOT NULL DEFAULT 'included',
-                filter_reasons TEXT NOT NULL DEFAULT '[]',
-                CHECK (
-                    status IS NULL
-                    OR status IN ('saved', 'to_do', 'applied', 'closed', 'reference')
-                )
-            )
-            """
-        )
-        jobs = self._table(_JOBS_TABLE)
-        extra = {col.name for col in jobs.columns} & _FORBIDDEN_JOB_COLUMNS
-        if extra:
-            jobs.transform(drop=extra)
-            logger.debug("Dropped non-V0 columns from jobs: {}", extra)
-
+        if _JOBS_TABLE not in self._db.table_names():
+            self._db.execute(_JOBS_CREATE_SQL)
+        elif self._jobs_schema_needs_rebuild():
+            self._rebuild_jobs_table()
         self._ensure_job_filter_columns()
         self._ensure_job_sponsorship_column()
+        self._ensure_job_tracking_columns()
+        jobs = self._table(_JOBS_TABLE)
         jobs.create_index(["source", "source_job_id"], unique=True, if_not_exists=True)
         for col in (
             "discovered_at",
@@ -252,8 +303,80 @@ class JobRepository:
             "fingerprint",
             "canonical_url",
             "filter_state",
+            "favorite",
         ):
             jobs.create_index([col], if_not_exists=True)
+
+    def _jobs_table_sql(self) -> str:
+        row = self._db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone()
+        return str(row[0]) if row and row[0] else ""
+
+    def _jobs_schema_needs_rebuild(self) -> bool:
+        sql = self._jobs_table_sql()
+        if not sql:
+            return False
+        required = (
+            "under_study",
+            "interview",
+            "offer",
+            "favorite",
+            "next_step",
+            "comment",
+            "applied_at",
+            "close_reason",
+            "deadline",
+            "follow_up_at",
+            "last_activity_at",
+            "auto_archived",
+        )
+        return any(token not in sql for token in required)
+
+    def _rebuild_jobs_table(self) -> None:
+        """Recreate ``jobs`` so status CHECK and tracking columns match v6."""
+        src = "jobs_migrate_src"
+        self._db.execute(f"ALTER TABLE {_JOBS_TABLE} RENAME TO {src}")
+        self._db.execute(_JOBS_CREATE_SQL)
+        src_cols = {str(row[1]) for row in self._db.execute(f"PRAGMA table_info({src})").fetchall()}
+        select_exprs = [_jobs_rebuild_select(col, src_cols) for col in _JOBS_COLUMN_ORDER]
+        columns = ", ".join(_JOBS_COLUMN_ORDER)
+        selects = ", ".join(select_exprs)
+        self._db.execute(
+            f"INSERT INTO {_JOBS_TABLE} ({columns}) SELECT {selects} FROM {src}"  # noqa: S608
+        )
+        self._db.execute(f"DROP TABLE {src}")
+        logger.info("Rebuilt jobs table for pipeline schema v{}", SCHEMA_VERSION)
+
+    def _ensure_job_tracking_columns(self) -> None:
+        names = {col.name for col in self._table(_JOBS_TABLE).columns}
+        if "favorite" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
+        if "next_step" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN next_step TEXT NOT NULL DEFAULT ''")
+        if "comment" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+        if "applied_at" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN applied_at TEXT")
+        if "close_reason" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN close_reason TEXT")
+        if "deadline" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN deadline TEXT")
+        if "follow_up_at" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN follow_up_at TEXT")
+        if "last_activity_at" not in names:
+            self._db.execute("ALTER TABLE jobs ADD COLUMN last_activity_at TEXT")
+
+    def _ensure_application_job_id(self) -> None:
+        if _APP_TABLE not in self._db.table_names():
+            return
+        names = {col.name for col in self._table(_APP_TABLE).columns}
+        if "job_id" not in names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN job_id TEXT")
+        self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_job_id "
+            "ON applications(job_id) WHERE job_id IS NOT NULL AND job_id != ''"
+        )
 
     def _ensure_job_filter_columns(self) -> None:
         """V0 reversible exclusion: keep jobs, hide them from the default pool."""
@@ -328,6 +451,24 @@ class JobRepository:
         raw.create_index(["collected_at"], if_not_exists=True)
         raw.create_index(["job_id"], if_not_exists=True)
 
+    def _ensure_job_tasks_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_tasks (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                due_at TEXT,
+                done INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        tasks = self._table(_JOB_TASKS_TABLE)
+        tasks.create_index(["job_id"], if_not_exists=True)
+        tasks.create_index(["due_at"], if_not_exists=True)
+
     def _get_meta(self, key: str) -> str | None:
         rows = list(self._table(_META_TABLE).rows_where("key = ?", [key]))
         return rows[0]["value"] if rows else None
@@ -354,6 +495,9 @@ class JobRepository:
             self._ensure_job_filter_columns()
         if from_version < 5:
             self._ensure_sponsorship_tables()
+        if from_version < 6:
+            self._ensure_jobs_table()
+            self._ensure_application_job_id()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -421,7 +565,10 @@ class JobRepository:
 
         Dedup: (1) ``(source, source_job_id)`` (2) non-empty ``canonical_url``.
         Fingerprint is never used to merge. Ingest fields only on update —
-        ``status``, ``match_score``, and ``discovered_at`` are preserved.
+        ``status``, ``match_score``, ``discovered_at``, ``favorite``,
+        ``next_step``, ``comment``, ``applied_at``, ``close_reason``,
+        ``deadline``, ``follow_up_at``, and ``last_activity_at``
+        are preserved.
         """
         source_job_id = job.source_job_id.strip() or source_job_id_from_canonical_url(
             job.canonical_url
@@ -473,9 +620,11 @@ class JobRepository:
         """Fetch a canonical ``jobs`` row by id."""
         try:
             row = self._table(_JOBS_TABLE).get(job_id)
-            return _hub_job_from_row(dict(row))
+            job = _hub_job_from_row(dict(row))
         except sqlite_utils.db.NotFoundError:
             return None
+        job.tasks = self.list_job_tasks(job.id)
+        return job
 
     def get_job_by_source_key(self, source: str, source_job_id: str) -> Job | None:
         """Lookup by UNIQUE ``(source, source_job_id)``."""
@@ -568,12 +717,13 @@ class JobRepository:
             jobs = [j for j in jobs if j.is_remote]
         elif remote is False:
             jobs = [j for j in jobs if not j.is_remote]
-        return jobs[: max(1, min(limit, 500))]
+        sliced = jobs[: max(1, min(limit, 500))]
+        return self._attach_job_tasks(sliced)
 
     def list_all_hub_jobs(self) -> list[Job]:
         """Every canonical job, for reversible re-filtering."""
         rows = self._table(_JOBS_TABLE).rows_where(order_by="discovered_at DESC")
-        return [_hub_job_from_row(dict(r)) for r in rows]
+        return self._attach_job_tasks([_hub_job_from_row(dict(r)) for r in rows])
 
     def update_hub_job_filter(
         self,
@@ -597,16 +747,152 @@ class JobRepository:
 
     def update_hub_job_status(self, job_id: str, status: JobStatus | None) -> Job | None:
         """Set lifecycle status. ``None`` clears it. Does not touch ingest fields."""
+        return self.update_hub_job(job_id, {"status": status})
+
+    def update_hub_job(self, job_id: str, fields: dict[str, Any]) -> Job | None:
+        """Patch tracking fields. Collector ingest never calls this."""
+        job = self.get_hub_job(job_id)
+        if job is None:
+            return None
+        payload = _tracking_payload(job, fields)
+        if payload:
+            self._table(_JOBS_TABLE).update(job_id, payload)
+        if "status" in fields:
+            status_value = payload.get("status")
+            if status_value == JobStatus.TO_DO.value:
+                stored = self.get_hub_job(job_id)
+                if stored is not None:
+                    self.ensure_application_for_job(stored)
+            elif status_value == JobStatus.APPLIED.value:
+                self._mark_application_submitted(job_id)
+        return self.get_hub_job(job_id)
+
+    def get_application_by_job_id(self, job_id: str) -> Application | None:
+        """The single Application linked to a pool job, if any."""
+        key = job_id.strip()
+        if not key:
+            return None
+        rows = list(self._table(_APP_TABLE).rows_where("job_id = ?", [key], limit=1))
+        return _app_from_row(dict(rows[0])) if rows else None
+
+    def ensure_application_for_job(self, job: Job) -> Application:
+        """Create an Application for this job if one does not already exist."""
+        existing = self.get_application_by_job_id(job.id)
+        if existing is not None:
+            return existing
+        app = Application(
+            title=job.title,
+            employer=job.company,
+            location=job.location,
+            url=job.job_url,
+            source=job.source,
+            stage=ApplicationStage.SAVED,
+            job_id=job.id,
+        )
+        try:
+            return self.create_application(app)
+        except sqlite3.IntegrityError:
+            raced = self.get_application_by_job_id(job.id)
+            if raced is not None:
+                return raced
+            raise
+
+    def _mark_application_submitted(self, job_id: str) -> None:
+        app = self.get_application_by_job_id(job_id)
+        if app is None:
+            return
+        updates: dict[str, Any] = {"stage": ApplicationStage.APPLIED}
+        if not app.applied_date:
+            updates["applied_date"] = datetime.now(tz=UTC).date().isoformat()
+        self.update_application(app.id, **updates)
+
+    def _touch_job_activity(self, job_id: str) -> None:
+        now = _now_iso()
+        self._table(_JOBS_TABLE).update(
+            job_id, {"last_activity_at": now, "updated_at": now}
+        )
+
+    def _attach_job_tasks(self, jobs: list[Job]) -> list[Job]:
+        grouped = self.list_job_tasks_for_jobs([j.id for j in jobs])
+        for job in jobs:
+            job.tasks = grouped.get(job.id, [])
+        return jobs
+
+    def list_job_tasks(self, job_id: str) -> list[JobTask]:
+        rows = self._table(_JOB_TASKS_TABLE).rows_where(
+            "job_id = ?",
+            [job_id],
+            order_by="sort_order ASC, created_at ASC",
+        )
+        return [_job_task_from_row(dict(r)) for r in rows]
+
+    def list_job_tasks_for_jobs(self, job_ids: Sequence[str]) -> dict[str, list[JobTask]]:
+        grouped: dict[str, list[JobTask]] = {jid: [] for jid in job_ids}
+        ids = [jid for jid in job_ids if jid]
+        if not ids:
+            return grouped
+        placeholders = ",".join("?" * len(ids))
+        rows = self._table(_JOB_TASKS_TABLE).rows_where(
+            f"job_id IN ({placeholders})",  # noqa: S608
+            list(ids),
+            order_by="sort_order ASC, created_at ASC",
+        )
+        for row in rows:
+            task = _job_task_from_row(dict(row))
+            grouped.setdefault(task.job_id, []).append(task)
+        return grouped
+
+    def create_job_task(
+        self,
+        job_id: str,
+        *,
+        title: str,
+        due_at: date | None = None,
+        sort_order: int | None = None,
+    ) -> JobTask | None:
         if self.get_hub_job(job_id) is None:
             return None
-        self._table(_JOBS_TABLE).update(
-            job_id,
-            {
-                "status": None if status is None else status.value,
-                "updated_at": _now_iso(),
-            },
-        )
-        return self.get_hub_job(job_id)
+        order = sort_order
+        if order is None:
+            existing = self.list_job_tasks(job_id)
+            order = (existing[-1].sort_order + 1) if existing else 0
+        task = JobTask(job_id=job_id, title=title, due_at=due_at, sort_order=order)
+        self._table(_JOB_TASKS_TABLE).insert(_job_task_to_row(task))
+        self._touch_job_activity(job_id)
+        return task
+
+    def update_job_task(self, job_id: str, task_id: str, fields: dict[str, Any]) -> JobTask | None:
+        task = self.get_job_task(task_id)
+        if task is None or task.job_id != job_id:
+            return None
+        payload: dict[str, Any] = {}
+        if "title" in fields and fields["title"] is not None:
+            payload["title"] = str(fields["title"]).strip()
+        if "due_at" in fields:
+            payload["due_at"] = _optional_date_str(fields["due_at"])
+        if "done" in fields:
+            payload["done"] = 1 if fields["done"] else 0
+        if "sort_order" in fields and fields["sort_order"] is not None:
+            payload["sort_order"] = int(fields["sort_order"])
+        if payload:
+            self._table(_JOB_TASKS_TABLE).update(task_id, payload)
+            self._touch_job_activity(job_id)
+        return self.get_job_task(task_id)
+
+    def get_job_task(self, task_id: str) -> JobTask | None:
+        try:
+            row = self._table(_JOB_TASKS_TABLE).get(task_id)
+            return _job_task_from_row(dict(row))
+        except sqlite_utils.db.NotFoundError:
+            return None
+
+    def delete_job_task(self, job_id: str, task_id: str) -> bool:
+        task = self.get_job_task(task_id)
+        if task is None or task.job_id != job_id:
+            return False
+        self._table(_JOB_TASKS_TABLE).delete(task_id)
+        self._touch_job_activity(job_id)
+        return True
 
     def update_hub_job_sponsorship(self, job_id: str, info: SponsorshipInfo) -> Job | None:
         """Store sponsorship enrichment. Does not touch status or ingest fields."""
@@ -1002,6 +1288,7 @@ def _app_to_row(app: Application) -> dict[str, Any]:
         "deadline": app.deadline,
         "notes": app.notes,
         "posting_id": app.posting_id,
+        "job_id": app.job_id or None,
         "resume_document_id": app.resume_document_id,
         "created_at": app.created_at.isoformat(),
         "updated_at": app.updated_at.isoformat(),
@@ -1023,6 +1310,7 @@ def _app_from_row(row: dict[str, Any]) -> Application:
         deadline=row.get("deadline", ""),
         notes=row.get("notes", ""),
         posting_id=row.get("posting_id") or None,
+        job_id=row.get("job_id") or None,
         resume_document_id=row.get("resume_document_id") or None,
         created_at=_parse_dt(row.get("created_at", "")),
         updated_at=_parse_dt(row.get("updated_at", "")),
@@ -1113,8 +1401,126 @@ def _parse_sponsorship(value: object) -> SponsorshipInfo:
     return SponsorshipInfo()
 
 
+def _jobs_rebuild_select(col: str, src_cols: set[str]) -> str:
+    """SELECT expression copying ``col`` from the pre-v6 jobs table."""
+    if col == "status":
+        if "status" in src_cols:
+            return (
+                "CASE WHEN status IS NULL OR status = '' OR status = 'saved' "
+                "THEN 'under_study' ELSE status END"
+            )
+        return "'under_study'"
+    if col == "favorite":
+        return "COALESCE(favorite, 0)" if "favorite" in src_cols else "0"
+    if col in {"next_step", "comment"}:
+        return f"COALESCE({col}, '')" if col in src_cols else "''"
+    if col in {
+        "applied_at",
+        "close_reason",
+        "published_at",
+        "match_score",
+        "deadline",
+        "follow_up_at",
+    }:
+        return col if col in src_cols else "NULL"
+    if col == "last_activity_at":
+        if "last_activity_at" in src_cols:
+            return "last_activity_at"
+        if "updated_at" in src_cols:
+            return "updated_at"
+        if "discovered_at" in src_cols:
+            return "discovered_at"
+        return "NULL"
+    if col == "filter_state":
+        return "COALESCE(filter_state, 'included')" if "filter_state" in src_cols else "'included'"
+    if col == "filter_reasons":
+        return "COALESCE(filter_reasons, '[]')" if "filter_reasons" in src_cols else "'[]'"
+    if col == "sponsorship":
+        return "COALESCE(sponsorship, '{}')" if "sponsorship" in src_cols else "'{}'"
+    if col in src_cols:
+        return col
+    return "''"
+
+
+def _tracking_payload(job: Job, fields: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if "status" in fields:
+        status = fields["status"]
+        if status is None or status == "":
+            payload["status"] = None
+        elif isinstance(status, JobStatus):
+            payload["status"] = status.value
+        else:
+            payload["status"] = str(status)
+        if (
+            payload["status"] == JobStatus.APPLIED.value
+            and "applied_at" not in fields
+            and job.applied_at is None
+        ):
+            payload["applied_at"] = _now_iso()
+    if "comment" in fields:
+        payload["comment"] = fields["comment"] or ""
+    if "favorite" in fields:
+        payload["favorite"] = 1 if fields["favorite"] else 0
+    if "next_step" in fields:
+        payload["next_step"] = fields["next_step"] or ""
+    if "applied_at" in fields:
+        value = fields["applied_at"]
+        if isinstance(value, datetime):
+            payload["applied_at"] = value.isoformat()
+        elif value is None or value == "":
+            payload["applied_at"] = None
+        else:
+            payload["applied_at"] = str(value)
+    if "close_reason" in fields:
+        reason = fields["close_reason"]
+        if reason is None or reason == "":
+            payload["close_reason"] = None
+        elif isinstance(reason, CloseReason):
+            payload["close_reason"] = reason.value
+        else:
+            payload["close_reason"] = str(reason)
+    if "deadline" in fields:
+        payload["deadline"] = _optional_date_str(fields["deadline"])
+    if "follow_up_at" in fields:
+        payload["follow_up_at"] = _optional_date_str(fields["follow_up_at"])
+    if payload:
+        payload["updated_at"] = _now_iso()
+        payload["last_activity_at"] = _now_iso()
+    return payload
+
+
 def _optional_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _optional_date_str(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    return text or None
+
+
+def _parse_optional_date(value: object) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    try:
+        if "T" in text:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+        return date.fromisoformat(text[:10])
+    except (ValueError, TypeError):
+        return None
 
 
 def _market_sql(
@@ -1175,6 +1581,14 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "updated_at": job.updated_at.isoformat(),
         "fingerprint": job.fingerprint,
         "status": job.status.value if job.status is not None else None,
+        "favorite": 1 if job.favorite else 0,
+        "next_step": job.next_step,
+        "comment": job.comment,
+        "applied_at": _optional_iso(job.applied_at),
+        "close_reason": job.close_reason.value if job.close_reason is not None else None,
+        "deadline": _optional_date_str(job.deadline),
+        "follow_up_at": _optional_date_str(job.follow_up_at),
+        "last_activity_at": _optional_iso(job.last_activity_at or job.discovered_at),
         "match_score": job.match_score,
         "market": job.market,
         "filter_state": job.filter_state or "included",
@@ -1188,6 +1602,8 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
 
     raw_status = row.get("status")
     status: JobStatus | None = JobStatus(raw_status) if raw_status else None
+    raw_reason = row.get("close_reason")
+    close_reason = CloseReason(raw_reason) if raw_reason else None
     score = row.get("match_score")
     location = row.get("location", "") or ""
     employment = row.get("employment_type", "") or ""
@@ -1210,6 +1626,14 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         updated_at=_parse_dt(row.get("updated_at", "")),
         fingerprint=row.get("fingerprint", ""),
         status=status,
+        favorite=bool(row.get("favorite") or 0),
+        next_step=str(row.get("next_step") or ""),
+        comment=str(row.get("comment") or ""),
+        applied_at=_parse_optional_dt(row.get("applied_at")),
+        close_reason=close_reason,
+        deadline=_parse_optional_date(row.get("deadline")),
+        follow_up_at=_parse_optional_date(row.get("follow_up_at")),
+        last_activity_at=_parse_optional_dt(row.get("last_activity_at")),
         match_score=float(score) if score is not None else None,
         market=row.get("market", ""),
         filter_state=str(row.get("filter_state") or "included"),
@@ -1218,6 +1642,30 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         country=geo.code,
         country_name=geo.name,
         is_remote=geo.is_remote,
+    )
+
+
+def _job_task_to_row(task: JobTask) -> dict[str, Any]:
+    return {
+        "id": task.id,
+        "job_id": task.job_id,
+        "title": task.title,
+        "due_at": _optional_date_str(task.due_at),
+        "done": 1 if task.done else 0,
+        "sort_order": task.sort_order,
+        "created_at": task.created_at.isoformat(),
+    }
+
+
+def _job_task_from_row(row: dict[str, Any]) -> JobTask:
+    return JobTask(
+        id=row["id"],
+        job_id=row.get("job_id", ""),
+        title=row.get("title", ""),
+        due_at=_parse_optional_date(row.get("due_at")),
+        done=bool(row.get("done") or 0),
+        sort_order=int(row.get("sort_order") or 0),
+        created_at=_parse_dt(row.get("created_at", "")),
     )
 
 
