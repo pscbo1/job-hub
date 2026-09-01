@@ -41,3 +41,11 @@ export function groupTasksByDue(jobs: HubJob[], todayIso?: string): Record<TaskD
 export function jobHasUnfinishedTask(job: HubJob): boolean {
   return openTasks(job).length > 0;
 }
+
+/** Mirrors `job_belongs_on_tasks`: next_step / deadline / open task / draft. */
+export function jobBelongsOnTasks(job: HubJob, hasDraftApplication = false): boolean {
+  if ((job.next_step ?? "").trim()) return true;
+  if (job.deadline) return true;
+  if (openTasks(job).length > 0) return true;
+  return hasDraftApplication;
+}

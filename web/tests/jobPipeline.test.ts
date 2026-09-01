@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DISCOVER_CHIPS, discoverChipLabel, jobMatchesDiscoverChip, taskDueUrgency } from "../lib/jobPipeline";
-import { groupTasksByDue, jobMatchesTaskSearch } from "../lib/taskBoard";
+import { groupTasksByDue, jobBelongsOnTasks, jobMatchesTaskSearch } from "../lib/taskBoard";
 import type { HubJob } from "../lib/api";
 
 function job(partial: Partial<HubJob> & { id: string }): HubJob {
@@ -77,5 +77,12 @@ describe("task board", () => {
     expect(jobMatchesTaskSearch(row, "take-home")).toBe(true);
     expect(jobMatchesTaskSearch(row, "2026-01-15")).toBe(false);
     expect(taskDueUrgency("2026-08-31", "2026-09-01")).toBe("overdue");
+  });
+
+  it("keeps Save-only and plain Discover jobs off the board", () => {
+    expect(jobBelongsOnTasks(job({ id: "plain" }))).toBe(false);
+    expect(jobBelongsOnTasks(job({ id: "saved", favorite: true, reference: true }))).toBe(false);
+    expect(jobBelongsOnTasks(job({ id: "next", next_step: "email" }))).toBe(true);
+    expect(jobBelongsOnTasks(job({ id: "draft" }), true)).toBe(true);
   });
 });

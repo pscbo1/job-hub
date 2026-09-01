@@ -10,6 +10,7 @@
 import * as demo from "@/lib/demo";
 import { parseMarketId, sourceInMarket } from "@/lib/markets";
 import type { CommonSearchFilters, SearchPreset } from "@/lib/searchCapabilities";
+import { jobBelongsOnTasks } from "@/lib/taskBoard";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -273,7 +274,21 @@ export function getJobs(
   filterState: PoolFilterState = "included",
   query: JobsListQuery = {},
 ): Promise<HubJob[]> {
-  if (demo.DEMO) return Promise.resolve(demo.demoHubJobs.slice(0, limit));
+  if (demo.DEMO) {
+    let rows = demo.demoHubJobs;
+    if (filterState === "excluded") {
+      rows = rows.filter((j) => Boolean(j.dismissed_at) || j.filter_state === "excluded");
+    } else if (filterState !== "all") {
+      rows = rows.filter((j) => !j.dismissed_at && j.filter_state !== "excluded");
+    }
+    if (query.view === "tasks" || query.view === "my_jobs") {
+      rows = rows.filter((j) => jobBelongsOnTasks(j));
+    }
+    if (query.hasDraft === true) {
+      rows = [];
+    }
+    return Promise.resolve(rows.slice(0, limit));
+  }
   const q = new URLSearchParams({ limit: String(limit), filter_state: filterState });
   if (since) q.set("since", since);
   if (query.market) q.set("market", query.market);
