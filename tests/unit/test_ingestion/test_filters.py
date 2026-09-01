@@ -191,7 +191,7 @@ def test_hide_company_refilter_hides_matches_preserves_status(tmp_path: Path) ->
                 source_job_id="other",
                 company="别的公司",
                 title="产品经理",
-                status=JobStatus.SAVED,
+                status=JobStatus.UNDER_STUDY,
             )
         )
         hide_a = repo.upsert_job(

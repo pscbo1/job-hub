@@ -8,6 +8,7 @@ import httpx
 import pytest
 import respx
 
+from job_sentinel.core.models import JobStatus
 from job_sentinel.db.repository import JobRepository
 from job_sentinel.ingestion.adapters import AdapterError
 from job_sentinel.ingestion.adapters.linkedin import (
@@ -198,6 +199,6 @@ def test_linkedin_ingest_uses_job_id_dedup(tmp_path: Path, monkeypatch: pytest.M
         again = repo.get_hub_job(job.id)
         assert again is not None
         assert again.discovered_at == discovered
-        assert again.status is None
+        assert again.status == JobStatus.UNDER_STUDY
     finally:
         repo.close()

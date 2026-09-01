@@ -62,7 +62,8 @@ def test_full_path_and_repeat_does_not_duplicate(tmp_path: Path) -> None:
 
         stored = repo.get_job_by_source_key("zhaopin", "CC383625320J40878294709")
         assert stored is not None
-        assert stored.status is None
+        assert stored.status is not None
+        assert stored.status == JobStatus.UNDER_STUDY
         assert stored.company == "北京三快在线科技有限公司"
         assert stored.salary == "面议"
         discovered = stored.discovered_at
@@ -185,10 +186,10 @@ def test_ingest_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo.close()
 
 
-def test_normalize_sets_null_status() -> None:
+def test_normalize_defaults_to_under_study() -> None:
     records = load_ingest_file(_FIXTURES / "liepin-raw.json")
     job = normalize_record(records[0])
-    assert job.status is None
+    assert job.status == JobStatus.UNDER_STUDY
     assert job.match_score is None
     assert job.source == "liepin"
     assert job.source_job_id == "1985138523"

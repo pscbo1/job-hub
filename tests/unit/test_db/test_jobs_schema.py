@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,6 +10,7 @@ import sqlite_utils
 from pydantic import ValidationError
 
 from job_sentinel.core.models import (
+    CloseReason,
     Job,
     JobPosting,
     JobRaw,
@@ -22,11 +23,15 @@ from job_sentinel.db.repository import SCHEMA_VERSION, JobRepository
 if TYPE_CHECKING:
     from pathlib import Path
 
-_FORBIDDEN = {
+_TRACKING_COLUMNS = {
     "favorite",
     "next_step",
     "comment",
     "applied_at",
+    "close_reason",
+    "deadline",
+    "follow_up_at",
+    "last_activity_at",
 }
 
 
@@ -59,8 +64,9 @@ class TestMigration:
         assert "jobs" in names
         assert "jobs_raw" in names
         assert "job_postings" in names
+        assert "job_tasks" in names
         jobs_cols = _column_names(repo, "jobs")
-        assert _FORBIDDEN.isdisjoint(jobs_cols)
+        assert _TRACKING_COLUMNS.issubset(jobs_cols)
         assert "filter_state" in jobs_cols
         assert "filter_reasons" in jobs_cols
         assert "sponsorship" in jobs_cols
@@ -95,6 +101,89 @@ class TestMigration:
         assert legacy.title == "Intern"
         assert int(version) == SCHEMA_VERSION
 
+    def test_v5_rebuilds_status_check_and_tracking_columns(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "v5.db"
+        raw = sqlite_utils.Database(str(db_path))
+        raw["sentinel_meta"].insert({"key": "schema_version", "value": "5"}, pk="key")
+        raw.execute(
+            """
+            CREATE TABLE jobs (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                source_job_id TEXT NOT NULL,
+                job_url TEXT NOT NULL DEFAULT '',
+                canonical_url TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                company TEXT NOT NULL DEFAULT '',
+                location TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                employment_type TEXT NOT NULL DEFAULT '',
+                salary TEXT NOT NULL DEFAULT '',
+                published_at TEXT,
+                discovered_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                fingerprint TEXT NOT NULL DEFAULT '',
+                status TEXT DEFAULT NULL,
+                match_score REAL,
+                market TEXT NOT NULL DEFAULT '',
+                filter_state TEXT NOT NULL DEFAULT 'included',
+                filter_reasons TEXT NOT NULL DEFAULT '[]',
+                CHECK (
+                    status IS NULL
+                    OR status IN ('saved', 'to_do', 'applied', 'closed', 'reference')
+                )
+            )
+            """
+        )
+        raw["jobs"].insert(
+            {
+                "id": "legacy-saved",
+                "source": "zhaopin",
+                "source_job_id": "old-1",
+                "title": "产品经理",
+                "company": "示例",
+                "discovered_at": "2026-08-01T00:00:00+00:00",
+                "last_seen_at": "2026-08-01T00:00:00+00:00",
+                "updated_at": "2026-08-01T00:00:00+00:00",
+                "status": "saved",
+            }
+        )
+        raw["jobs"].insert(
+            {
+                "id": "legacy-null",
+                "source": "zhaopin",
+                "source_job_id": "old-2",
+                "title": "设计师",
+                "company": "示例",
+                "discovered_at": "2026-08-02T00:00:00+00:00",
+                "last_seen_at": "2026-08-02T00:00:00+00:00",
+                "updated_at": "2026-08-02T00:00:00+00:00",
+                "status": None,
+            }
+        )
+        raw.conn.close()
+
+        repo = JobRepository(db_path)
+        saved = repo.get_hub_job("legacy-saved")
+        unset = repo.get_hub_job("legacy-null")
+        sql = repo._db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone()[0]
+        version = repo._db["sentinel_meta"].get("schema_version")["value"]
+        interviewed = repo.update_hub_job("legacy-saved", {"status": JobStatus.INTERVIEW})
+        repo.close()
+
+        assert saved is not None
+        assert saved.status == JobStatus.UNDER_STUDY
+        assert unset is not None
+        assert unset.status == JobStatus.UNDER_STUDY
+        assert "under_study" in sql
+        assert "favorite" in sql
+        assert int(version) == SCHEMA_VERSION
+        assert interviewed is not None
+        assert interviewed.status == JobStatus.INTERVIEW
+
     def test_job_postings_write_still_works(self, repo: JobRepository) -> None:
         posting = JobPosting(posting_id="p-1", title="Legacy scrape")
         assert repo.save_job(posting) is True
@@ -104,15 +193,15 @@ class TestMigration:
 
 
 class TestJobStatus:
-    def test_status_defaults_to_null(self, repo: JobRepository) -> None:
+    def test_status_defaults_to_under_study(self, repo: JobRepository) -> None:
         stored = repo.upsert_job(_job())
-        assert stored.status is None
+        assert stored.status == JobStatus.UNDER_STUDY
         row = dict(repo._db["jobs"].get(stored.id))
-        assert row["status"] is None
+        assert row["status"] == JobStatus.UNDER_STUDY.value
 
     def test_invalid_status_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            Job(source="x", source_job_id="1", status="under_study")  # type: ignore[arg-type]
+            Job(source="x", source_job_id="1", status="saved")  # type: ignore[arg-type]
 
     @pytest.mark.parametrize("value", list(JobStatus))
     def test_allowed_statuses(self, value: JobStatus) -> None:
@@ -190,3 +279,125 @@ class TestDedup:
         candidates = repo.find_fingerprint_candidates(fp)
         assert set(candidates) == {a.id, b.id}
         assert a.id not in repo.find_fingerprint_candidates(fp, exclude_id=a.id)
+
+
+class TestJobTracking:
+    def test_patch_comment_favorite_next_step(self, repo: JobRepository) -> None:
+        stored = repo.upsert_job(_job())
+        updated = repo.update_hub_job(
+            stored.id,
+            {
+                "favorite": True,
+                "comment": "Keep as a writing sample",
+                "next_step": "Email recruiter",
+            },
+        )
+        assert updated is not None
+        assert updated.favorite is True
+        assert updated.comment == "Keep as a writing sample"
+        assert updated.next_step == "Email recruiter"
+        assert updated.status == JobStatus.UNDER_STUDY
+
+    def test_upsert_does_not_overwrite_tracking_fields(self, repo: JobRepository) -> None:
+        first = repo.upsert_job(_job())
+        repo.update_hub_job(
+            first.id,
+            {
+                "favorite": True,
+                "comment": "mine",
+                "next_step": "call",
+                "status": JobStatus.REFERENCE,
+            },
+        )
+        second = repo.upsert_job(
+            first.model_copy(update={"title": "Renamed", "comment": "collector"})
+        )
+        assert second.title == "Renamed"
+        assert second.favorite is True
+        assert second.comment == "mine"
+        assert second.next_step == "call"
+        assert second.status == JobStatus.REFERENCE
+
+    def test_applied_sets_applied_at(self, repo: JobRepository) -> None:
+        stored = repo.upsert_job(_job())
+        updated = repo.update_hub_job(stored.id, {"status": JobStatus.APPLIED})
+        assert updated is not None
+        assert updated.status == JobStatus.APPLIED
+        assert updated.applied_at is not None
+
+    def test_closed_reason(self, repo: JobRepository) -> None:
+        stored = repo.upsert_job(_job())
+        updated = repo.update_hub_job(
+            stored.id,
+            {"status": JobStatus.CLOSED, "close_reason": CloseReason.WITHDREW},
+        )
+        assert updated is not None
+        assert updated.status == JobStatus.CLOSED
+        assert updated.close_reason == CloseReason.WITHDREW
+
+    def test_to_do_creates_application_once(self, repo: JobRepository) -> None:
+        stored = repo.upsert_job(_job(title="SWE", company="Acme"))
+        assert repo.get_application_by_job_id(stored.id) is None
+        moved = repo.update_hub_job(stored.id, {"status": JobStatus.TO_DO})
+        assert moved is not None
+        app = repo.get_application_by_job_id(stored.id)
+        assert app is not None
+        assert app.job_id == stored.id
+        assert app.title == "SWE"
+        assert app.employer == "Acme"
+        again = repo.update_hub_job(stored.id, {"status": JobStatus.TO_DO})
+        assert again is not None
+        assert repo.get_application_by_job_id(stored.id).id == app.id  # type: ignore[union-attr]
+        assert repo._db["applications"].count == 1
+
+    def test_patch_deadline_and_follow_up(self, repo: JobRepository) -> None:
+        stored = repo.upsert_job(_job())
+        updated = repo.update_hub_job(
+            stored.id,
+            {"deadline": date(2026, 9, 20), "follow_up_at": "2026-09-05"},
+        )
+        assert updated is not None
+        assert updated.deadline == date(2026, 9, 20)
+        assert updated.follow_up_at == date(2026, 9, 5)
+        assert updated.last_activity_at is not None
+        again = repo.upsert_job(updated.model_copy(update={"title": "v2", "deadline": None}))
+        assert again.deadline == date(2026, 9, 20)
+        assert again.follow_up_at == date(2026, 9, 5)
+        assert again.title == "v2"
+
+
+class TestJobTasks:
+    def test_crud_and_activity_bump(self, repo: JobRepository) -> None:
+        stored = repo.upsert_job(_job())
+        assert stored.tasks == []
+        assert stored.last_activity_at is None
+        created = repo.create_job_task(stored.id, title="Finish OA", due_at=date(2026, 9, 3))
+        assert created is not None
+        assert created.title == "Finish OA"
+        assert created.due_at == date(2026, 9, 3)
+        assert created.done is False
+        listed = repo.list_job_tasks(stored.id)
+        assert [t.id for t in listed] == [created.id]
+        job = repo.get_hub_job(stored.id)
+        assert job is not None
+        assert job.last_activity_at is not None
+        assert job.tasks[0].title == "Finish OA"
+        patched = repo.update_job_task(
+            stored.id, created.id, {"done": True, "title": "OA submitted"}
+        )
+        assert patched is not None
+        assert patched.done is True
+        assert patched.title == "OA submitted"
+        assert repo.delete_job_task(stored.id, created.id) is True
+        assert repo.list_job_tasks(stored.id) == []
+        assert repo.delete_job_task(stored.id, created.id) is False
+        assert repo.create_job_task("missing", title="Nope") is None
+
+    def test_hydrated_on_list(self, repo: JobRepository) -> None:
+        a = repo.upsert_job(_job(source_job_id="a"))
+        b = repo.upsert_job(_job(source="remoteok", source_job_id="b"))
+        repo.create_job_task(a.id, title="Prep")
+        repo.create_job_task(b.id, title="OA")
+        jobs = {job.id: job for job in repo.list_hub_jobs()}
+        assert [t.title for t in jobs[a.id].tasks] == ["Prep"]
+        assert [t.title for t in jobs[b.id].tasks] == ["OA"]

@@ -32,7 +32,13 @@ class SponsorshipEvidence(BaseModel):
 
 
 class SponsorshipInfo(BaseModel):
-    """Persisted on ``jobs.sponsorship`` as JSON. Never holds user country prefs."""
+    """Visa / work-permit / employer-sponsorship stored on ``jobs.sponsorship``.
+
+    CN market jobs may leave this empty. EN and Global jobs should prefer filling
+    it when a JD phrase or official register match is available. Never holds user
+    country prefs. Display and enrichment live in ``job_sentinel.sponsorship``
+    and the Job Pool toggle; do not remove or redesign them from pipeline PRs.
+    """
 
     status: SponsorshipStatus = SponsorshipStatus.UNKNOWN
     country: str | None = None

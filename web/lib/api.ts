@@ -174,7 +174,21 @@ export function getProfile(): Promise<Profile | null> {
   return getJSON<Profile | null>("/api/profile", null);
 }
 
-export type HubJobStatus = "saved" | "to_do" | "applied" | "closed" | "reference";
+export type HubJobStatus =
+  | "reference"
+  | "under_study"
+  | "to_do"
+  | "applied"
+  | "interview"
+  | "offer"
+  | "closed";
+
+export type HubCloseReason =
+  | "withdrew"
+  | "not_selected"
+  | "no_response"
+  | "auto_archived"
+  | "other";
 
 export interface HubJob {
   id: string;
@@ -186,6 +200,15 @@ export interface HubJob {
   published_at: string | null;
   discovered_at: string;
   status: HubJobStatus | null;
+  favorite?: boolean;
+  next_step?: string;
+  comment?: string;
+  applied_at?: string | null;
+  close_reason?: HubCloseReason | null;
+  deadline?: string | null;
+  follow_up_at?: string | null;
+  last_activity_at?: string | null;
+  tasks?: JobTask[];
   match_score: number | null;
   salary?: string;
   description?: string;
@@ -249,22 +272,158 @@ export function getJobs(
   return getJSON<HubJob[]>(`/api/jobs?${q.toString()}`, []);
 }
 
-export async function patchHubJobStatus(
+export interface JobTask {
+  id: string;
+  job_id: string;
+  title: string;
+  due_at: string | null;
+  done: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface JobTaskPatch {
+  title?: string;
+  due_at?: string | null;
+  done?: boolean;
+  sort_order?: number;
+}
+
+function demoJobById(jobId: string): HubJob | undefined {
+  return demo.demoHubJobs.find((j) => j.id === jobId);
+}
+
+export async function createJobTask(
   jobId: string,
-  status: HubJobStatus | null,
-): Promise<HubJob | null> {
-  if (demo.DEMO) return { id: jobId, title: "", company: "", location: "", source: "", job_url: "", published_at: null, discovered_at: "", status, match_score: null };
+  body: { title: string; due_at?: string | null },
+): Promise<JobTask | null> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    const created: JobTask = {
+      id: `demo-task-${Date.now()}`,
+      job_id: jobId,
+      title: body.title,
+      due_at: body.due_at ?? null,
+      done: false,
+      sort_order: (job?.tasks?.length ?? 0),
+      created_at: new Date().toISOString(),
+    };
+    if (job) job.tasks = [...(job.tasks ?? []), created];
+    return created;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as JobTask;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchJobTask(
+  jobId: string,
+  taskId: string,
+  patch: JobTaskPatch,
+): Promise<JobTask | null> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    const current = (job?.tasks ?? []).find((t) => t.id === taskId);
+    if (!current) return null;
+    const saved: JobTask = {
+      ...current,
+      title: patch.title ?? current.title,
+      due_at: patch.due_at !== undefined ? patch.due_at : current.due_at,
+      done: patch.done ?? current.done,
+      sort_order: patch.sort_order ?? current.sort_order,
+    };
+    if (job) job.tasks = (job.tasks ?? []).map((t) => (t.id === taskId ? saved : t));
+    return saved;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(patch),
+      },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as JobTask;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteJobTask(jobId: string, taskId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    const job = demoJobById(jobId);
+    if (job) job.tasks = (job.tasks ?? []).filter((t) => t.id !== taskId);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export interface HubJobPatch {
+  status?: HubJobStatus | null;
+  comment?: string | null;
+  favorite?: boolean;
+  next_step?: string | null;
+  applied_at?: string | null;
+  close_reason?: HubCloseReason | null;
+  deadline?: string | null;
+  follow_up_at?: string | null;
+}
+
+export async function patchHubJob(jobId: string, patch: HubJobPatch): Promise<HubJob | null> {
+  if (demo.DEMO) {
+    const current = demo.demoHubJobs.find((j) => j.id === jobId);
+    if (!current) return null;
+    const next: HubJob = {
+      ...current,
+      status: patch.status !== undefined ? patch.status : current.status,
+      favorite: patch.favorite !== undefined ? patch.favorite : current.favorite,
+      next_step: patch.next_step !== undefined ? (patch.next_step ?? "") : current.next_step,
+      comment: patch.comment !== undefined ? (patch.comment ?? "") : current.comment,
+      applied_at: patch.applied_at !== undefined ? patch.applied_at : current.applied_at,
+      close_reason:
+        patch.close_reason !== undefined ? patch.close_reason : current.close_reason,
+      deadline: patch.deadline !== undefined ? patch.deadline : current.deadline,
+      follow_up_at: patch.follow_up_at !== undefined ? patch.follow_up_at : current.follow_up_at,
+    };
+    Object.assign(current, next);
+    return next;
+  }
   try {
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(patch),
     });
     if (!res.ok) return null;
     return (await res.json()) as HubJob;
   } catch {
     return null;
   }
+}
+
+export async function patchHubJobStatus(
+  jobId: string,
+  status: HubJobStatus | null,
+): Promise<HubJob | null> {
+  return patchHubJob(jobId, { status });
 }
 
 export async function dismissHubJob(jobId: string): Promise<HubJob | null> {
@@ -726,6 +885,7 @@ export interface Application {
   deadline: string;
   notes: string;
   posting_id: string | null;
+  job_id: string | null;
   resume_document_id: string | null;
   created_at: string;
   updated_at: string;
@@ -744,6 +904,7 @@ export interface ApplicationCreateBody {
   applied_date?: string;
   deadline?: string;
   notes?: string;
+  job_id?: string;
   resume_document_id?: string | null;
 }
 
@@ -1086,6 +1247,60 @@ export interface FilterSettings {
   exclude_internship: boolean;
   custom_keywords: string[];
   excluded_companies: string[];
+}
+
+export interface ArchiveSettings {
+  enabled: boolean;
+  idle_days: number;
+}
+
+export interface ArchiveRunResult {
+  scanned: number;
+  archived: number;
+  skipped: number;
+  disabled: boolean;
+  dry_run: boolean;
+  job_ids: string[];
+}
+
+export function getArchiveSettings(): Promise<ArchiveSettings | null> {
+  if (demo.DEMO) return Promise.resolve({ enabled: false, idle_days: 14 });
+  return getJSON<ArchiveSettings | null>("/api/archive-settings", null);
+}
+
+export async function saveArchiveSettings(body: ArchiveSettings): Promise<ArchiveSettings | null> {
+  if (demo.DEMO) return body;
+  try {
+    const res = await fetch(`${API_BASE}/api/archive-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ArchiveSettings;
+  } catch {
+    return null;
+  }
+}
+
+export async function runJobArchive(opts: {
+  dry_run?: boolean;
+  force?: boolean;
+} = {}): Promise<ArchiveRunResult | null> {
+  if (demo.DEMO) {
+    return { scanned: 0, archived: 0, skipped: 0, disabled: false, dry_run: !!opts.dry_run, job_ids: [] };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs/archive-run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ dry_run: opts.dry_run ?? false, force: opts.force ?? true }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ArchiveRunResult;
+  } catch {
+    return null;
+  }
 }
 
 export function getFilterSettings(): Promise<FilterSettings | null> {

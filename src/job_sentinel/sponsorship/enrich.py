@@ -1,4 +1,9 @@
-"""Combine JD parser + official registry match. Isolated from collect failures."""
+"""Combine JD parser + official registry match. Isolated from collect failures.
+
+Product: ``sponsorship`` is visa / work-permit / employer-sponsorship info.
+CN jobs may stay empty (unknown). EN and Global jobs should be filled when the
+JD or a register match is available. Do not skip or redesign this path here.
+"""
 
 from __future__ import annotations
 

@@ -79,24 +79,147 @@ def test_jobs_listed_and_status_updated(tmp_path: Path) -> None:
 
     jobs = client.get("/api/jobs").json()
     assert any(j["id"] == stored.id for j in jobs)
-    assert jobs[0]["status"] is None
+    assert jobs[0]["status"] == "under_study"
+    assert jobs[0]["favorite"] is False
 
     upd = client.patch(f"/api/jobs/{stored.id}", json={"status": "applied"})
     assert upd.status_code == 200
     assert upd.json()["status"] == JobStatus.APPLIED.value
+    assert upd.json()["applied_at"] is not None
+
+    patched = client.patch(
+        f"/api/jobs/{stored.id}",
+        json={"favorite": True, "comment": "heard back", "next_step": "prep loop"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["favorite"] is True
+    assert patched.json()["comment"] == "heard back"
+    assert patched.json()["next_step"] == "prep loop"
+
+    closed = client.patch(
+        f"/api/jobs/{stored.id}",
+        json={"status": "closed", "close_reason": "no_response"},
+    )
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "closed"
+    assert closed.json()["close_reason"] == "no_response"
 
     again = client.get("/api/jobs").json()
-    assert again[0]["status"] == "applied"
+    assert again[0]["status"] == "closed"
+    assert again[0]["favorite"] is True
 
     cleared = client.patch(f"/api/jobs/{stored.id}", json={"status": None})
     assert cleared.status_code == 200
     assert cleared.json()["status"] is None
 
-    bad = client.patch(f"/api/jobs/{stored.id}", json={"status": "under_study"})
+    under = client.patch(f"/api/jobs/{stored.id}", json={"status": "under_study"})
+    assert under.status_code == 200
+    assert under.json()["status"] == "under_study"
+
+    todo = client.patch(f"/api/jobs/{stored.id}", json={"status": "to_do"})
+    assert todo.status_code == 200
+    apps = client.get("/api/applications").json()
+    assert any(a["job_id"] == stored.id for a in apps)
+
+    bad = client.patch(f"/api/jobs/{stored.id}", json={"status": "saved"})
     assert bad.status_code == 422
 
-    missing = client.patch("/api/jobs/ghost", json={"status": "saved"})
+    missing = client.patch("/api/jobs/ghost", json={"status": "to_do"})
     assert missing.status_code == 404
+
+    dates = client.patch(
+        f"/api/jobs/{stored.id}",
+        json={"deadline": "2026-09-20", "follow_up_at": "2026-09-05"},
+    )
+    assert dates.status_code == 200
+    assert dates.json()["deadline"] == "2026-09-20"
+    assert dates.json()["follow_up_at"] == "2026-09-05"
+
+
+def test_job_tasks_crud(tmp_path: Path) -> None:
+    from job_sentinel.core.models import Job
+    from job_sentinel.db.repository import JobRepository
+
+    db = tmp_path / "j.db"
+    repo = JobRepository(db)
+    stored = repo.upsert_job(
+        Job(source="zhaopin", source_job_id="CC1", title="SWE", company="ACME")
+    )
+    repo.close()
+    client = _client(tmp_path)
+
+    missing = client.post("/api/jobs/ghost/tasks", json={"title": "OA"})
+    assert missing.status_code == 404
+
+    created = client.post(
+        f"/api/jobs/{stored.id}/tasks",
+        json={"title": "Finish OA", "due_at": "2026-09-03"},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["title"] == "Finish OA"
+    assert body["due_at"] == "2026-09-03"
+    assert body["done"] is False
+    task_id = body["id"]
+
+    listed = client.get(f"/api/jobs/{stored.id}/tasks")
+    assert listed.status_code == 200
+    assert [t["id"] for t in listed.json()] == [task_id]
+
+    jobs = client.get("/api/jobs").json()
+    assert jobs[0]["tasks"][0]["title"] == "Finish OA"
+
+    patched = client.patch(
+        f"/api/jobs/{stored.id}/tasks/{task_id}",
+        json={"done": True, "title": "OA submitted"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["done"] is True
+    assert patched.json()["title"] == "OA submitted"
+
+    blank = client.post(f"/api/jobs/{stored.id}/tasks", json={"title": "  "})
+    assert blank.status_code == 422
+
+    deleted = client.delete(f"/api/jobs/{stored.id}/tasks/{task_id}")
+    assert deleted.status_code == 200
+    assert client.get(f"/api/jobs/{stored.id}/tasks").json() == []
+
+    gone = client.delete(f"/api/jobs/{stored.id}/tasks/{task_id}")
+    assert gone.status_code == 404
+
+
+def test_archive_settings_and_run(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from job_sentinel.core.models import Job, JobStatus
+    from job_sentinel.db.repository import JobRepository
+
+    repo = JobRepository(tmp_path / "j.db")
+    repo.upsert_job(
+        Job(
+            source="zhaopin",
+            source_job_id="idle",
+            title="Idle",
+            status=JobStatus.UNDER_STUDY,
+            discovered_at=datetime(2026, 8, 1, tzinfo=UTC),
+            last_activity_at=datetime(2026, 8, 1, tzinfo=UTC),
+        )
+    )
+    repo.close()
+    client = _client(tmp_path)
+    defaults = client.get("/api/archive-settings").json()
+    assert defaults["enabled"] is False
+    assert defaults["idle_days"] == 14
+    saved = client.put("/api/archive-settings", json={"enabled": True, "idle_days": 7})
+    assert saved.status_code == 200
+    assert saved.json() == {"enabled": True, "idle_days": 7}
+    ran = client.post("/api/jobs/archive-run", json={"dry_run": False, "force": True})
+    assert ran.status_code == 200
+    body = ran.json()
+    assert body["archived"] == 1
+    jobs = client.get("/api/jobs").json()
+    assert jobs[0]["status"] == "closed"
+    assert jobs[0]["close_reason"] == "auto_archived"
 
 
 def test_jobs_since_filter(tmp_path: Path) -> None:
@@ -208,7 +331,7 @@ def test_filter_settings_round_trip_and_hide_jobs(tmp_path: Path) -> None:
     assert cleared["reapplied"]["included"] == 1
     visible = client.get("/api/jobs").json()
     assert visible[0]["id"] == intern.id
-    assert visible[0]["status"] is None
+    assert visible[0]["status"] == "under_study"
 
 
 def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
@@ -222,7 +345,7 @@ def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
             source_job_id="d1",
             title="产品经理",
             company="示例",
-            status=JobStatus.SAVED,
+            status=JobStatus.UNDER_STUDY,
         )
     )
     repo.insert_job_raw(JobRaw(source="zhaopin", source_job_id="d1", job_id=job.id))
@@ -233,14 +356,14 @@ def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
     body = gone.json()
     assert body["filter_state"] == "excluded"
     assert "manual_dismiss" in body["filter_reasons"]
-    assert body["status"] == "saved"
+    assert body["status"] == "under_study"
     assert client.get("/api/jobs").json() == []
     hidden = client.get("/api/jobs", params={"filter_state": "excluded"}).json()
     assert hidden[0]["id"] == job.id
     back = client.post(f"/api/jobs/{job.id}/undismiss")
     assert back.status_code == 200
     assert back.json()["filter_state"] == "included"
-    assert back.json()["status"] == "saved"
+    assert back.json()["status"] == "under_study"
     visible = client.get("/api/jobs").json()
     assert visible[0]["id"] == job.id
 

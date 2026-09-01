@@ -38,6 +38,7 @@ MARKETS: dict[MarketId, MarketConfig] = {
         id="cn",
         label="CN",
         default_country="CN",
+        # CN jobs may leave visa/sponsorship empty; no sponsorship_display filter.
         filters=frozenset({"source"}),
         default_collect_sources=("zhaopin", "liepin"),
         route="/cn",
@@ -46,6 +47,7 @@ MARKETS: dict[MarketId, MarketConfig] = {
         id="en",
         label="EN",
         default_country=None,
+        # EN view includes global boards; fill visa/work-permit when available.
         filters=frozenset({"country", "remote", "posted", "source", "sponsorship_display"}),
         default_collect_sources=("linkedin", "hiring_cafe"),
         route="/en",
