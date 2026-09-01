@@ -14,8 +14,9 @@ import { cn } from "@/lib/utils";
 const PRIMARY: { href: string; label: string; page?: "search" | "jobs" }[] = [
   { href: "/search", label: "Collect Jobs", page: "search" },
   { href: "/jobs", label: "Discover", page: "jobs" },
-  { href: "/tasks", label: "Tasks" },
   { href: "/applications", label: "Applications" },
+  { href: "/tasks", label: "Tasks" },
+  { href: "/materials", label: "Materials" },
 ];
 
 const SECONDARY = [

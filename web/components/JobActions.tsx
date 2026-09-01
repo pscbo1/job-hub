@@ -40,18 +40,29 @@ export function JobActions({
     setBusy(false);
   }
 
-  async function onStartApplication() {
+  async function onStartApplication(toPacket = false) {
     if (busy) return;
     setBusy(true);
     setFailed(false);
     const result = await startApplicationForJob(job.id);
     if (result) {
       onChange?.(result.job);
-      router.push("/applications");
+      const qs = toPacket
+        ? `id=${encodeURIComponent(result.application.id)}&tab=packet`
+        : `id=${encodeURIComponent(result.application.id)}`;
+      router.push(`/applications?${qs}`);
     } else {
       setFailed(true);
     }
     setBusy(false);
+  }
+
+  function onOpenMaterials() {
+    if (job.application_id) {
+      router.push(`/applications?id=${encodeURIComponent(job.application_id)}&tab=packet`);
+      return;
+    }
+    router.push(`/applications?job=${encodeURIComponent(job.id)}&tab=packet`);
   }
 
   if (excluded && variant === "discover") {
@@ -108,6 +119,19 @@ export function JobActions({
           className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink transition-colors hover:border-ink/30 hover:bg-bg disabled:opacity-50"
         >
           Start application
+        </button>
+      )}
+      {variant === "tasks" && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            if (job.application_id) onOpenMaterials();
+            else void onStartApplication(true);
+          }}
+          className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink transition-colors hover:border-ink/30 hover:bg-bg disabled:opacity-50"
+        >
+          Open materials
         </button>
       )}
       {failed && <span className="text-xs text-amber-600">Update failed</span>}

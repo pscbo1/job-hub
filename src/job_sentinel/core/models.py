@@ -403,11 +403,31 @@ _LEGACY_APPLICATION_STAGES: dict[str, ApplicationStage] = {
 }
 
 
+class PacketSnapshotItem(BaseModel):
+    """Denormalized Packet row frozen at Mark Submitted. File refs stay immutable."""
+
+    binding_id: str = Field(default="")
+    material_id: str = Field(default="")
+    material_version_id: str = Field(default="")
+    title: str = Field(default="")
+    kind: str = Field(default="other")
+    version_number: int = Field(default=1)
+    version_label: str = Field(default="")
+    original_filename: str = Field(default="")
+    file_ref: str = Field(default="")
+    url: str = Field(default="")
+    material_purpose: list[str] = Field(default_factory=list)
+    version_purpose: list[str] = Field(default_factory=list)
+    material_notes: str = Field(default="")
+    version_notes: str = Field(default="")
+
+
 class PacketSnapshot(BaseModel):
     """MaterialVersion bindings captured at Mark Submitted. Packet is not a stage."""
 
     binding_ids: list[str] = Field(default_factory=list)
     material_version_ids: list[str] = Field(default_factory=list)
+    items: list[PacketSnapshotItem] = Field(default_factory=list)
     note: str = Field(default="")
 
 
@@ -436,7 +456,7 @@ class ApplicationEvent(BaseModel):
 class Application(BaseModel):
     """One Application per Job. Stage is draft | applied | interview | offer | closed.
 
-    Closed is history/archive. ``close_reason`` is optional. Packet UI is later.
+    Closed is history/archive. ``close_reason`` is optional.
     """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
@@ -460,9 +480,13 @@ class Application(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     raw_data: dict[str, Any] = Field(default_factory=dict)
     submissions: list[ApplicationSubmission] = Field(default_factory=list)
+    exclude_from_idle: bool = Field(
+        default=False,
+        description="Manual exemption from idle / no-update cleanup.",
+    )
     stale_applied: bool = Field(
         default=False,
-        description="Computed: Applied with no meaningful update for 14d+.",
+        description="Computed: Applied with no meaningful update for N days.",
     )
 
     @model_validator(mode="before")
@@ -520,15 +544,14 @@ class Application(BaseModel):
     model_config = {"frozen": False}
 
 
-class Material(BaseModel):
-    """Materials Library item. Full UI is out of scope; schema stub only."""
+class MaterialKind(StrEnum):
+    """Library kinds for file materials. Knowledge kinds are Part 3."""
 
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    title: str = Field(default="")
-    kind: str = Field(default="other")
-    notes: str = Field(default="")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    RESUME = "resume"
+    COVER_LETTER = "cover_letter"
+    PORTFOLIO = "portfolio"
+    TRANSCRIPT = "transcript"
+    OTHER = "other"
 
 
 class MaterialVersion(BaseModel):
@@ -536,20 +559,50 @@ class MaterialVersion(BaseModel):
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     material_id: str
+    version_number: int = Field(default=1, ge=1)
     version_label: str = Field(default="")
+    purpose: list[str] = Field(default_factory=list)
     file_ref: str = Field(default="")
+    original_filename: str = Field(default="")
+    content_type: str = Field(default="")
+    byte_size: int = Field(default=0, ge=0)
     url: str = Field(default="")
     notes: str = Field(default="")
+    archived_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def display_label(self) -> str:
+        extra = self.version_label.strip()
+        return f"v{self.version_number} · {extra}" if extra else f"v{self.version_number}"
+
+
+class Material(BaseModel):
+    """Materials Library item. Versions hold the takeable files or URLs."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    title: str = Field(default="")
+    kind: str = Field(default="other")
+    purpose: list[str] = Field(default_factory=list)
+    notes: str = Field(default="")
+    archived_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    versions: list[MaterialVersion] = Field(default_factory=list)
+
+    def touch(self) -> None:
+        object.__setattr__(self, "updated_at", datetime.now(tz=UTC))
 
 
 class ApplicationMaterialBinding(BaseModel):
-    """Packet membership: Application ↔ MaterialVersion."""
+    """Packet membership: Application ↔ one Version of a Material."""
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     application_id: str
+    material_id: str
     material_version_id: str
-    role: str = Field(default="")
+    sort_order: int = Field(default=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 

@@ -34,7 +34,7 @@ V0 核心链路：
 
 Save 与 Reference 是独立 boolean，可与 Application 共存。Applied / Interview / Offer / Closed 只出现在 Application。Closed 即历史。系统不出现 Rejected、Under Study、用户可见 To Do。
 
-主导航只有：**Collect Jobs · Discover · Tasks · Applications**。
+主导航：**Collect Jobs · Discover · Applications · Tasks · Materials**。
 
 V0 完成后，用户可以在一个页面完成四件事：
 
@@ -195,11 +195,11 @@ V0 建立四个产品表面：
 
 ### 8.1 `/jobs`（Discover / Job Pool）
 
-采集后的岗位。出现在此不代表用户要跟进。动作：Save（toggle）、Reference（toggle）、Open source、Start application、··· Dismiss。无 Start Review。卡片不显示 Next Step / DDL / task。默认 Current 隐藏 dismissed/excluded。Excluded 视图可 Restore；被 auto-archive 的 excluded 仍出现在 Excluded。
+采集后的岗位。出现在此不代表用户要跟进。动作：Save（toggle）、Reference（toggle）、Open source、Start application、··· Dismiss。无 Start Review。卡片不显示 Next Step / DDL / task。默认 Current 隐藏 dismissed/excluded。Excluded 不占主栏，从 Filter / More 进入；可 Restore。被 auto-archive 的 excluded 仍出现在 Excluded。
 
 顶栏筛选：All / Saved / Reference。更多 Filter：Source / Market / Date / Location。无 Active / To Do / Under Study / Discovery chips。
 
-Discover Settings：Auto-archive excluded jobs，默认 OFF，After 14 days。仅 excluded/dismissed。
+Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配置，默认 14）。仅 excluded/dismissed。
 
 ### 8.2 `/tasks`
 
@@ -207,7 +207,7 @@ Discover Settings：Auto-archive excluded jobs，默认 OFF，After 14 days。�
 
 ### 8.3 `/applications`
 
-仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。视图：Open（默认）| Closed（历史）。Open 下智能筛选 `No update 14d+`（stage=applied 且 14 天无有效动作）。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。
+仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 More 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。Application Detail：Notes（默认）与 Packet。申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
 
 ### 8.4 `/search`（Collect Jobs）
 
@@ -233,6 +233,10 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 - 去重结果存在明显歧义、无法安全自动合并的岗位。
 
 无待处理内容时保持空状态，不制造通知。
+
+### 8.7 `/materials`
+
+Files library。Material 可有多个 Version（upload 或 URL）。Application Packet 绑定 version，UNIQUE(application_id, material_id)。Mark Submitted 从服务器 bindings 拍 submission snapshot；允许空 Packet（需确认 Record without materials）。Cancel Draft 只清 bindings，library 保留。不在此轮做 Knowledge/Answer Bank、Studio AI 或 object storage。
 
 ---
 
@@ -683,7 +687,8 @@ Constraints：
 - `applications`：unique `job_id`；stage draft|applied|interview|offer|closed；close_reason 可空；无 rejected；Closed 即历史，无独立 archived 阶段。
 - `application_submissions`：每次 Mark Submitted / 重投一条。
 - `application_events`：阶段与关闭历史。
-- `materials` / `material_versions` / `application_material_bindings`：Library + Packet schema stub（完整 UI 后置）。
+- `materials` / `material_versions` / `application_material_bindings`：Library + Packet。binding UNIQUE(application_id, material_id)，由 version→material_id 解析。purpose 为双层自由文本。soft archive。Cancel Draft 只清 bindings。
+- `applications.exclude_from_idle`：申请级排除 idle cleanup。`hub_idle_cleanup_settings`：enabled + idle_days（默认 14，可改）。
 
 V0 不创建或不启用：
 
@@ -727,6 +732,15 @@ V0 不创建或不启用：
 - `GET /api/review`
 - `POST /api/review/:entityType/:id/resolve`
   - action：approve / keep_separate / block。
+
+### 17.5 Applications, idle cleanup, Materials
+
+- `GET /api/applications?view=open|closed|all&stale_applied=`
+- `GET|PUT /api/idle-cleanup-settings` — `enabled`, `idle_days`（默认 14）
+- `PATCH /api/applications/:id` — includes `exclude_from_idle`
+- `GET|POST /api/materials`；`POST /api/materials/upload`；versions upload/URL
+- `GET|PUT /api/applications/:id/packet`；bindings add/change/remove
+- `POST /api/applications/:id/submit` snapshots current server bindings（empty packet allowed）
 
 ---
 

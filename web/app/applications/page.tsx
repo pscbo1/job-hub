@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { ApplicationWorkspace } from "@/components/ApplicationWorkspace";
 import { type Column, DataTable } from "@/components/DataTable";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
@@ -9,10 +10,13 @@ import { PopoverSelect } from "@/components/ui/popover-select";
 import {
   type Application,
   type ApplicationStage,
+  type IdleCleanupSettings,
   abandonApplication,
   closeApplication,
   getApplications,
   getApplicationStats,
+  getIdleCleanupSettings,
+  putIdleCleanupSettings,
   submitApplication,
   updateApplication,
 } from "@/lib/api";
@@ -79,11 +83,14 @@ export default function ApplicationsPage() {
   const [apiDown, setApiDown] = useState(false);
   const [board, setBoard] = useState<BoardView>("open");
   const [staleOnly, setStaleOnly] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const [stageFilter, setStageFilter] = useState<ApplicationStage | "all">("all");
   const [sourceFilter, setSourceFilter] = useState("");
   const [query, setQuery] = useState("");
-  const [notesId, setNotesId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"notes" | "packet">("notes");
   const [selected, setSelected] = useState<string[]>([]);
+  const [idle, setIdle] = useState<IdleCleanupSettings>({ enabled: false, idle_days: 14 });
 
   async function refresh() {
     const list = await getApplications(undefined, 500, {
@@ -95,12 +102,30 @@ export default function ApplicationsPage() {
   }
 
   useEffect(() => {
-    void Promise.all([getApplications(undefined, 500, { view: "open" }), getApplicationStats()])
-      .then(([list, st]) => {
+    void Promise.all([
+      getApplications(undefined, 500, { view: "open" }),
+      getApplicationStats(),
+      getIdleCleanupSettings(),
+    ])
+      .then(([list, st, settings]) => {
         if (list.length === 0 && Object.keys(st).length === 0) setApiDown(true);
         setApps(list);
+        setIdle(settings);
       })
       .finally(() => setLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const jobId = params.get("job");
+    if (params.get("tab") === "packet") setTab("packet");
+    if (params.get("id")) setActiveId(params.get("id"));
+    if (jobId) {
+      void getApplications(undefined, 500, { view: "all" }).then((list) => {
+        const match = list.find((a) => a.job_id === jobId);
+        if (match) setActiveId(match.id);
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -126,22 +151,21 @@ export default function ApplicationsPage() {
   async function onCancelDraft(id: string) {
     const row = apps.find((a) => a.id === id);
     if (!row || applicationWasSubmitted(row)) return;
+    if (!window.confirm("Cancel this draft? Materials already in the library are kept.")) return;
     setApps((prev) => prev.filter((a) => a.id !== id));
     await abandonApplication(id);
+    if (activeId === id) setActiveId(null);
     void refresh();
   }
 
   async function onCloseSelected() {
     const ids = selected.slice();
     for (const id of ids) {
+      const row = apps.find((a) => a.id === id);
+      if (row?.exclude_from_idle) continue;
       await closeApplication(id);
     }
     void refresh();
-  }
-
-  async function onNotes(id: string, notes: string) {
-    setApps((prev) => prev.map((a) => (a.id === id ? { ...a, notes } : a)));
-    await updateApplication(id, { notes });
   }
 
   const sources = useMemo(
@@ -152,12 +176,13 @@ export default function ApplicationsPage() {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return apps.filter((a) => {
+      if (staleOnly && a.exclude_from_idle) return false;
       if (stageFilter !== "all" && a.stage !== stageFilter) return false;
       if (sourceFilter && a.source !== sourceFilter) return false;
       if (!q) return true;
       return [a.title, a.employer, a.location, a.source, a.notes].join(" ").toLowerCase().includes(q);
     });
-  }, [apps, stageFilter, sourceFilter, query]);
+  }, [apps, stageFilter, sourceFilter, query, staleOnly]);
 
   const columns: Column<Application>[] = [
     {
@@ -165,7 +190,7 @@ export default function ApplicationsPage() {
       header: "",
       headerClassName: "w-8",
       render: (a) =>
-        staleOnly ? (
+        staleOnly && !a.exclude_from_idle ? (
           <input
             type="checkbox"
             checked={selected.includes(a.id)}
@@ -183,7 +208,7 @@ export default function ApplicationsPage() {
       header: "Role",
       sortValue: (a) => a.title.toLowerCase(),
       render: (a) => (
-        <button type="button" className="min-w-0 text-left" onClick={() => setNotesId(a.id)}>
+        <button type="button" className="min-w-0 text-left" onClick={() => { setActiveId(a.id); setTab("notes"); }}>
           <div className="font-medium text-ink">{a.title || "Untitled"}</div>
           <div className="text-xs text-muted">{[a.employer, a.location].filter(Boolean).join(" · ")}</div>
         </button>
@@ -230,7 +255,7 @@ export default function ApplicationsPage() {
     {
       key: "actions",
       header: "",
-      headerClassName: "w-40",
+      headerClassName: "w-48",
       render: (a) => (
         <div className="flex flex-wrap items-center gap-2">
           {a.url && (
@@ -238,6 +263,13 @@ export default function ApplicationsPage() {
               Open source
             </a>
           )}
+          <button
+            type="button"
+            onClick={() => { setActiveId(a.id); setTab("packet"); }}
+            className="text-xs font-medium text-ink hover:underline"
+          >
+            Open materials
+          </button>
           {a.stage === "draft" && (
             <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
               Mark submitted
@@ -263,7 +295,8 @@ export default function ApplicationsPage() {
     },
   ];
 
-  const notesRow = apps.find((a) => a.id === notesId) ?? null;
+  const active = apps.find((a) => a.id === activeId) ?? null;
+  const idleLabel = `No update ${idle.idle_days}d+`;
 
   if (!loaded) {
     return <div className="mx-auto max-w-5xl px-5 py-20 text-center text-muted">Loading…</div>;
@@ -284,49 +317,6 @@ export default function ApplicationsPage() {
           Start Application creates a draft. Mark submitted to enter Applied. Closed is history.
         </p>
       </header>
-
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            setBoard("open");
-            setStaleOnly(false);
-            setStageFilter("all");
-          }}
-          className={cn(
-            "rounded-full border px-3 py-1 text-xs font-medium",
-            board === "open" && !staleOnly ? "border-ink bg-ink text-white" : "border-line text-muted",
-          )}
-        >
-          Open
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setBoard("closed");
-            setStaleOnly(false);
-            setStageFilter("all");
-          }}
-          className={cn(
-            "rounded-full border px-3 py-1 text-xs font-medium",
-            board === "closed" ? "border-ink bg-ink text-white" : "border-line text-muted",
-          )}
-        >
-          Closed
-        </button>
-        {board === "open" && (
-          <button
-            type="button"
-            onClick={() => setStaleOnly((v) => !v)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium",
-              staleOnly ? "border-amber-700 bg-amber-50 text-amber-900" : "border-line text-muted",
-            )}
-          >
-            No update 14d+
-          </button>
-        )}
-      </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
@@ -356,6 +346,13 @@ export default function ApplicationsPage() {
           className="w-40"
           options={[{ value: "", label: "All sources" }, ...sources.map((s) => ({ value: s, label: s }))]}
         />
+        <button
+          type="button"
+          onClick={() => setShowMore((v) => !v)}
+          className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-muted"
+        >
+          More ▾
+        </button>
         {staleOnly && selected.length > 0 && (
           <button
             type="button"
@@ -368,6 +365,111 @@ export default function ApplicationsPage() {
         <span className="ml-auto text-sm text-muted">{visible.length} shown</span>
         <ExportMenu count={apps.length} />
       </div>
+
+      {showMore && (
+        <div className="mb-4 space-y-3 rounded-xl border border-line bg-surface p-3 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setBoard("open");
+                setStaleOnly(false);
+                setStageFilter("all");
+              }}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium",
+                board === "open" && !staleOnly ? "border-ink bg-ink text-white" : "border-line text-muted",
+              )}
+            >
+              Open
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setBoard("closed");
+                setStaleOnly(false);
+                setStageFilter("all");
+              }}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium",
+                board === "closed" ? "border-ink bg-ink text-white" : "border-line text-muted",
+              )}
+            >
+              Closed
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setBoard("open");
+                setStaleOnly(true);
+                setStageFilter("all");
+              }}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium",
+                staleOnly ? "border-amber-700 bg-amber-50 text-amber-900" : "border-line text-muted",
+              )}
+            >
+              {idleLabel}
+            </button>
+          </div>
+          <div className="space-y-2 border-t border-line pt-3">
+            <p className="font-medium">Idle cleanup</p>
+            <label className="flex items-center gap-2 text-muted">
+              <input
+                type="checkbox"
+                checked={idle.enabled}
+                onChange={(e) => {
+                  const next = { ...idle, enabled: e.target.checked };
+                  setIdle(next);
+                  void putIdleCleanupSettings(next).then(() => refresh());
+                }}
+                className="h-4 w-4 rounded border-line"
+              />
+              Include Applied applications with no update
+            </label>
+            <label className="flex items-center gap-2 text-muted">
+              After
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={idle.idle_days}
+                onChange={(e) => {
+                  const next = {
+                    ...idle,
+                    idle_days: Math.max(1, Math.min(365, Number(e.target.value) || 14)),
+                  };
+                  setIdle(next);
+                  void putIdleCleanupSettings(next).then(() => refresh());
+                }}
+                className="h-9 w-20 rounded-lg border border-line bg-bg px-2 text-sm text-ink"
+              />
+              days. Interview and Offer never appear here. Close selected is manual.
+            </label>
+          </div>
+          {staleOnly && (
+            <p className="text-xs text-muted">
+              Exempt applications stay out of {idleLabel}. Use More on a row in the workspace to exclude from idle cleanup.
+            </p>
+          )}
+        </div>
+      )}
+
+      {(board !== "open" || staleOnly) && (
+        <p className="mb-3 text-xs text-muted">
+          {board === "closed" ? "Viewing closed history." : `Viewing ${idleLabel}.`}
+          <button
+            type="button"
+            className="ml-2 underline"
+            onClick={() => {
+              setBoard("open");
+              setStaleOnly(false);
+            }}
+          >
+            Back to Open
+          </button>
+        </p>
+      )}
 
       <DataTable
         rows={visible}
@@ -387,21 +489,28 @@ export default function ApplicationsPage() {
         }
       />
 
-      {notesRow && (
-        <div className="mt-4 rounded-xl border border-line bg-surface p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink">Notes — {notesRow.title}</h2>
-            <button type="button" onClick={() => setNotesId(null)} className="text-xs text-muted">
+      {active && (
+        <div className="mt-2">
+          <div className="mb-2 flex items-start justify-end gap-3">
+            <details className="text-xs text-muted">
+              <summary className="cursor-pointer hover:text-ink">More</summary>
+              <button
+                type="button"
+                onClick={() =>
+                  void updateApplication(active.id, {
+                    exclude_from_idle: !active.exclude_from_idle,
+                  }).then(() => refresh())
+                }
+                className="mt-2 block text-left hover:text-ink"
+              >
+                {active.exclude_from_idle ? "Include in idle cleanup" : "Exclude from idle cleanup"}
+              </button>
+            </details>
+            <button type="button" onClick={() => setActiveId(null)} className="text-xs text-muted">
               Close
             </button>
           </div>
-          <textarea
-            defaultValue={notesRow.notes}
-            onBlur={(e) => void onNotes(notesRow.id, e.target.value)}
-            rows={6}
-            className="w-full rounded-lg border border-line bg-bg p-3 text-sm text-ink"
-            placeholder="Optional notes. Close reasons can live here."
-          />
+          <ApplicationWorkspace app={active} tab={tab} onTab={setTab} onChanged={() => void refresh()} />
         </div>
       )}
     </div>

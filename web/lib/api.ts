@@ -453,6 +453,299 @@ export async function putArchiveSettings(
   }
 }
 
+export interface IdleCleanupSettings {
+  enabled: boolean;
+  idle_days: number;
+}
+
+export function getIdleCleanupSettings(): Promise<IdleCleanupSettings> {
+  if (demo.DEMO) return Promise.resolve({ enabled: true, idle_days: 14 });
+  return getJSON<IdleCleanupSettings>("/api/idle-cleanup-settings", {
+    enabled: false,
+    idle_days: 14,
+  });
+}
+
+export async function putIdleCleanupSettings(
+  body: IdleCleanupSettings,
+): Promise<IdleCleanupSettings | null> {
+  if (demo.DEMO) return body;
+  try {
+    const res = await fetch(`${API_BASE}/api/idle-cleanup-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as IdleCleanupSettings;
+  } catch {
+    return null;
+  }
+}
+
+export type MaterialKind = "resume" | "cover_letter" | "portfolio" | "transcript" | "other";
+
+export interface MaterialVersion {
+  id: string;
+  material_id: string;
+  version_number: number;
+  version_label: string;
+  purpose: string[];
+  file_ref: string;
+  original_filename: string;
+  content_type: string;
+  byte_size: number;
+  url: string;
+  notes: string;
+  archived_at?: string | null;
+  created_at: string;
+  display_label?: string;
+}
+
+export interface Material {
+  id: string;
+  title: string;
+  kind: string;
+  purpose: string[];
+  notes: string;
+  archived_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  versions: MaterialVersion[];
+}
+
+export interface PacketItem {
+  binding: {
+    id: string;
+    application_id: string;
+    material_id: string;
+    material_version_id: string;
+    sort_order: number;
+    created_at: string;
+  };
+  material: Material | null;
+  version: MaterialVersion | null;
+}
+
+export function getMaterials(includeArchived = false): Promise<Material[]> {
+  if (demo.DEMO) {
+    return Promise.resolve(
+      includeArchived ? demo.demoMaterials : demo.demoMaterials.filter((m) => !m.archived_at),
+    );
+  }
+  const q = includeArchived ? "?include_archived=true" : "";
+  return getJSON<Material[]>(`/api/materials${q}`, []);
+}
+
+export async function createMaterial(body: {
+  title: string;
+  kind?: string;
+  purpose?: string[];
+  notes?: string;
+  url?: string;
+  version_label?: string;
+  version_purpose?: string[];
+  version_notes?: string;
+}): Promise<Material | null> {
+  if (demo.DEMO) {
+    const created = demo.makeDemoMaterial(body);
+    demo.demoMaterials.unshift(created);
+    return created;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function uploadMaterial(form: FormData): Promise<Material | null> {
+  if (demo.DEMO) {
+    const title = String(form.get("title") || "Uploaded file");
+    const created = demo.makeDemoMaterial({ title, kind: String(form.get("kind") || "other") });
+    demo.demoMaterials.unshift(created);
+    return created;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials/upload`, {
+      method: "POST",
+      headers: { ...authHeaders() },
+      body: form,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchMaterial(
+  id: string,
+  body: { title?: string; kind?: string; purpose?: string[]; notes?: string },
+): Promise<Material | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === id);
+    if (!found) return null;
+    Object.assign(found, body, { updated_at: new Date().toISOString() });
+    return found;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function archiveMaterial(id: string, restore = false): Promise<Material | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === id);
+    if (!found) return null;
+    found.archived_at = restore ? null : new Date().toISOString();
+    return found;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/materials/${encodeURIComponent(id)}/${restore ? "restore" : "archive"}`,
+      { method: "POST", headers: { ...authHeaders() } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as Material;
+  } catch {
+    return null;
+  }
+}
+
+export async function addMaterialVersion(
+  materialId: string,
+  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string },
+): Promise<MaterialVersion | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === materialId);
+    if (!found) return null;
+    const version = demo.makeDemoVersion(found, body);
+    found.versions.unshift(version);
+    return version;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/materials/${encodeURIComponent(materialId)}/versions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as MaterialVersion;
+  } catch {
+    return null;
+  }
+}
+
+export async function uploadMaterialVersion(
+  materialId: string,
+  form: FormData,
+): Promise<MaterialVersion | null> {
+  if (demo.DEMO) {
+    const found = demo.demoMaterials.find((m) => m.id === materialId);
+    if (!found) return null;
+    const version = demo.makeDemoVersion(found, { version_label: String(form.get("version_label") || "") });
+    found.versions.unshift(version);
+    return version;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/materials/${encodeURIComponent(materialId)}/versions/upload`,
+      { method: "POST", headers: { ...authHeaders() }, body: form },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as MaterialVersion;
+  } catch {
+    return null;
+  }
+}
+
+export function materialVersionFileUrl(versionId: string): string {
+  return `${API_BASE}/api/material-versions/${encodeURIComponent(versionId)}/file`;
+}
+
+export async function getPacket(appId: string): Promise<PacketItem[]> {
+  if (demo.DEMO) return demo.demoPacketFor(appId);
+  const data = await getJSON<{ items: PacketItem[] }>(
+    `/api/applications/${encodeURIComponent(appId)}/packet`,
+    { items: [] },
+  );
+  return data.items;
+}
+
+export async function replacePacket(appId: string, versionIds: string[]): Promise<PacketItem[]> {
+  if (demo.DEMO) {
+    demo.setDemoPacket(appId, versionIds);
+    return demo.demoPacketFor(appId);
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ material_version_ids: versionIds }),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { items: PacketItem[] };
+    return data.items;
+  } catch {
+    return [];
+  }
+}
+
+export async function changePacketVersion(
+  appId: string,
+  bindingId: string,
+  versionId: string,
+): Promise<boolean> {
+  if (demo.DEMO) {
+    demo.changeDemoPacketVersion(appId, bindingId, versionId);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet/bindings/${encodeURIComponent(bindingId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ material_version_id: versionId }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function removePacketBinding(appId: string, bindingId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    demo.removeDemoPacketBinding(appId, bindingId);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet/bindings/${encodeURIComponent(bindingId)}`,
+      { method: "DELETE", headers: { ...authHeaders() } },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 function demoJobById(jobId: string): HubJob | undefined {
   return demo.demoHubJobs.find((j) => j.id === jobId);
 }
@@ -1000,12 +1293,34 @@ export const CLOSE_REASON_LABELS_ZH: Record<CloseReason, string> = {
   other: "其他",
 };
 
+export interface PacketSnapshotItem {
+  binding_id: string;
+  material_id: string;
+  material_version_id: string;
+  title: string;
+  kind: string;
+  version_number: number;
+  version_label: string;
+  original_filename: string;
+  file_ref: string;
+  url: string;
+  material_purpose: string[];
+  version_purpose: string[];
+  material_notes: string;
+  version_notes: string;
+}
+
 export interface ApplicationSubmission {
   id: string;
   application_id: string;
   submitted_at: string;
   channel: string;
-  packet_snapshot?: { binding_ids: string[]; material_version_ids: string[]; note: string };
+  packet_snapshot?: {
+    binding_ids: string[];
+    material_version_ids: string[];
+    items?: PacketSnapshotItem[];
+    note: string;
+  };
   notes: string;
 }
 
@@ -1025,6 +1340,7 @@ export interface Application {
   close_reason?: CloseReason | null;
   close_note?: string;
   stale_applied?: boolean;
+  exclude_from_idle?: boolean;
   posting_id: string | null;
   resume_document_id: string | null;
   created_at: string;
@@ -1061,6 +1377,7 @@ export interface ApplicationPatch {
   location?: string;
   url?: string;
   source?: string;
+  exclude_from_idle?: boolean;
 }
 
 export type DocumentKind = "resume" | "cover_letter";
@@ -1097,7 +1414,9 @@ export function getApplications(
     } else if (query.view === "closed") {
       rows = rows.filter((a) => a.stage === "closed");
     }
-    if (query.staleApplied) rows = rows.filter((a) => a.stale_applied);
+    if (query.staleApplied) {
+      rows = rows.filter((a) => a.stale_applied && !a.exclude_from_idle && a.stage === "applied");
+    }
     return Promise.resolve(rows);
   }
   const params = new URLSearchParams();
@@ -1145,8 +1464,10 @@ export async function updateApplication(
   patch: ApplicationPatch,
 ): Promise<Application | null> {
   if (demo.DEMO) {
-    const found = demo.demoApplications.find((a) => a.id === id) ?? demo.demoApplications[0];
-    return { ...found, ...patch };
+    const found = demo.demoApplications.find((a) => a.id === id);
+    if (!found) return Promise.resolve(null);
+    Object.assign(found, patch);
+    return Promise.resolve({ ...found });
   }
   try {
     const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}`, {
@@ -1166,8 +1487,7 @@ export async function submitApplication(
   body: { channel?: string; notes?: string } = {},
 ): Promise<Application | null> {
   if (demo.DEMO) {
-    const found = demo.demoApplications.find((a) => a.id === id) ?? demo.demoApplications[0];
-    return { ...found, stage: "applied", close_reason: null, close_note: "" };
+    return Promise.resolve(demo.recordDemoSubmission(id, body.notes ?? ""));
   }
   try {
     const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/submit`, {

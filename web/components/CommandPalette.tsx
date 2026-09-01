@@ -6,6 +6,7 @@ import {
   Briefcase,
   ClipboardList,
   CornerDownLeft,
+  Files,
   Home,
   LayoutDashboard,
   LogIn,
@@ -49,8 +50,9 @@ const NAV_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   "/search": Search,
   "/chat": MessageSquare,
   "/jobs": Briefcase,
-  "/tasks": Package,
   "/applications": ClipboardList,
+  "/tasks": Package,
+  "/materials": Files,
   "/settings": Settings,
   "/login": LogIn,
 };

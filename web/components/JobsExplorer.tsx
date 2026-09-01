@@ -199,32 +199,6 @@ export function JobsExplorer({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => persistAndGo({ pool: "included" })}
-            aria-pressed={pool === "included"}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-              pool === "included"
-                ? "border-ink bg-ink text-white"
-                : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
-            )}
-          >
-            Current
-          </button>
-          <button
-            type="button"
-            onClick={() => persistAndGo({ pool: "excluded" })}
-            aria-pressed={pool === "excluded"}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-              pool === "excluded"
-                ? "border-ink bg-ink text-white"
-                : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
-            )}
-          >
-            Excluded {otherCount}
-          </button>
-          <button
-            type="button"
             onClick={() => setShowMore((v) => !v)}
             className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-muted hover:border-ink/30 hover:text-ink"
           >
@@ -235,8 +209,13 @@ export function JobsExplorer({
             onClick={() => setShowSettings((v) => !v)}
             className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-muted hover:border-ink/30 hover:text-ink"
           >
-            Settings
+            More
           </button>
+          {pool === "excluded" && (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900">
+              Viewing excluded
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-0 flex-1">
@@ -405,6 +384,21 @@ export function JobsExplorer({
                 Show sponsorship info
               </label>
             )}
+            <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
+              <button
+                type="button"
+                onClick={() => persistAndGo({ pool: pool === "excluded" ? "included" : "excluded" })}
+                className={cn(
+                  "rounded-lg border px-3 py-1.5 text-xs font-medium",
+                  pool === "excluded"
+                    ? "border-ink bg-ink text-white"
+                    : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
+                )}
+              >
+                {pool === "excluded" ? "Back to current pool" : `Excluded (${otherCount})`}
+              </button>
+              <p className="text-xs text-muted">Restore dismissed jobs here. Current pool stays the default.</p>
+            </div>
           </div>
         )}
         {showSettings && (

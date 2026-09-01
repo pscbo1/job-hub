@@ -97,21 +97,20 @@ def is_stale_applied(
     *,
     now: datetime | None = None,
     idle_days: int = STALE_APPLIED_DAYS,
+    cleanup_enabled: bool = True,
 ) -> bool:
     """Open-view smart filter: Applied with no update for ``idle_days``.
 
-    Interview / Offer never qualify. Never auto-closes.
+    Interview / Offer never qualify. Manually excluded apps never qualify.
+    When idle-cleanup is ON, every Applied row is eligible except exemptions.
+    Never auto-closes.
     """
+    if not cleanup_enabled:
+        return False
+    if app.exclude_from_idle:
+        return False
     if app.stage != ApplicationStage.APPLIED:
         return False
-    if job is not None:
-        if (job.next_step or "").strip():
-            return False
-        if any(not task.done for task in job.tasks):
-            return False
-        moment = now or datetime.now(tz=UTC)
-        if job.follow_up_at is not None and _as_utc(job.follow_up_at).date() >= moment.date():
-            return False
     moment = now or datetime.now(tz=UTC)
     cutoff = moment - timedelta(days=idle_days)
     return last_meaningful_activity(app, job) <= cutoff
@@ -124,6 +123,14 @@ def is_excluded_or_dismissed(job: Job) -> bool:
 
 
 def enrich_application_stale(repo: JobRepository, app: Application) -> Application:
+    from job_sentinel.jobs.idle import load_idle_cleanup_settings
+
+    settings = load_idle_cleanup_settings(repo)
     job = repo.get_hub_job(app.job_id) if app.job_id else None
-    app.stale_applied = is_stale_applied(app, job)
+    app.stale_applied = is_stale_applied(
+        app,
+        job,
+        idle_days=settings.idle_days,
+        cleanup_enabled=settings.enabled,
+    )
     return app

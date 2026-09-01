@@ -33,6 +33,7 @@ from pydantic import ValidationError
 from job_sentinel.core.models import (
     Application,
     ApplicationEvent,
+    ApplicationMaterialBinding,
     ApplicationStage,
     ApplicationStatus,
     ApplicationSubmission,
@@ -44,6 +45,8 @@ from job_sentinel.core.models import (
     JobPosting,
     JobRaw,
     JobTask,
+    Material,
+    MaterialVersion,
     PacketSnapshot,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
@@ -56,7 +59,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -396,6 +399,11 @@ class JobRepository:
         if extra:
             self._table(_APP_TABLE).transform(drop=extra)
             logger.debug("Dropped applications.archived_at (archive is Job-level only)")
+        app_names = {col.name for col in self._table(_APP_TABLE).columns}
+        if "exclude_from_idle" not in app_names:
+            self._db.execute(
+                "ALTER TABLE applications ADD COLUMN exclude_from_idle INTEGER NOT NULL DEFAULT 0"
+            )
         self._db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS applications_job_id_active
@@ -462,7 +470,9 @@ class JobRepository:
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL DEFAULT '',
                 kind TEXT NOT NULL DEFAULT 'other',
+                purpose TEXT NOT NULL DEFAULT '[]',
                 notes TEXT NOT NULL DEFAULT '',
+                archived_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -473,10 +483,16 @@ class JobRepository:
             CREATE TABLE IF NOT EXISTS material_versions (
                 id TEXT PRIMARY KEY,
                 material_id TEXT NOT NULL,
+                version_number INTEGER NOT NULL DEFAULT 1,
                 version_label TEXT NOT NULL DEFAULT '',
+                purpose TEXT NOT NULL DEFAULT '[]',
                 file_ref TEXT NOT NULL DEFAULT '',
+                original_filename TEXT NOT NULL DEFAULT '',
+                content_type TEXT NOT NULL DEFAULT '',
+                byte_size INTEGER NOT NULL DEFAULT 0,
                 url TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
+                archived_at TEXT,
                 created_at TEXT NOT NULL
             )
             """
@@ -486,12 +502,89 @@ class JobRepository:
             CREATE TABLE IF NOT EXISTS application_material_bindings (
                 id TEXT PRIMARY KEY,
                 application_id TEXT NOT NULL,
+                material_id TEXT NOT NULL DEFAULT '',
                 material_version_id TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )
             """
         )
+        self._ensure_materials_columns()
+        self._table(_MATERIALS_TABLE).create_index(["updated_at"], if_not_exists=True)
+        self._table(_MATERIAL_VERSIONS_TABLE).create_index(["material_id"], if_not_exists=True)
+        self._table(_APP_BINDINGS_TABLE).create_index(["application_id"], if_not_exists=True)
+        self._db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS application_material_bindings_app_material
+            ON application_material_bindings(application_id, material_id)
+            """
+        )
+
+    def _ensure_materials_columns(self) -> None:
+        material_cols = {col.name for col in self._table(_MATERIALS_TABLE).columns}
+        if "purpose" not in material_cols:
+            self._db.execute("ALTER TABLE materials ADD COLUMN purpose TEXT NOT NULL DEFAULT '[]'")
+        if "archived_at" not in material_cols:
+            self._db.execute("ALTER TABLE materials ADD COLUMN archived_at TEXT")
+        version_cols = {col.name for col in self._table(_MATERIAL_VERSIONS_TABLE).columns}
+        version_alters = {
+            "version_number": (
+                "ALTER TABLE material_versions ADD COLUMN version_number INTEGER NOT NULL DEFAULT 1"
+            ),
+            "purpose": (
+                "ALTER TABLE material_versions ADD COLUMN purpose TEXT NOT NULL DEFAULT '[]'"
+            ),
+            "original_filename": (
+                "ALTER TABLE material_versions ADD COLUMN original_filename "
+                "TEXT NOT NULL DEFAULT ''"
+            ),
+            "content_type": (
+                "ALTER TABLE material_versions ADD COLUMN content_type TEXT NOT NULL DEFAULT ''"
+            ),
+            "byte_size": (
+                "ALTER TABLE material_versions ADD COLUMN byte_size INTEGER NOT NULL DEFAULT 0"
+            ),
+            "archived_at": "ALTER TABLE material_versions ADD COLUMN archived_at TEXT",
+        }
+        for name, sql in version_alters.items():
+            if name not in version_cols:
+                self._db.execute(sql)
+        binding_cols = {col.name for col in self._table(_APP_BINDINGS_TABLE).columns}
+        if "material_id" not in binding_cols:
+            self._db.execute(
+                "ALTER TABLE application_material_bindings "
+                "ADD COLUMN material_id TEXT NOT NULL DEFAULT ''"
+            )
+        if "sort_order" not in binding_cols:
+            self._db.execute(
+                "ALTER TABLE application_material_bindings "
+                "ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+            )
+        self._backfill_binding_material_ids()
+
+    def _backfill_binding_material_ids(self) -> None:
+        """Resolve version→material_id and drop duplicate packet rows before UNIQUE."""
+        seen: dict[tuple[str, str], str] = {}
+        rows = list(self._table(_APP_BINDINGS_TABLE).rows)
+        for row in rows:
+            binding_id = str(row["id"])
+            app_id = str(row.get("application_id") or "")
+            material_id = str(row.get("material_id") or "")
+            if not material_id:
+                version = self.get_material_version(str(row.get("material_version_id") or ""))
+                if version is not None:
+                    material_id = version.material_id
+                    self._table(_APP_BINDINGS_TABLE).update(
+                        binding_id, {"material_id": material_id}
+                    )
+            if not app_id or not material_id:
+                continue
+            key = (app_id, material_id)
+            previous = seen.get(key)
+            if previous is None:
+                seen[key] = binding_id
+                continue
+            self._table(_APP_BINDINGS_TABLE).delete(binding_id)
 
     def _backfill_prd02_from_legacy_status(self) -> None:
         """Map jobs.status (saved/applied/closed/…) onto engagement + applications."""
@@ -731,6 +824,9 @@ class JobRepository:
         if from_version < 8:
             self._ensure_prd02_job_columns()
             self._backfill_reference_from_engagement()
+        if from_version < 9:
+            self._ensure_prd02_application_columns()
+            self._ensure_materials_stub_tables()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1349,7 +1445,10 @@ class JobRepository:
         if self.get_application(app_id) is None:
             return False
         fields.pop("stale_applied", None)
+        fields.pop("submissions", None)
         fields["updated_at"] = _now_iso()
+        if "exclude_from_idle" in fields:
+            fields["exclude_from_idle"] = 1 if fields["exclude_from_idle"] else 0
         if "stage" in fields and isinstance(fields["stage"], ApplicationStage):
             fields["stage"] = fields["stage"].value
         if "close_reason" in fields:
@@ -1396,6 +1495,11 @@ class JobRepository:
         )
         _ = row
         return True
+
+    def clear_application_bindings(self, app_id: str) -> None:
+        self._db.execute(
+            "DELETE FROM application_material_bindings WHERE application_id = ?", [app_id]
+        )
 
     def append_application_submission(self, submission: ApplicationSubmission) -> None:
         self._table(_SUBMISSIONS_TABLE).insert(_submission_to_row(submission))
@@ -1526,6 +1630,157 @@ class JobRepository:
         }
 
     # ─────────────────────────────────────────────────────────────────────
+    # Materials Library
+    # ─────────────────────────────────────────────────────────────────────
+
+    def create_material(self, material: Material) -> Material:
+        self._table(_MATERIALS_TABLE).insert(_material_to_row(material))
+        return material
+
+    def get_material(self, material_id: str, *, include_archived: bool = False) -> Material | None:
+        try:
+            row = self._table(_MATERIALS_TABLE).get(material_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        material = _material_from_row(dict(row))
+        if material.archived_at is not None and not include_archived:
+            return None
+        material.versions = self.list_material_versions(
+            material_id, include_archived=include_archived
+        )
+        return material
+
+    def list_materials(self, *, include_archived: bool = False, limit: int = 500) -> list[Material]:
+        where = "1=1" if include_archived else "(archived_at IS NULL OR archived_at = '')"
+        rows = self._table(_MATERIALS_TABLE).rows_where(
+            where, [], order_by="updated_at DESC", limit=limit
+        )
+        out: list[Material] = []
+        for row in rows:
+            material = _material_from_row(dict(row))
+            material.versions = self.list_material_versions(
+                material.id, include_archived=include_archived
+            )
+            out.append(material)
+        return out
+
+    def update_material(self, material_id: str, **fields: Any) -> bool:
+        if self.get_material(material_id, include_archived=True) is None:
+            return False
+        if "purpose" in fields:
+            fields["purpose"] = json.dumps(list(fields["purpose"] or []))
+        if "archived_at" in fields:
+            value = fields["archived_at"]
+            if isinstance(value, datetime):
+                fields["archived_at"] = value.isoformat()
+            elif value is None:
+                fields["archived_at"] = None
+        fields["updated_at"] = _now_iso()
+        self._table(_MATERIALS_TABLE).update(material_id, fields)
+        return True
+
+    def touch_material(self, material_id: str) -> None:
+        if self.get_material(material_id, include_archived=True) is None:
+            return
+        self._table(_MATERIALS_TABLE).update(material_id, {"updated_at": _now_iso()})
+
+    def hard_delete_material(self, material_id: str) -> None:
+        self._db.execute("DELETE FROM material_versions WHERE material_id = ?", [material_id])
+        try:
+            self._table(_MATERIALS_TABLE).delete(material_id)
+        except sqlite_utils.db.NotFoundError:
+            return
+
+    def next_version_number(self, material_id: str) -> int:
+        row = self._db.execute(
+            "SELECT COALESCE(MAX(version_number), 0) FROM material_versions WHERE material_id = ?",
+            [material_id],
+        ).fetchone()
+        return int(row[0] if row else 0) + 1
+
+    def create_material_version(self, version: MaterialVersion) -> MaterialVersion:
+        self._table(_MATERIAL_VERSIONS_TABLE).insert(_version_to_row(version))
+        return version
+
+    def get_material_version(self, version_id: str) -> MaterialVersion | None:
+        try:
+            row = self._table(_MATERIAL_VERSIONS_TABLE).get(version_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        return _version_from_row(dict(row))
+
+    def list_material_versions(
+        self, material_id: str, *, include_archived: bool = True
+    ) -> list[MaterialVersion]:
+        clauses = ["material_id = ?"]
+        params: list[str] = [material_id]
+        if not include_archived:
+            clauses.append("(archived_at IS NULL OR archived_at = '')")
+        rows = self._table(_MATERIAL_VERSIONS_TABLE).rows_where(
+            " AND ".join(clauses),
+            params,
+            order_by="version_number DESC",
+        )
+        return [_version_from_row(dict(r)) for r in rows]
+
+    def update_material_version(self, version_id: str, **fields: Any) -> bool:
+        if self.get_material_version(version_id) is None:
+            return False
+        if "purpose" in fields:
+            fields["purpose"] = json.dumps(list(fields["purpose"] or []))
+        if "archived_at" in fields:
+            value = fields["archived_at"]
+            if isinstance(value, datetime):
+                fields["archived_at"] = value.isoformat()
+            elif value is None:
+                fields["archived_at"] = None
+        self._table(_MATERIAL_VERSIONS_TABLE).update(version_id, fields)
+        return True
+
+    def create_application_binding(
+        self, binding: ApplicationMaterialBinding
+    ) -> ApplicationMaterialBinding:
+        try:
+            self._table(_APP_BINDINGS_TABLE).insert(_binding_to_row(binding))
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Each material can appear once in a packet") from exc
+        return binding
+
+    def get_application_binding(self, binding_id: str) -> ApplicationMaterialBinding | None:
+        try:
+            row = self._table(_APP_BINDINGS_TABLE).get(binding_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        return _binding_from_row(dict(row))
+
+    def list_application_bindings(self, application_id: str) -> list[ApplicationMaterialBinding]:
+        rows = self._table(_APP_BINDINGS_TABLE).rows_where(
+            "application_id = ?",
+            [application_id],
+            order_by="sort_order ASC, created_at ASC",
+        )
+        return [_binding_from_row(dict(r)) for r in rows]
+
+    def update_application_binding(self, binding_id: str, **fields: Any) -> bool:
+        if self.get_application_binding(binding_id) is None:
+            return False
+        self._table(_APP_BINDINGS_TABLE).update(binding_id, fields)
+        return True
+
+    def delete_application_binding(self, binding_id: str) -> bool:
+        if self.get_application_binding(binding_id) is None:
+            return False
+        self._table(_APP_BINDINGS_TABLE).delete(binding_id)
+        return True
+
+    def replace_application_bindings(
+        self, application_id: str, bindings: list[ApplicationMaterialBinding]
+    ) -> None:
+        self.clear_application_bindings(application_id)
+        for binding in bindings:
+            self._table(_APP_BINDINGS_TABLE).insert(_binding_to_row(binding))
+
+    # ─────────────────────────────────────────────────────────────────────
     # GeneratedDocument CRUD
     # ─────────────────────────────────────────────────────────────────────
 
@@ -1649,6 +1904,7 @@ def _app_to_row(app: Application) -> dict[str, Any]:
         "posting_id": app.posting_id,
         "resume_document_id": app.resume_document_id,
         "deleted_at": _optional_iso(app.deleted_at),
+        "exclude_from_idle": 1 if app.exclude_from_idle else 0,
         "created_at": app.created_at.isoformat(),
         "updated_at": app.updated_at.isoformat(),
         "raw_data": json.dumps(app.raw_data),
@@ -1678,6 +1934,7 @@ def _app_from_row(row: dict[str, Any]) -> Application:
         posting_id=row.get("posting_id") or None,
         resume_document_id=row.get("resume_document_id") or None,
         deleted_at=_parse_optional_dt(row.get("deleted_at")),
+        exclude_from_idle=bool(int(row.get("exclude_from_idle") or 0)),
         created_at=_parse_dt(row.get("created_at", "")),
         updated_at=_parse_dt(row.get("updated_at", "")),
         raw_data=json.loads(row.get("raw_data") or "{}"),
@@ -1990,6 +2247,103 @@ def _event_from_row(row: dict[str, Any]) -> ApplicationEvent:
         application_id=row.get("application_id", ""),
         kind=row.get("kind") or "",
         payload=parsed if isinstance(parsed, dict) else {},
+        created_at=_parse_dt(row.get("created_at", "")),
+    )
+
+
+def _purpose_from_row(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return [raw] if raw.strip() else []
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    return []
+
+
+def _material_to_row(item: Material) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "title": item.title,
+        "kind": item.kind,
+        "purpose": json.dumps(list(item.purpose)),
+        "notes": item.notes,
+        "archived_at": _optional_iso(item.archived_at),
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+    }
+
+
+def _material_from_row(row: dict[str, Any]) -> Material:
+    return Material(
+        id=row["id"],
+        title=row.get("title") or "",
+        kind=row.get("kind") or "other",
+        purpose=_purpose_from_row(row.get("purpose")),
+        notes=row.get("notes") or "",
+        archived_at=_parse_optional_dt(row.get("archived_at")),
+        created_at=_parse_dt(row.get("created_at", "")),
+        updated_at=_parse_dt(row.get("updated_at", "")),
+    )
+
+
+def _version_to_row(item: MaterialVersion) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "material_id": item.material_id,
+        "version_number": item.version_number,
+        "version_label": item.version_label,
+        "purpose": json.dumps(list(item.purpose)),
+        "file_ref": item.file_ref,
+        "original_filename": item.original_filename,
+        "content_type": item.content_type,
+        "byte_size": item.byte_size,
+        "url": item.url,
+        "notes": item.notes,
+        "archived_at": _optional_iso(item.archived_at),
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+def _version_from_row(row: dict[str, Any]) -> MaterialVersion:
+    return MaterialVersion(
+        id=row["id"],
+        material_id=row.get("material_id", ""),
+        version_number=int(row.get("version_number") or 1),
+        version_label=row.get("version_label") or "",
+        purpose=_purpose_from_row(row.get("purpose")),
+        file_ref=row.get("file_ref") or "",
+        original_filename=row.get("original_filename") or "",
+        content_type=row.get("content_type") or "",
+        byte_size=int(row.get("byte_size") or 0),
+        url=row.get("url") or "",
+        notes=row.get("notes") or "",
+        archived_at=_parse_optional_dt(row.get("archived_at")),
+        created_at=_parse_dt(row.get("created_at", "")),
+    )
+
+
+def _binding_to_row(item: ApplicationMaterialBinding) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "application_id": item.application_id,
+        "material_id": item.material_id,
+        "material_version_id": item.material_version_id,
+        "sort_order": item.sort_order,
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+def _binding_from_row(row: dict[str, Any]) -> ApplicationMaterialBinding:
+    return ApplicationMaterialBinding(
+        id=row["id"],
+        application_id=row.get("application_id", ""),
+        material_id=row.get("material_id") or "",
+        material_version_id=row.get("material_version_id", ""),
+        sort_order=int(row.get("sort_order") or 0),
         created_at=_parse_dt(row.get("created_at", "")),
     )
 

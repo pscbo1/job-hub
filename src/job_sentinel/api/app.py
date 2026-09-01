@@ -23,7 +23,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from loguru import logger
@@ -339,6 +339,7 @@ class ApplicationPatchRequest(BaseModel):
     source: str | None = Field(default=None)
     close_reason: CloseReason | None = Field(default=None)
     close_note: str | None = Field(default=None)
+    exclude_from_idle: bool | None = Field(default=None)
 
 
 class MarkSubmittedRequest(BaseModel):
@@ -361,6 +362,50 @@ class ArchiveSettingsRequest(BaseModel):
     idle_days: int = Field(default=14, ge=1, le=365)
     force: bool = False
     dry_run: bool = False
+
+
+class IdleCleanupSettingsRequest(BaseModel):
+    enabled: bool = False
+    idle_days: int = Field(default=14, ge=1, le=365)
+
+
+class MaterialWriteRequest(BaseModel):
+    title: str = ""
+    kind: str = "other"
+    purpose: list[str] = Field(default_factory=list)
+    notes: str = ""
+    url: str = ""
+    version_label: str = ""
+    version_purpose: list[str] = Field(default_factory=list)
+    version_notes: str = ""
+
+
+class MaterialPatchRequest(BaseModel):
+    title: str | None = None
+    kind: str | None = None
+    purpose: list[str] | None = None
+    notes: str | None = None
+
+
+class MaterialVersionWriteRequest(BaseModel):
+    url: str = ""
+    version_label: str = ""
+    purpose: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class MaterialVersionPatchRequest(BaseModel):
+    version_label: str | None = None
+    purpose: list[str] | None = None
+    notes: str | None = None
+
+
+class PacketReplaceRequest(BaseModel):
+    material_version_ids: list[str] = Field(default_factory=list)
+
+
+class PacketBindRequest(BaseModel):
+    material_version_id: str
 
 
 def _summary(p: Profile) -> ProfileSummary:
@@ -391,6 +436,25 @@ def _job_action(db_path: Path, job_id: str, op: Any) -> Job:
     if not isinstance(job, Job):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
+
+
+def _parse_purpose_json(raw: str) -> list[str]:
+    import json
+
+    try:
+        parsed = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return []
+
+
+def _json_object(model: BaseModel) -> dict[str, Any]:
+    dumped = model.model_dump(mode="json")
+    if not isinstance(dumped, dict):
+        raise TypeError("expected JSON object")
+    return dumped
 
 
 def _parse_since(value: str | None) -> datetime | None:
@@ -441,11 +505,13 @@ def create_app(
     profile_path: Path | None = None,
     db_path: Path | None = None,
     auth_dir: Path | None = None,
+    materials_dir: Path | None = None,
 ) -> FastAPI:
     """Build the FastAPI app. Paths are injectable so tests stay isolated."""
     profile_path = profile_path or DEFAULT_PROFILE_PATH
     db_path = db_path or (_DATA_DIR / "jobs.db")
     auth_dir = auth_dir or _DATA_DIR
+    materials_dir = materials_dir or (_DATA_DIR / "materials")
 
     app = FastAPI(
         title="Job Sentinel API",
@@ -881,6 +947,31 @@ def create_app(
         finally:
             repo.close()
 
+    @app.get("/api/idle-cleanup-settings")
+    def get_idle_cleanup_settings() -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.idle import load_idle_cleanup_settings
+
+        repo = JobRepository(db_path)
+        try:
+            return load_idle_cleanup_settings(repo).model_dump()
+        finally:
+            repo.close()
+
+    @app.put("/api/idle-cleanup-settings")
+    def put_idle_cleanup_settings(req: IdleCleanupSettingsRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.idle import IdleCleanupSettings, save_idle_cleanup_settings
+
+        repo = JobRepository(db_path)
+        try:
+            settings = save_idle_cleanup_settings(
+                repo, IdleCleanupSettings(enabled=req.enabled, idle_days=req.idle_days)
+            )
+            return settings.model_dump()
+        finally:
+            repo.close()
+
     @app.post("/api/jobs/archive-run")
     def run_archive_now(req: ArchiveSettingsRequest) -> dict[str, Any]:
         from job_sentinel.db.repository import JobRepository
@@ -1241,7 +1332,7 @@ def create_app(
                 app_id,
                 channel=req.channel,
                 notes=req.notes,
-                packet_snapshot=req.packet_snapshot,
+                materials_dir=materials_dir,
             )
         except TrackingError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -1349,6 +1440,323 @@ def create_app(
                 abandon_draft(repo, app_id)
             except TrackingError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return {"ok": True}
+
+    def _materials() -> Any:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.service import MaterialsService
+        from job_sentinel.materials.storage import MaterialStorage
+
+        repo = JobRepository(db_path)
+        return repo, MaterialsService(repo, MaterialStorage(materials_dir))
+
+    @app.get("/api/materials")
+    def list_materials(include_archived: bool = False) -> list[dict[str, Any]]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            rows = repo.list_materials(include_archived=include_archived)
+        finally:
+            repo.close()
+        return [m.model_dump(mode="json") for m in rows]
+
+    @app.post("/api/materials")
+    def create_material(req: MaterialWriteRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            material = service.create_material(
+                title=req.title,
+                kind=req.kind,
+                purpose=req.purpose,
+                notes=req.notes,
+                url=req.url,
+                version_label=req.version_label,
+                version_purpose=req.version_purpose,
+                version_notes=req.version_notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.post("/api/materials/upload")
+    async def upload_material(
+        file: UploadFile,
+        title: str = Form(""),
+        kind: str = Form("other"),
+        purpose: str = Form("[]"),
+        notes: str = Form(""),
+        version_label: str = Form(""),
+        version_purpose: str = Form("[]"),
+        version_notes: str = Form(""),
+    ) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        data = await file.read()
+        repo, service = _materials()
+        try:
+            material = service.create_material(
+                title=title,
+                kind=kind,
+                purpose=_parse_purpose_json(purpose),
+                notes=notes,
+                version_label=version_label,
+                version_purpose=_parse_purpose_json(version_purpose),
+                version_notes=version_notes,
+                filename=file.filename or "upload",
+                data=data,
+                content_type=file.content_type or "",
+            )
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.get("/api/materials/{material_id}")
+    def get_material(material_id: str, include_archived: bool = True) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            material = repo.get_material(material_id, include_archived=include_archived)
+        finally:
+            repo.close()
+        if material is None:
+            raise HTTPException(status_code=404, detail="Material not found")
+        return _json_object(material)
+
+    @app.patch("/api/materials/{material_id}")
+    def patch_material(material_id: str, req: MaterialPatchRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            material = service.update_material(
+                material_id,
+                title=req.title,
+                kind=req.kind,
+                purpose=req.purpose,
+                notes=req.notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.post("/api/materials/{material_id}/archive")
+    def archive_material(material_id: str) -> dict[str, Any]:
+        return _material_archive(material_id, archived=True)
+
+    @app.post("/api/materials/{material_id}/restore")
+    def restore_material(material_id: str) -> dict[str, Any]:
+        return _material_archive(material_id, archived=False)
+
+    def _material_archive(material_id: str, *, archived: bool) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            material = service.set_material_archived(material_id, archived)
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(material)
+
+    @app.post("/api/materials/{material_id}/versions")
+    def add_material_version(material_id: str, req: MaterialVersionWriteRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            version = service.add_version(
+                material_id,
+                url=req.url,
+                version_label=req.version_label,
+                purpose=req.purpose,
+                notes=req.notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.post("/api/materials/{material_id}/versions/upload")
+    async def upload_material_version(
+        material_id: str,
+        file: UploadFile,
+        version_label: str = Form(""),
+        purpose: str = Form("[]"),
+        notes: str = Form(""),
+    ) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        data = await file.read()
+        repo, service = _materials()
+        try:
+            version = service.add_version(
+                material_id,
+                version_label=version_label,
+                purpose=_parse_purpose_json(purpose),
+                notes=notes,
+                filename=file.filename or "upload",
+                data=data,
+                content_type=file.content_type or "",
+            )
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.patch("/api/material-versions/{version_id}")
+    def patch_material_version(version_id: str, req: MaterialVersionPatchRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            version = service.update_version(
+                version_id,
+                version_label=req.version_label,
+                purpose=req.purpose,
+                notes=req.notes,
+            )
+        except MaterialsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.post("/api/material-versions/{version_id}/archive")
+    def archive_material_version(version_id: str) -> dict[str, Any]:
+        return _version_archive(version_id, archived=True)
+
+    @app.post("/api/material-versions/{version_id}/restore")
+    def restore_material_version(version_id: str) -> dict[str, Any]:
+        return _version_archive(version_id, archived=False)
+
+    def _version_archive(version_id: str, *, archived: bool) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            version = service.set_version_archived(version_id, archived)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(version)
+
+    @app.get("/api/material-versions/{version_id}/file")
+    def material_version_file(version_id: str) -> FileResponse:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.storage import MaterialStorage, StorageError
+
+        repo = JobRepository(db_path)
+        try:
+            version = repo.get_material_version(version_id)
+        finally:
+            repo.close()
+        if version is None or not version.file_ref:
+            raise HTTPException(status_code=404, detail="File not found")
+        storage = MaterialStorage(materials_dir)
+        try:
+            path = storage.resolve(version.file_ref)
+        except StorageError as exc:
+            raise HTTPException(status_code=404, detail="File not found") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        filename = version.original_filename or path.name
+        return FileResponse(
+            path,
+            media_type=version.content_type or "application/octet-stream",
+            filename=filename,
+        )
+
+    @app.get("/api/applications/{app_id}/packet")
+    def get_packet(app_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            bindings = repo.list_application_bindings(app_id)
+            items = []
+            for binding in bindings:
+                version = repo.get_material_version(binding.material_version_id)
+                material = repo.get_material(binding.material_id, include_archived=True)
+                items.append(
+                    {
+                        "binding": binding.model_dump(mode="json"),
+                        "material": material.model_dump(mode="json") if material else None,
+                        "version": version.model_dump(mode="json") if version else None,
+                    }
+                )
+        finally:
+            repo.close()
+        return {"application_id": app_id, "items": items}
+
+    @app.put("/api/applications/{app_id}/packet")
+    def replace_packet(app_id: str, req: PacketReplaceRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            service.replace_packet(app_id, req.material_version_ids)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return get_packet(app_id)
+
+    @app.post("/api/applications/{app_id}/packet/bindings")
+    def add_packet_binding(app_id: str, req: PacketBindRequest) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            binding = service.add_binding(app_id, req.material_version_id)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(binding)
+
+    @app.patch("/api/applications/{app_id}/packet/bindings/{binding_id}")
+    def change_packet_version(
+        app_id: str, binding_id: str, req: PacketBindRequest
+    ) -> dict[str, Any]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            binding = service.change_binding_version(app_id, binding_id, req.material_version_id)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
+        finally:
+            repo.close()
+        return _json_object(binding)
+
+    @app.delete("/api/applications/{app_id}/packet/bindings/{binding_id}")
+    def delete_packet_binding(app_id: str, binding_id: str) -> dict[str, bool]:
+        from job_sentinel.materials.service import MaterialsError
+
+        repo, service = _materials()
+        try:
+            service.remove_binding(app_id, binding_id)
+        except MaterialsError as extra:
+            raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
         finally:
             repo.close()
         return {"ok": True}

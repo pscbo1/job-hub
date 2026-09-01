@@ -80,4 +80,5 @@ data/diagnostics/
 data/*.bak
 data/auth_secret
 data/browser-profile/
+data/materials/
 site/

@@ -37,6 +37,15 @@ describe("command palette product cut", () => {
     expect(hrefs).not.toContain("/profile");
     expect(hrefs).not.toContain("/resumes");
     expect(hrefs).toContain("/tasks");
+    expect(hrefs).toContain("/materials");
     expect(hrefs).not.toContain("/my-jobs");
+    const applications = COMMAND_PALETTE_NAV.findIndex((item) => item.href === "/applications");
+    const tasks = COMMAND_PALETTE_NAV.findIndex((item) => item.href === "/tasks");
+    const collect = COMMAND_PALETTE_NAV.findIndex((item) => item.href === "/search");
+    const discover = COMMAND_PALETTE_NAV.findIndex((item) => item.href === "/jobs");
+    expect(collect).toBeGreaterThan(-1);
+    expect(discover).toBeGreaterThan(collect);
+    expect(applications).toBeGreaterThan(discover);
+    expect(tasks).toBeGreaterThan(applications);
   });
 });

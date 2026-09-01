@@ -6,6 +6,7 @@ Business rules live here, not in route handlers or UI components.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from job_sentinel.core.models import (
@@ -232,12 +233,26 @@ def mark_submitted(
     channel: str = "",
     notes: str = "",
     packet_snapshot: PacketSnapshot | None = None,
+    materials_dir: Path | None = None,
 ) -> Application:
-    """Mark Submitted: stage=applied + submission event. Closed re-opens same Application."""
+    """Mark Submitted: stage=applied + submission event. Closed re-opens same Application.
+
+    Packet snapshot is always taken from current server bindings. Client snapshots
+    are not authoritative.
+    """
+    _ = packet_snapshot
     app = repo.get_application(application_id)
     if app is None or app.deleted_at is not None:
         raise TrackingError(f"Application {application_id} not found", status_code=404)
-    snapshot = packet_snapshot or PacketSnapshot()
+    from job_sentinel.materials.service import MaterialsError, MaterialsService
+    from job_sentinel.materials.storage import MaterialStorage
+
+    root = materials_dir if materials_dir is not None else Path("data") / "materials"
+    service = MaterialsService(repo, MaterialStorage(root))
+    try:
+        snapshot = service.packet_snapshot(app.id)
+    except MaterialsError as exc:
+        raise TrackingError(exc.message, status_code=exc.status_code) from exc
     submission = ApplicationSubmission(
         application_id=app.id,
         channel=channel,
@@ -284,6 +299,7 @@ def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
             "Only a never-submitted draft can be abandoned. Close a submitted application instead.",
             status_code=409,
         )
+    repo.clear_application_bindings(app.id)
     repo.soft_delete_application(app.id)
     job: Job | None = None
     if app.job_id:
