@@ -606,7 +606,12 @@ export function JobsExplorer({
                     )}
                     <JobActions
                       job={merged}
-                      onPatched={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
+                      onPatched={(next) =>
+                        setOverrides((o) => ({
+                          ...o,
+                          [j.id]: { ...next, tasks: next.tasks ?? o[j.id]?.tasks ?? merged.tasks },
+                        }))
+                      }
                     />
                   </div>
                   <div className="border-t border-line pt-3">
