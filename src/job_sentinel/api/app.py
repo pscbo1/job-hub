@@ -346,6 +346,9 @@ class MarkSubmittedRequest(BaseModel):
     channel: str = ""
     notes: str = ""
     packet_snapshot: PacketSnapshot | None = None
+    confirm_empty: bool = False
+    expected_version_ids: list[str] | None = None
+    idempotency_key: str = ""
 
 
 class CloseApplicationRequest(BaseModel):
@@ -378,6 +381,7 @@ class MaterialWriteRequest(BaseModel):
     version_label: str = ""
     version_purpose: list[str] = Field(default_factory=list)
     version_notes: str = ""
+    content: str = ""
 
 
 class MaterialPatchRequest(BaseModel):
@@ -392,6 +396,7 @@ class MaterialVersionWriteRequest(BaseModel):
     version_label: str = ""
     purpose: list[str] = Field(default_factory=list)
     notes: str = ""
+    content: str = ""
 
 
 class MaterialVersionPatchRequest(BaseModel):
@@ -406,6 +411,10 @@ class PacketReplaceRequest(BaseModel):
 
 class PacketBindRequest(BaseModel):
     material_version_id: str
+
+
+class CommNoteWriteRequest(BaseModel):
+    body: str = ""
 
 
 def _summary(p: Profile) -> ProfileSummary:
@@ -1333,9 +1342,15 @@ def create_app(
                 channel=req.channel,
                 notes=req.notes,
                 materials_dir=materials_dir,
+                confirm_empty=req.confirm_empty,
+                expected_version_ids=req.expected_version_ids,
+                idempotency_key=req.idempotency_key,
             )
-        except TrackingError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        except TrackingError as err:
+            detail: object = err.message
+            if err.code:
+                detail = {"code": err.code, "message": err.message}
+            raise HTTPException(status_code=err.status_code, detail=detail) from err
         finally:
             repo.close()
         return app.model_dump(mode="json")
@@ -1454,11 +1469,10 @@ def create_app(
 
     @app.get("/api/materials")
     def list_materials(include_archived: bool = False) -> list[dict[str, Any]]:
-        from job_sentinel.db.repository import JobRepository
-
-        repo = JobRepository(db_path)
+        repo, service = _materials()
         try:
             rows = repo.list_materials(include_archived=include_archived)
+            rows = [service.hydrate_material(m) for m in rows]
         finally:
             repo.close()
         return [m.model_dump(mode="json") for m in rows]
@@ -1478,6 +1492,7 @@ def create_app(
                 version_label=req.version_label,
                 version_purpose=req.version_purpose,
                 version_notes=req.version_notes,
+                content=req.content,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -1521,16 +1536,14 @@ def create_app(
 
     @app.get("/api/materials/{material_id}")
     def get_material(material_id: str, include_archived: bool = True) -> dict[str, Any]:
-        from job_sentinel.db.repository import JobRepository
-
-        repo = JobRepository(db_path)
+        repo, service = _materials()
         try:
             material = repo.get_material(material_id, include_archived=include_archived)
+            if material is None:
+                raise HTTPException(status_code=404, detail="Material not found")
+            return _json_object(service.hydrate_material(material))
         finally:
             repo.close()
-        if material is None:
-            raise HTTPException(status_code=404, detail="Material not found")
-        return _json_object(material)
 
     @app.patch("/api/materials/{material_id}")
     def patch_material(material_id: str, req: MaterialPatchRequest) -> dict[str, Any]:
@@ -1583,6 +1596,7 @@ def create_app(
                 version_label=req.version_label,
                 purpose=req.purpose,
                 notes=req.notes,
+                content=req.content,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -1759,6 +1773,84 @@ def create_app(
             raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
         finally:
             repo.close()
+        return {"ok": True}
+
+    @app.get("/api/applications/{app_id}/submissions/{sub_id}/items/{index}/file")
+    def submission_snapshot_file(app_id: str, sub_id: str, index: int) -> FileResponse:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.storage import MaterialStorage, StorageError
+
+        repo = JobRepository(db_path)
+        try:
+            submission = repo.get_application_submission(app_id, sub_id)
+        finally:
+            repo.close()
+        if submission is None:
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        items = submission.packet_snapshot.items
+        if index < 0 or index >= len(items):
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        item = items[index]
+        storage = MaterialStorage(materials_dir)
+        ref = item.snapshot_file_ref or item.file_ref
+        if not ref:
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        try:
+            path = storage.resolve(ref)
+        except StorageError as extra:
+            raise HTTPException(status_code=404, detail="当次材料未记录") from extra
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        filename = item.original_filename or path.name
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            filename=filename,
+        )
+
+    @app.get("/api/applications/{app_id}/comm-notes")
+    def list_comm_notes(app_id: str) -> list[dict[str, Any]]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            notes = repo.list_comm_notes(app_id)
+        finally:
+            repo.close()
+        return [n.model_dump(mode="json") for n in notes]
+
+    @app.post("/api/applications/{app_id}/comm-notes")
+    def add_comm_note(app_id: str, req: CommNoteWriteRequest) -> dict[str, Any]:
+        from job_sentinel.core.models import ApplicationCommNote
+        from job_sentinel.db.repository import JobRepository
+
+        body = req.body.strip()
+        if not body:
+            raise HTTPException(status_code=400, detail="Note text is required")
+        repo = JobRepository(db_path)
+        try:
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            note = repo.create_comm_note(ApplicationCommNote(application_id=app_id, body=body))
+        finally:
+            repo.close()
+        return _json_object(note)
+
+    @app.delete("/api/applications/{app_id}/comm-notes/{note_id}")
+    def delete_comm_note(app_id: str, note_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            ok = repo.delete_comm_note(app_id, note_id)
+        finally:
+            repo.close()
+        if not ok:
+            raise HTTPException(status_code=404, detail="Note not found")
         return {"ok": True}
 
     # ── Generated Documents ───────────────────────────────────────────────

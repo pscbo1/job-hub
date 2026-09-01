@@ -243,6 +243,8 @@ function app(
     exclude_from_idle: opts.exclude_from_idle ?? false,
     stale_applied: opts.stale_applied ?? false,
     submissions: opts.submissions ?? [],
+    current_material_count: opts.current_material_count ?? 0,
+    comm_notes: opts.comm_notes ?? [],
     created_at: now,
     updated_at: now,
     raw_data: {},
@@ -398,12 +400,28 @@ export const demoMaterials: Material[] = [
   material("mat-portfolio", "作品集", "portfolio", ["backend"], [
     version("ver-port-1", "mat-portfolio", 1, "", "", [], "https://example.com/portfolio"),
   ]),
+  material("mat-template", "Boss greeting", "message_template", ["outreach"], [
+    version("ver-tpl-1", "mat-template", 1, "", "content.md", []),
+  ]),
+  material("mat-answer", "Why this role", "application_answer", ["screening"], [
+    version("ver-ans-1", "mat-answer", 1, "", "content.md", []),
+  ]),
 ];
+
+{
+  const tpl = demoMaterials.find((m) => m.id === "mat-template");
+  if (tpl?.versions[0]) tpl.versions[0].text = "Hi, thanks for the chat about the role.";
+  const ans = demoMaterials.find((m) => m.id === "mat-answer");
+  if (ans?.versions[0]) ans.versions[0].text = "I want to work on rider-experience research.";
+}
 
 const demoPacketIds: Record<string, string[]> = {
   [demoApplications[0].id]: ["ver-en-2", "ver-port-1"],
   [demoApplications[2].id]: ["ver-en-1"],
 };
+
+demoApplications[0].current_material_count = 2;
+demoApplications[2].current_material_count = 1;
 
 {
   const first = demoApplications[0];
@@ -447,11 +465,12 @@ export function makeDemoMaterial(body: {
   notes?: string;
   url?: string;
   version_label?: string;
+  content?: string;
 }): Material {
   const id = uid();
   const v = makeDemoVersion(
     { id, versions: [] } as unknown as Material,
-    { url: body.url, version_label: body.version_label, purpose: body.purpose },
+    { url: body.url, version_label: body.version_label, purpose: body.purpose, content: body.content },
   );
   return {
     id,
@@ -468,7 +487,7 @@ export function makeDemoMaterial(body: {
 
 export function makeDemoVersion(
   materialRow: Material,
-  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string },
+  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string; content?: string },
 ): MaterialVersion {
   const n = (materialRow.versions[0]?.version_number ?? 0) + 1;
   const id = uid();
@@ -479,12 +498,13 @@ export function makeDemoVersion(
     version_number: n,
     version_label: label,
     purpose: body.purpose ?? [],
-    file_ref: body.url ? "" : `demo/${id}/file.pdf`,
-    original_filename: body.url ? "" : "file.pdf",
-    content_type: body.url ? "" : "application/pdf",
+    file_ref: body.url ? "" : `demo/${id}/${body.content ? "content.md" : "file.pdf"}`,
+    original_filename: body.url ? "" : body.content ? "content.md" : "file.pdf",
+    content_type: body.url ? "" : body.content ? "text/markdown" : "application/pdf",
     byte_size: 1,
     url: body.url ?? "",
     notes: body.notes ?? "",
+    text: body.content ?? "",
     archived_at: null,
     created_at: new Date().toISOString(),
     display_label: label ? `v${n} · ${label}` : `v${n}`,
@@ -531,19 +551,46 @@ export function removeDemoPacketBinding(appId: string, bindingId: string): void 
   demoPacketIds[appId] = items.map((item) => item.binding.material_version_id);
 }
 
+const demoCommNotes: Record<string, import("@/lib/api").ApplicationCommNote[]> = {};
+const demoIdempotency: Record<string, string> = {};
+
 export function recordDemoSubmission(appId: string, notes = ""): Application | null {
+  const result = recordDemoSubmissionResult(appId, { notes, confirm_empty: true });
+  return result.ok ? result.application : null;
+}
+
+export function recordDemoSubmissionResult(
+  appId: string,
+  body: { notes?: string; confirm_empty?: boolean; expected_version_ids?: string[] | null; idempotency_key?: string } = {},
+): { ok: true; application: Application } | { ok: false; code: string; message: string } {
   const found = demoApplications.find((a) => a.id === appId);
-  if (!found) return null;
+  if (!found) return { ok: false, code: "error", message: "Application not found" };
+  if (body.idempotency_key && demoIdempotency[body.idempotency_key]) {
+    return { ok: true, application: { ...found } };
+  }
   const packet = demoPacketFor(appId);
+  const ids = packet.map((item) => item.binding.material_version_id);
+  if (body.expected_version_ids != null) {
+    const expected = body.expected_version_ids;
+    const sameLength = expected.length === ids.length;
+    const sameMembers = sameLength && expected.every((id) => ids.includes(id));
+    if (!sameMembers) {
+      return { ok: false, code: "materials_changed", message: "Materials changed while confirming." };
+    }
+  }
+  if (packet.length === 0 && !body.confirm_empty) {
+    return { ok: false, code: "empty_materials", message: "本次未记录材料" };
+  }
   const submission = {
     id: uid(),
     application_id: appId,
     submitted_at: new Date().toISOString(),
     channel: "",
-    notes,
+    notes: body.notes ?? "",
+    idempotency_key: body.idempotency_key ?? "",
     packet_snapshot: {
       binding_ids: packet.map((item) => item.binding.id),
-      material_version_ids: packet.map((item) => item.binding.material_version_id),
+      material_version_ids: ids,
       items: packet.map((item) => ({
         binding_id: item.binding.id,
         material_id: item.material?.id ?? "",
@@ -554,6 +601,7 @@ export function recordDemoSubmission(appId: string, notes = ""): Application | n
         version_label: item.version?.version_label ?? "",
         original_filename: item.version?.original_filename ?? "",
         file_ref: item.version?.file_ref ?? "",
+        snapshot_file_ref: item.version?.file_ref ?? "",
         url: item.version?.url ?? "",
         material_purpose: item.material?.purpose ?? [],
         version_purpose: item.version?.purpose ?? [],
@@ -563,12 +611,36 @@ export function recordDemoSubmission(appId: string, notes = ""): Application | n
       note: "",
     },
   };
-  found.stage = "applied";
-  found.close_reason = null;
-  found.close_note = "";
-  found.applied_date = found.applied_date || new Date().toISOString().slice(0, 10);
+  if (found.stage === "draft" || found.stage === "closed") {
+    found.stage = "applied";
+    found.close_reason = null;
+    found.close_note = "";
+    found.applied_date = found.applied_date || new Date().toISOString().slice(0, 10);
+  }
   found.submissions = [...(found.submissions ?? []), submission];
-  return { ...found };
+  found.current_material_count = packet.length;
+  if (body.idempotency_key) demoIdempotency[body.idempotency_key] = submission.id;
+  return { ok: true, application: { ...found } };
+}
+
+export function listDemoCommNotes(appId: string): import("@/lib/api").ApplicationCommNote[] {
+  return demoCommNotes[appId] ?? [];
+}
+
+export function addDemoCommNote(appId: string, body: string): import("@/lib/api").ApplicationCommNote {
+  const note = {
+    id: uid(),
+    application_id: appId,
+    body,
+    created_at: new Date().toISOString(),
+  };
+  demoCommNotes[appId] = [note, ...(demoCommNotes[appId] ?? [])];
+  return note;
+}
+
+export function deleteDemoCommNote(appId: string, noteId: string): boolean {
+  demoCommNotes[appId] = (demoCommNotes[appId] ?? []).filter((n) => n.id !== noteId);
+  return true;
 }
 
 export const demoOps: OpsStatus = {

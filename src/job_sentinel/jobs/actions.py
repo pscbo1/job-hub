@@ -5,6 +5,7 @@ Business rules live here, not in route handlers or UI components.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,10 +43,11 @@ PIPELINE_STAGES = frozenset(
 class TrackingError(Exception):
     """User-facing tracking conflict or validation error."""
 
-    def __init__(self, message: str, *, status_code: int = 409) -> None:
+    def __init__(self, message: str, *, status_code: int = 409, code: str = "") -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.code = code
 
 
 def _now() -> datetime:
@@ -146,9 +148,19 @@ def dismiss_job(repo: JobRepository, job_id: str, *, note: str = "") -> Job:
 
 
 def restore_dismiss(repo: JobRepository, job_id: str) -> Job:
-    """Clear dismissed_at only. Do not restore Save or Reference."""
+    """Clear dismissed_at and auto-archive, then re-evaluate filters.
+
+    The job returns to Current when eligible, otherwise Excluded with a reason.
+    It must never vanish from both views. Applications and submissions stay put.
+    """
     _require_job(repo, job_id)
-    repo.update_hub_job_tracking(job_id, dismissed_at=None, dismissed_note="")
+    repo.update_hub_job_tracking(
+        job_id,
+        dismissed_at=None,
+        dismissed_note="",
+        archived_at=None,
+        archive_reason="",
+    )
     restored = undismiss_hub_job(repo, job_id)
     if restored is None:
         raise TrackingError(f"Job {job_id} not found", status_code=404)
@@ -207,8 +219,8 @@ def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Applicatio
         )
         try:
             app = repo.create_application(app)
-        except ValueError as exc:
-            raise TrackingError(str(exc), status_code=409) from exc
+        except ValueError as extra:
+            raise TrackingError(str(extra), status_code=409) from extra
     repo.append_application_event(
         ApplicationEvent(
             application_id=app.id,
@@ -234,16 +246,27 @@ def mark_submitted(
     notes: str = "",
     packet_snapshot: PacketSnapshot | None = None,
     materials_dir: Path | None = None,
+    confirm_empty: bool = False,
+    expected_version_ids: list[str] | None = None,
+    idempotency_key: str = "",
 ) -> Application:
-    """Mark Submitted: stage=applied + submission event. Closed re-opens same Application.
+    """Record a submission from current server bindings.
 
-    Packet snapshot is always taken from current server bindings. Client snapshots
-    are not authoritative.
+    Draft or Closed → Applied. Interview / Offer / Applied keep their stage.
+    Empty materials require ``confirm_empty``. Client snapshots are ignored.
     """
     _ = packet_snapshot
     app = repo.get_application(application_id)
     if app is None or app.deleted_at is not None:
         raise TrackingError(f"Application {application_id} not found", status_code=404)
+    key = idempotency_key.strip()
+    if key:
+        existing = repo.find_submission_by_idempotency(app.id, key)
+        if existing is not None:
+            stored = repo.get_application(app.id)
+            if stored is None:
+                raise TrackingError("Application missing after submit", status_code=500)
+            return stored
     from job_sentinel.materials.service import MaterialsError, MaterialsService
     from job_sentinel.materials.storage import MaterialStorage
 
@@ -251,33 +274,70 @@ def mark_submitted(
     service = MaterialsService(repo, MaterialStorage(root))
     try:
         snapshot = service.packet_snapshot(app.id)
-    except MaterialsError as exc:
-        raise TrackingError(exc.message, status_code=exc.status_code) from exc
+    except MaterialsError as extra:
+        raise TrackingError(extra.message, status_code=extra.status_code) from extra
+    current_ids = list(snapshot.material_version_ids)
+    if expected_version_ids is not None and set(expected_version_ids) != set(current_ids):
+        raise TrackingError(
+            "Materials changed while confirming. Review the current list and try again.",
+            status_code=409,
+            code="materials_changed",
+        )
+    if not snapshot.items and not confirm_empty:
+        raise TrackingError(
+            "本次未记录材料",
+            status_code=409,
+            code="empty_materials",
+        )
     submission = ApplicationSubmission(
         application_id=app.id,
         channel=channel,
         notes=notes,
-        packet_snapshot=snapshot,
+        idempotency_key=key,
     )
-    repo.append_application_submission(submission)
+    try:
+        snapshot = service.freeze_snapshot(submission.id, snapshot)
+    except MaterialsError as extra:
+        raise TrackingError(extra.message, status_code=extra.status_code) from extra
+    submission.packet_snapshot = snapshot
+    try:
+        repo.append_application_submission(submission)
+    except ValueError as extra:
+        if key:
+            stored = repo.get_application(app.id)
+            if stored is not None and any(row.idempotency_key == key for row in stored.submissions):
+                return stored
+        raise TrackingError(str(extra), status_code=409) from extra
+    except sqlite3.IntegrityError as extra:
+        if key:
+            stored = repo.get_application(app.id)
+            if stored is not None and any(row.idempotency_key == key for row in stored.submissions):
+                return stored
+        raise TrackingError(str(extra), status_code=409) from extra
     previous = app.stage
-    fields: dict[str, Any] = {
-        "stage": ApplicationStage.APPLIED,
-        "close_reason": None,
-        "close_note": "",
-    }
-    if not app.applied_date:
-        fields["applied_date"] = _now().date().isoformat()
-    repo.update_application(app.id, **fields)
+    fields: dict[str, Any] = {}
+    if previous in {ApplicationStage.DRAFT, ApplicationStage.CLOSED}:
+        fields["stage"] = ApplicationStage.APPLIED
+        fields["close_reason"] = None
+        fields["close_note"] = ""
+        if not app.applied_date:
+            fields["applied_date"] = _now().date().isoformat()
+    if fields:
+        repo.update_application(app.id, **fields)
     repo.append_application_event(
         ApplicationEvent(
             application_id=app.id,
             kind="submitted",
             payload={
                 "from_stage": previous.value,
-                "to_stage": ApplicationStage.APPLIED.value,
+                "to_stage": (
+                    ApplicationStage.APPLIED.value
+                    if previous in {ApplicationStage.DRAFT, ApplicationStage.CLOSED}
+                    else previous.value
+                ),
                 "channel": channel,
                 "reopened_from_closed": previous == ApplicationStage.CLOSED,
+                "submission_id": submission.id,
             },
         )
     )

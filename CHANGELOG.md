@@ -18,18 +18,25 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 - **Sealed Part 1 holistic model (2026-09-01).** Nav is Collect Jobs · Discover · Tasks · Applications. Reference is an independent boolean (coexists with Save and Application). Under Study / user-facing To Do removed. Application Closed is history; close_reason optional. Start Application from any normal Discover job. Tasks membership is next_step / deadline / unfinished task / draft. Auto-archive excluded jobs only (default OFF, 14 days).
 - Job checklist tasks (`job_tasks`), DDL / open-task chips, To Do-first sort, and `job-sentinel archive --force|--dry-run` (ported from unmerged Slice 1 PR #1 onto the sealed model).
+- **Materials + Application lanes (Part 2/3).** Independent Materials library (files and Knowledge templates/answers) binds versions onto applications. Mark submitted freezes a server-side snapshot. Optional lightweight communication notes.
 
 ### Changed
 
 - New jobs have no Save/Reference until the user acts. Applied / Interview / Offer / Closed live only on Application. Closed is history.
 - Application close reasons remain optional (`not_selected` / `no_response` / `withdrew` / `other`). No required Close modal. No Rejected stage.
 - Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.
+- Applications list shows current material counts. All Mark submitted entry points share one confirm panel; empty materials need explicit confirm on client and server.
 
 ### Fixed
 
 - Search result cards no longer create Application drafts; Start Application on a stable Discover Job is the only draft path.
 - Submitted Applications cannot be hard-deleted (UI or `DELETE /api/applications/{id}`). Cancel draft remains for never-submitted drafts; submitted rows use Closed / Job Archive.
 - Command Palette and More nav no longer advertise Studio, Profile, or Documents.
+- Restore after auto-archive clears archive flags and re-evaluates filters so the job returns to Current or Excluded instead of vanishing.
+- Existing materials can upload a new version without replacing old files, bindings, or snapshots.
+- Submission history downloads frozen snapshot bytes for that submission, not the latest library file.
+- Empty-material Mark submitted cannot skip confirm; retries with the same idempotency key create one record.
+- Switching Application notes or Material notes no longer cross-writes the previous record.
 
 - **Release workflow left the sdist and wheel unattached.** When a release was
   cut by hand before the tag was pushed, `gh release create` failed with

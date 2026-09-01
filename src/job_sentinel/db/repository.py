@@ -32,6 +32,7 @@ from pydantic import ValidationError
 
 from job_sentinel.core.models import (
     Application,
+    ApplicationCommNote,
     ApplicationEvent,
     ApplicationMaterialBinding,
     ApplicationStage,
@@ -59,7 +60,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -74,6 +75,7 @@ _APP_EVENTS_TABLE = "application_events"
 _MATERIALS_TABLE = "materials"
 _MATERIAL_VERSIONS_TABLE = "material_versions"
 _APP_BINDINGS_TABLE = "application_material_bindings"
+_COMM_NOTES_TABLE = "application_comm_notes"
 _DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
 _UNSET: Any = object()
 _APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
@@ -380,6 +382,7 @@ class JobRepository:
         self._ensure_application_submissions_table()
         self._ensure_application_events_table()
         self._ensure_materials_stub_tables()
+        self._ensure_part3_tables()
         self._backfill_prd02_from_legacy_status()
         self._backfill_reference_from_engagement()
 
@@ -448,6 +451,32 @@ class JobRepository:
             """
         )
         self._table(_SUBMISSIONS_TABLE).create_index(["application_id"], if_not_exists=True)
+        cols = {col.name for col in self._table(_SUBMISSIONS_TABLE).columns}
+        if "idempotency_key" not in cols:
+            self._db.execute(
+                "ALTER TABLE application_submissions ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
+            )
+        self._db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS application_submissions_idempotency
+            ON application_submissions(application_id, idempotency_key)
+            WHERE idempotency_key != ''
+            """
+        )
+
+    def _ensure_part3_tables(self) -> None:
+        self._ensure_application_submissions_table()
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS application_comm_notes (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL,
+                body TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._table(_COMM_NOTES_TABLE).create_index(["application_id"], if_not_exists=True)
 
     def _ensure_application_events_table(self) -> None:
         self._db.execute(
@@ -827,6 +856,8 @@ class JobRepository:
         if from_version < 9:
             self._ensure_prd02_application_columns()
             self._ensure_materials_stub_tables()
+        if from_version < 10:
+            self._ensure_part3_tables()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1446,6 +1477,8 @@ class JobRepository:
             return False
         fields.pop("stale_applied", None)
         fields.pop("submissions", None)
+        fields.pop("current_material_count", None)
+        fields.pop("comm_notes", None)
         fields["updated_at"] = _now_iso()
         if "exclude_from_idle" in fields:
             fields["exclude_from_idle"] = 1 if fields["exclude_from_idle"] else 0
@@ -1469,6 +1502,7 @@ class JobRepository:
         self._db.execute(
             "DELETE FROM application_material_bindings WHERE application_id = ?", [app_id]
         )
+        self._db.execute("DELETE FROM application_comm_notes WHERE application_id = ?", [app_id])
         self._table(_APP_TABLE).delete(app_id)
         return True
 
@@ -1504,6 +1538,61 @@ class JobRepository:
     def append_application_submission(self, submission: ApplicationSubmission) -> None:
         self._table(_SUBMISSIONS_TABLE).insert(_submission_to_row(submission))
 
+    def find_submission_by_idempotency(
+        self, application_id: str, key: str
+    ) -> ApplicationSubmission | None:
+        if not key:
+            return None
+        rows = list(
+            self._table(_SUBMISSIONS_TABLE).rows_where(
+                "application_id = ? AND idempotency_key = ?",
+                [application_id, key],
+                limit=1,
+            )
+        )
+        return _submission_from_row(dict(rows[0])) if rows else None
+
+    def get_application_submission(
+        self, application_id: str, submission_id: str
+    ) -> ApplicationSubmission | None:
+        try:
+            row = self._table(_SUBMISSIONS_TABLE).get(submission_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        item = _submission_from_row(dict(row))
+        if item.application_id != application_id:
+            return None
+        return item
+
+    def count_application_bindings(self, application_id: str) -> int:
+        row = self._db.execute(
+            "SELECT COUNT(*) AS c FROM application_material_bindings WHERE application_id = ?",
+            [application_id],
+        ).fetchone()
+        return int(row[0] if row else 0)
+
+    def list_comm_notes(self, application_id: str) -> list[ApplicationCommNote]:
+        rows = self._table(_COMM_NOTES_TABLE).rows_where(
+            "application_id = ?",
+            [application_id],
+            order_by="created_at DESC",
+        )
+        return [_comm_note_from_row(dict(r)) for r in rows]
+
+    def create_comm_note(self, note: ApplicationCommNote) -> ApplicationCommNote:
+        self._table(_COMM_NOTES_TABLE).insert(_comm_note_to_row(note))
+        return note
+
+    def delete_comm_note(self, application_id: str, note_id: str) -> bool:
+        try:
+            row = self._table(_COMM_NOTES_TABLE).get(note_id)
+        except sqlite_utils.db.NotFoundError:
+            return False
+        if str(row.get("application_id") or "") != application_id:
+            return False
+        self._table(_COMM_NOTES_TABLE).delete(note_id)
+        return True
+
     def list_application_submissions(self, application_id: str) -> list[ApplicationSubmission]:
         rows = self._table(_SUBMISSIONS_TABLE).rows_where(
             "application_id = ?",
@@ -1526,6 +1615,8 @@ class JobRepository:
     def _application_from_storage(self, row: dict[str, Any]) -> Application:
         app = _app_from_row(row)
         app.submissions = self.list_application_submissions(app.id)
+        app.current_material_count = self.count_application_bindings(app.id)
+        app.comm_notes = self.list_comm_notes(app.id)
         return app
 
     def application_stats(self) -> dict[str, int]:
@@ -2208,6 +2299,7 @@ def _submission_to_row(item: ApplicationSubmission) -> dict[str, Any]:
         "channel": item.channel,
         "packet_snapshot": json.dumps(item.packet_snapshot.model_dump(mode="json")),
         "notes": item.notes,
+        "idempotency_key": item.idempotency_key,
         "created_at": item.created_at.isoformat(),
     }
 
@@ -2225,6 +2317,25 @@ def _submission_from_row(row: dict[str, Any]) -> ApplicationSubmission:
         channel=row.get("channel") or "",
         packet_snapshot=snapshot,
         notes=row.get("notes") or "",
+        idempotency_key=row.get("idempotency_key") or "",
+        created_at=_parse_dt(row.get("created_at", "")),
+    )
+
+
+def _comm_note_to_row(item: ApplicationCommNote) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "application_id": item.application_id,
+        "body": item.body,
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+def _comm_note_from_row(row: dict[str, Any]) -> ApplicationCommNote:
+    return ApplicationCommNote(
+        id=row["id"],
+        application_id=row.get("application_id") or "",
+        body=row.get("body") or "",
         created_at=_parse_dt(row.get("created_at", "")),
     )
 

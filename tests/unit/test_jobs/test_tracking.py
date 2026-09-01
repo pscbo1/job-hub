@@ -141,14 +141,14 @@ def test_mark_submitted_creates_submission(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     stored = repo.upsert_job(_job())
     _job_row, app = start_application(repo, stored.id)
-    submitted = mark_submitted(repo, app.id, channel="liepin")
+    submitted = mark_submitted(repo, app.id, channel="liepin", confirm_empty=True)
     assert submitted.stage is ApplicationStage.APPLIED
     assert len(submitted.submissions) == 1
     assert submitted.submissions[0].submitted_at is not None
     closed = close_application(repo, app.id)
     assert closed.stage is ApplicationStage.CLOSED
     assert closed.close_reason is None
-    reopened = mark_submitted(repo, app.id, channel="email")
+    reopened = mark_submitted(repo, app.id, channel="email", confirm_empty=True)
     assert reopened.stage is ApplicationStage.APPLIED
     assert reopened.close_reason is None
     assert len(reopened.submissions) == 2
@@ -170,7 +170,7 @@ def test_close_does_not_require_reason(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     stored = repo.upsert_job(_job())
     _job_row, app = start_application(repo, stored.id)
-    mark_submitted(repo, app.id)
+    mark_submitted(repo, app.id, confirm_empty=True)
     closed = set_application_stage(repo, app.id, ApplicationStage.CLOSED)
     assert closed.stage is ApplicationStage.CLOSED
     assert closed.close_reason is None
@@ -217,7 +217,7 @@ def test_plain_saved_reference_not_on_tasks(tmp_path: Path) -> None:
     start_application(repo, draft_job.id)
     applied_job = repo.upsert_job(_job(source_job_id="applied"))
     _job_row, app = start_application(repo, applied_job.id)
-    mark_submitted(repo, app.id)
+    mark_submitted(repo, app.id, confirm_empty=True)
 
     members = {j.source_job_id for j in repo.list_hub_jobs(view="tasks")}
     assert "plain" not in members
@@ -289,7 +289,10 @@ def test_api_transitions_and_orphan_guard(tmp_path: Path) -> None:
     skip = client.patch(f"/api/applications/{app['id']}", json={"stage": "applied"})
     assert skip.status_code == 409
 
-    submitted = client.post(f"/api/applications/{app['id']}/submit", json={"channel": "web"})
+    submitted = client.post(
+        f"/api/applications/{app['id']}/submit",
+        json={"channel": "web", "confirm_empty": True},
+    )
     assert submitted.json()["stage"] == "applied"
     assert submitted.json()["submissions"]
 
@@ -303,7 +306,10 @@ def test_api_transitions_and_orphan_guard(tmp_path: Path) -> None:
     open_view = client.get("/api/applications", params={"view": "open"}).json()
     assert all(row["id"] != app["id"] for row in open_view)
 
-    reapply = client.post(f"/api/applications/{app['id']}/submit", json={"channel": "email"})
+    reapply = client.post(
+        f"/api/applications/{app['id']}/submit",
+        json={"channel": "email", "confirm_empty": True},
+    )
     assert reapply.json()["stage"] == "applied"
     assert len(reapply.json()["submissions"]) == 2
 

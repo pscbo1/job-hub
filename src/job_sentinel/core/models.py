@@ -415,6 +415,7 @@ class PacketSnapshotItem(BaseModel):
     version_label: str = Field(default="")
     original_filename: str = Field(default="")
     file_ref: str = Field(default="")
+    snapshot_file_ref: str = Field(default="")
     url: str = Field(default="")
     material_purpose: list[str] = Field(default_factory=list)
     version_purpose: list[str] = Field(default_factory=list)
@@ -440,6 +441,7 @@ class ApplicationSubmission(BaseModel):
     channel: str = Field(default="")
     packet_snapshot: PacketSnapshot = Field(default_factory=PacketSnapshot)
     notes: str = Field(default="")
+    idempotency_key: str = Field(default="")
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -450,6 +452,15 @@ class ApplicationEvent(BaseModel):
     application_id: str
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
+class ApplicationCommNote(BaseModel):
+    """Lightweight communication note. Not a CRM timeline and never auto-sent."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    application_id: str
+    body: str = Field(default="")
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -480,6 +491,11 @@ class Application(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     raw_data: dict[str, Any] = Field(default_factory=dict)
     submissions: list[ApplicationSubmission] = Field(default_factory=list)
+    current_material_count: int = Field(
+        default=0,
+        description="Count of current application↔material bindings (not history).",
+    )
+    comm_notes: list[ApplicationCommNote] = Field(default_factory=list)
     exclude_from_idle: bool = Field(
         default=False,
         description="Manual exemption from idle / no-update cleanup.",
@@ -545,13 +561,32 @@ class Application(BaseModel):
 
 
 class MaterialKind(StrEnum):
-    """Library kinds for file materials. Knowledge kinds are Part 3."""
+    """Library kinds. File kinds live under Materials → Files; Knowledge under Knowledge."""
 
     RESUME = "resume"
     COVER_LETTER = "cover_letter"
     PORTFOLIO = "portfolio"
     TRANSCRIPT = "transcript"
     OTHER = "other"
+    MESSAGE_TEMPLATE = "message_template"
+    APPLICATION_ANSWER = "application_answer"
+
+
+FILE_MATERIAL_KINDS = frozenset(
+    {
+        MaterialKind.RESUME.value,
+        MaterialKind.COVER_LETTER.value,
+        MaterialKind.PORTFOLIO.value,
+        MaterialKind.TRANSCRIPT.value,
+        MaterialKind.OTHER.value,
+    }
+)
+KNOWLEDGE_MATERIAL_KINDS = frozenset(
+    {
+        MaterialKind.MESSAGE_TEMPLATE.value,
+        MaterialKind.APPLICATION_ANSWER.value,
+    }
+)
 
 
 class MaterialVersion(BaseModel):
@@ -568,6 +603,10 @@ class MaterialVersion(BaseModel):
     byte_size: int = Field(default=0, ge=0)
     url: str = Field(default="")
     notes: str = Field(default="")
+    text: str = Field(
+        default="",
+        description="Loaded markdown body for Knowledge versions (content.md). Not a DB column.",
+    )
     archived_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 

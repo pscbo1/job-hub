@@ -9,17 +9,20 @@ from urllib.parse import urlparse
 
 from job_sentinel.core.models import (
     ApplicationMaterialBinding,
+    FILE_MATERIAL_KINDS,
+    KNOWLEDGE_MATERIAL_KINDS,
     Material,
     MaterialVersion,
     PacketSnapshot,
     PacketSnapshotItem,
 )
-from job_sentinel.materials.storage import MaterialStorage, StorageError
+from job_sentinel.materials.storage import MaterialStorage, StorageError, sanitize_filename
 
 if TYPE_CHECKING:
     from job_sentinel.db.repository import JobRepository
 
-ALLOWED_KINDS = frozenset({"resume", "cover_letter", "portfolio", "transcript", "other"})
+ALLOWED_KINDS = FILE_MATERIAL_KINDS | KNOWLEDGE_MATERIAL_KINDS
+KNOWLEDGE_FILENAME = "content.md"
 
 
 class MaterialsError(ValueError):
@@ -84,18 +87,23 @@ class MaterialsService:
         filename: str = "",
         data: bytes | None = None,
         content_type: str = "",
+        content: str = "",
     ) -> Material:
         name = title.strip()
-        if data:
+        kind_value = _require_kind(kind)
+        payload, payload_name, payload_type = _content_payload(
+            data=data, filename=filename, content_type=content_type, content=content
+        )
+        if payload:
             if not name:
-                name = _stem(filename) or "Untitled material"
+                name = _stem(payload_name) or "Untitled material"
         elif not name:
             name = "Untitled material"
-        if not data and not url.strip():
-            raise MaterialsError("Save needs a file or a URL")
+        if not payload and not url.strip():
+            raise MaterialsError("Save needs a file, a URL, or text")
         material = Material(
             title=name,
-            kind=_require_kind(kind),
+            kind=kind_value,
             purpose=_clean_purpose(purpose),
             notes=notes.strip(),
         )
@@ -107,9 +115,9 @@ class MaterialsService:
                 version_label=version_label,
                 purpose=version_purpose,
                 notes=version_notes,
-                filename=filename,
-                data=data,
-                content_type=content_type,
+                filename=payload_name,
+                data=payload,
+                content_type=payload_type,
             )
         except Exception:
             self.repo.hard_delete_material(material.id)
@@ -117,7 +125,7 @@ class MaterialsService:
         stored = self.repo.get_material(material.id, include_archived=True)
         if stored is None:
             raise MaterialsError("Material missing after create", status_code=500)
-        return stored
+        return self.hydrate_material(stored)
 
     def add_version(
         self,
@@ -130,13 +138,17 @@ class MaterialsService:
         filename: str = "",
         data: bytes | None = None,
         content_type: str = "",
+        content: str = "",
     ) -> MaterialVersion:
         material = self.repo.get_material(material_id, include_archived=True)
         if material is None:
             raise MaterialsError("Material not found", status_code=404)
-        if not data and not url.strip():
-            raise MaterialsError("A version needs a file or a URL")
-        if data and url.strip():
+        payload, payload_name, payload_type = _content_payload(
+            data=data, filename=filename, content_type=content_type, content=content
+        )
+        if not payload and not url.strip():
+            raise MaterialsError("A version needs a file, a URL, or text")
+        if payload and url.strip():
             url = ""
         file_ref = ""
         original = ""
@@ -148,26 +160,28 @@ class MaterialsService:
             purpose=_clean_purpose(purpose),
             notes=notes.strip(),
             url=_clean_url(url) if url else "",
-            content_type=content_type.strip(),
+            content_type=payload_type,
         )
-        if data is not None:
+        if payload is not None:
             try:
-                file_ref = self.storage.write_bytes(material.id, version.id, filename, data)
+                file_ref = self.storage.write_bytes(
+                    material.id, version.id, payload_name, payload
+                )
             except StorageError as exc:
                 raise MaterialsError(str(exc)) from exc
-            original = filename
-            size = len(data)
+            original = payload_name
+            size = len(payload)
             version.file_ref = file_ref
             version.original_filename = original
             version.byte_size = size
             if not version.content_type:
-                version.content_type = _guess_type(filename)
+                version.content_type = _guess_type(payload_name)
         self.repo.create_material_version(version)
         self.repo.touch_material(material.id)
         stored = self.repo.get_material_version(version.id)
         if stored is None:
             raise MaterialsError("Version missing after create", status_code=500)
-        return stored
+        return self.hydrate_version(stored)
 
     def update_material(
         self,
@@ -197,7 +211,7 @@ class MaterialsService:
         stored = self.repo.get_material(material_id, include_archived=True)
         if stored is None:
             raise MaterialsError("Material not found", status_code=404)
-        return stored
+        return self.hydrate_material(stored)
 
     def update_version(
         self,
@@ -222,7 +236,7 @@ class MaterialsService:
         stored = self.repo.get_material_version(version_id)
         if stored is None:
             raise MaterialsError("Version not found", status_code=404)
-        return stored
+        return self.hydrate_version(stored)
 
     def set_material_archived(self, material_id: str, archived: bool) -> Material:
         material = self.repo.get_material(material_id, include_archived=True)
@@ -233,7 +247,7 @@ class MaterialsService:
         stored = self.repo.get_material(material_id, include_archived=True)
         if stored is None:
             raise MaterialsError("Material not found", status_code=404)
-        return stored
+        return self.hydrate_material(stored)
 
     def set_version_archived(self, version_id: str, archived: bool) -> MaterialVersion:
         version = self.repo.get_material_version(version_id)
@@ -245,7 +259,42 @@ class MaterialsService:
         stored = self.repo.get_material_version(version_id)
         if stored is None:
             raise MaterialsError("Version not found", status_code=404)
-        return stored
+        return self.hydrate_version(stored)
+
+    def hydrate_version(self, version: MaterialVersion) -> MaterialVersion:
+        if not _is_text_version(version):
+            return version
+        if not version.file_ref or not self.storage.exists(version.file_ref):
+            return version
+        try:
+            version.text = self.storage.read_text(version.file_ref)
+        except StorageError:
+            version.text = ""
+        return version
+
+    def hydrate_material(self, material: Material) -> Material:
+        material.versions = [self.hydrate_version(v) for v in material.versions]
+        return material
+
+    def freeze_snapshot(self, submission_id: str, snapshot: PacketSnapshot) -> PacketSnapshot:
+        """Copy bound files into a submission-owned path so later library edits cannot change bytes."""
+        frozen: list[PacketSnapshotItem] = []
+        for index, item in enumerate(snapshot.items):
+            copy = item.model_copy()
+            if item.file_ref and self.storage.exists(item.file_ref):
+                filename = sanitize_filename(item.original_filename or item.file_ref) or "file"
+                dest = f"submissions/{submission_id}/{index}/{filename}"
+                try:
+                    copy.snapshot_file_ref = self.storage.copy_ref(item.file_ref, dest)
+                except StorageError as exc:
+                    raise MaterialsError(str(exc), status_code=409) from exc
+            frozen.append(copy)
+        return PacketSnapshot(
+            binding_ids=list(snapshot.binding_ids),
+            material_version_ids=list(snapshot.material_version_ids),
+            items=frozen,
+            note=snapshot.note,
+        )
 
     def replace_packet(
         self, application_id: str, version_ids: list[str]
@@ -341,6 +390,7 @@ class MaterialsService:
                     version_label=version.version_label,
                     original_filename=version.original_filename,
                     file_ref=version.file_ref,
+                    snapshot_file_ref="",
                     url=version.url,
                     material_purpose=list(material.purpose),
                     version_purpose=list(version.purpose),
@@ -356,6 +406,28 @@ class MaterialsService:
 
     def clear_bindings(self, application_id: str) -> None:
         self.repo.replace_application_bindings(application_id, [])
+
+
+def _content_payload(
+    *,
+    data: bytes | None,
+    filename: str,
+    content_type: str,
+    content: str,
+) -> tuple[bytes | None, str, str]:
+    if data is not None:
+        return data, filename or "upload", content_type.strip()
+    text = content.strip()
+    if text:
+        return text.encode("utf-8"), KNOWLEDGE_FILENAME, "text/markdown"
+    return None, filename, content_type.strip()
+
+
+def _is_text_version(version: MaterialVersion) -> bool:
+    name = (version.original_filename or version.file_ref).lower()
+    return version.content_type in {"text/markdown", "text/plain"} or name.endswith(
+        (".md", ".txt", KNOWLEDGE_FILENAME)
+    )
 
 
 def _stem(filename: str) -> str:

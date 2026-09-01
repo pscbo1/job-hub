@@ -207,7 +207,15 @@ Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配�
 
 ### 8.3 `/applications`
 
-仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 More 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。Application Detail：Notes（默认）与 Packet。申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
+仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 More 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。
+
+列表列：Role/Company（打开详情）、Application stage、Materials（当前 bindings 计数，`No materials` / `N materials`，点击跳到详情材料区）、Applied date、Actions（Draft 显示 Mark submitted，其余在 More）。无行内重复 Open materials 按钮。无 Ready/prep 阶段。材料变更不改变申请阶段。
+
+Application Detail 复用侧栏：顶部 role / company / stage，Notes（含可选 Communication notes：轻量 Add note，不是 Timeline/CRM），材料区分为 Current materials（add / change version / remove）与 Submissions（只读快照）。关闭侧栏保留列表筛选与滚动。同一 Material 在同一申请中只有一行；Change version 替换该行；Remove 只解绑当前申请。
+
+所有 Mark submitted 入口共用确认面板（职位、提交时间、当前材料版本）。有材料：Confirm submitted。空材料：显示「本次未记录材料」/ Record without materials。Cancel 无操作。成功后写入独立 submission；服务器以当前 bindings 冻结快照。Interview/Offer 保持阶段；Closed 需 reopen 后再 Mark submitted。重复提交用 idempotency_key，空材料需服务端 `confirm_empty`。
+
+申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
 
 ### 8.4 `/search`（Collect Jobs）
 
@@ -236,7 +244,11 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 
 ### 8.7 `/materials`
 
-Files library。Material 可有多个 Version（upload 或 URL）。Application Packet 绑定 version，UNIQUE(application_id, material_id)。Mark Submitted 从服务器 bindings 拍 submission snapshot；允许空 Packet（需确认 Record without materials）。Cancel Draft 只清 bindings，library 保留。不在此轮做 Knowledge/Answer Bank、Studio AI 或 object storage。
+两条独立车道：Materials 与 Application。Materials 不要求先有 Application。一行一个 Material：name、type、purpose、latest version、updated。Detail 展示版本列表与文件。Add material：name、type、Upload/Link；purpose / notes / version label 可选。Add version：Upload 或 Link，生成不可变版本；material 级字段不变；version purpose/notes 独立。库内新版本不会自动改已有申请 bindings；申请流里 Use version / Change version 才替换当前绑定。上传失败保留输入，重试不得因双击重复版本。
+
+Files / Knowledge 两个 tab（默认 Files）。Knowledge：Message templates 与 Application answers（Answer Bank），轻量编辑器，持久化 `content.md` 版本，Copy；answers 可选 Add to Packet；软归档。无 Send / Log-as-sent / CRM / Need Reply / 主动推送。
+
+Application 绑定 version，UNIQUE(application_id, material_id)。同一材料可绑到多个申请、使用不同版本。Draft 可以有材料，Applied 可以没有。Mark Submitted 从服务器 bindings 拍 submission snapshot（复制文件字节）；允许空材料（需确认 Record without materials / `confirm_empty`）。历史展示与下载永远读当次快照，不读最新版本。Cancel Draft 只清 bindings，library 与 submission history 保留。
 
 ---
 
@@ -287,7 +299,7 @@ V0 不展示 profile views、已读未回、浏览量、收藏量和无明确动
 
 ### 10.1 Save and Reference
 
-Save（`favorite`）与 Reference（`reference`）都是独立 boolean。二者可以共存，也可以与 Application 共存。Dismiss 时必须清掉 Save 与 Reference。Restore 只清 dismissed_at。
+Save（`favorite`）与 Reference（`reference`）都是独立 boolean。二者可以共存，也可以与 Application 共存。Dismiss 时必须清掉 Save 与 Reference。Restore 清除 `dismissed_at` **以及** auto-archive 标记（`archived_at` / `archive_reason`），然后重新跑规则筛选：符合则回 Current，否则进 Excluded 并带原因；不得从 Current 与 Excluded 同时消失。Applications 与 submission history 不变。
 
 ### 10.2 Engagement（legacy）
 
@@ -299,7 +311,7 @@ Discovery 噪音。Dismiss 写入 dismissed_at 并进入 Excluded。Current 默�
 
 ### 10.4 Application
 
-阶段仅：draft → applied → interview → offer → closed。Start Application 可从任意正常 Discover 岗位创建 draft。Draft→Applied 只能 Mark Submitted（submission + submitted_at）。Closed 立即保存，close_reason 可空，无 Close modal。放弃未投递 draft = 删除 Application。已投递不可硬删。Closed 后可 reopen。
+阶段仅：draft → applied → interview → offer → closed。Start Application 可从任意正常 Discover 岗位创建 draft。Draft→Applied 只能 Mark Submitted（服务器 snapshot + submitted_at / applied_date）。材料绑定不是阶段。Closed 立即保存，close_reason 可空，无 Close modal。放弃未投递 draft = 删除 Application。已投递不可硬删。Closed 后可 reopen（再 Mark submitted → Applied）。Interview/Offer 上再记录 submission 不改变阶段。
 
 ### 10.5 Archive
 
@@ -685,9 +697,10 @@ Constraints：
 ### 16.8 Application and related
 
 - `applications`：unique `job_id`；stage draft|applied|interview|offer|closed；close_reason 可空；无 rejected；Closed 即历史，无独立 archived 阶段。
-- `application_submissions`：每次 Mark Submitted / 重投一条。
+- `application_submissions`：每次 Mark Submitted / 重投一条。含 `idempotency_key`（空值以外部分唯一）。`packet_snapshot` 冻结当时材料名、版本、URL，以及服务器复制的文件字节（`snapshot_file_ref`）。
 - `application_events`：阶段与关闭历史。
-- `materials` / `material_versions` / `application_material_bindings`：Library + Packet。binding UNIQUE(application_id, material_id)，由 version→material_id 解析。purpose 为双层自由文本。soft archive。Cancel Draft 只清 bindings。
+- `application_comm_notes`：申请级轻量沟通备注（非 Timeline）。
+- `materials` / `material_versions` / `application_material_bindings`：Library + 当前 bindings。binding UNIQUE(application_id, material_id)，由 version→material_id 解析。purpose 为双层自由文本。soft archive。Cancel Draft 只清 bindings。kinds 含 files 与 `message_template` / `application_answer`（`content.md`）。
 - `applications.exclude_from_idle`：申请级排除 idle cleanup。`hub_idle_cleanup_settings`：enabled + idle_days（默认 14，可改）。
 
 V0 不创建或不启用：
@@ -738,9 +751,11 @@ V0 不创建或不启用：
 - `GET /api/applications?view=open|closed|all&stale_applied=`
 - `GET|PUT /api/idle-cleanup-settings` — `enabled`, `idle_days`（默认 14）
 - `PATCH /api/applications/:id` — includes `exclude_from_idle`
-- `GET|POST /api/materials`；`POST /api/materials/upload`；versions upload/URL
+- `GET|POST /api/materials`；`POST /api/materials/upload`；versions upload/URL/text（`content.md`）
 - `GET|PUT /api/applications/:id/packet`；bindings add/change/remove
-- `POST /api/applications/:id/submit` snapshots current server bindings（empty packet allowed）
+- `POST /api/applications/:id/submit` 冻结当前服务器 bindings；空材料需 `confirm_empty`；`expected_version_ids` 不一致返回 `materials_changed`；`idempotency_key` 幂等
+- `GET /api/applications/:id/submissions/:sid/items/:index/file` 下载当次快照字节，不是最新版本
+- `GET|POST|DELETE /api/applications/:id/comm-notes`
 
 ---
 

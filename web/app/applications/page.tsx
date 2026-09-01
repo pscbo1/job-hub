@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ApplicationWorkspace } from "@/components/ApplicationWorkspace";
+import { SubmitConfirm } from "@/components/SubmitConfirm";
 import { type Column, DataTable } from "@/components/DataTable";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
@@ -17,10 +18,10 @@ import {
   getApplicationStats,
   getIdleCleanupSettings,
   putIdleCleanupSettings,
-  submitApplication,
   updateApplication,
 } from "@/lib/api";
 import { applicationWasSubmitted } from "@/lib/applicationLifecycle";
+import { currentMaterialCount, formatAppliedDate, materialCountLabel } from "@/lib/materialsUi";
 import { cn, externalUrl } from "@/lib/utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
@@ -88,7 +89,8 @@ export default function ApplicationsPage() {
   const [sourceFilter, setSourceFilter] = useState("");
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"notes" | "packet">("notes");
+  const [focusMaterials, setFocusMaterials] = useState(false);
+  const [submitId, setSubmitId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [idle, setIdle] = useState<IdleCleanupSettings>({ enabled: false, idle_days: 14 });
 
@@ -118,7 +120,7 @@ export default function ApplicationsPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const jobId = params.get("job");
-    if (params.get("tab") === "packet") setTab("packet");
+    if (params.get("tab") === "packet" || params.get("tab") === "materials") setFocusMaterials(true);
     if (params.get("id")) setActiveId(params.get("id"));
     if (jobId) {
       void getApplications(undefined, 500, { view: "all" }).then((list) => {
@@ -143,9 +145,7 @@ export default function ApplicationsPage() {
   }
 
   async function onSubmit(id: string) {
-    if (!window.confirm("Mark this application as submitted?")) return;
-    const ok = await submitApplication(id);
-    if (ok) void refresh();
+    setSubmitId(id);
   }
 
   async function onCancelDraft(id: string) {
@@ -205,10 +205,10 @@ export default function ApplicationsPage() {
     },
     {
       key: "title",
-      header: "Role",
+      header: "Role / Company",
       sortValue: (a) => a.title.toLowerCase(),
       render: (a) => (
-        <button type="button" className="min-w-0 text-left" onClick={() => { setActiveId(a.id); setTab("notes"); }}>
+        <button type="button" className="min-w-0 text-left" onClick={() => { setActiveId(a.id); setFocusMaterials(false); }}>
           <div className="font-medium text-ink">{a.title || "Untitled"}</div>
           <div className="text-xs text-muted">{[a.employer, a.location].filter(Boolean).join(" · ")}</div>
         </button>
@@ -216,7 +216,7 @@ export default function ApplicationsPage() {
     },
     {
       key: "stage",
-      header: "Stage",
+      header: "Application stage",
       sortValue: (a) => ["draft", "applied", "interview", "offer", "closed"].indexOf(a.stage),
       render: (a) => (
         <PopoverSelect
@@ -234,62 +234,73 @@ export default function ApplicationsPage() {
       ),
     },
     {
-      key: "source",
-      header: "Source",
-      sortValue: (a) => a.source.toLowerCase(),
-      render: (a) =>
-        a.source ? (
-          <span className="rounded-full border border-line bg-bg px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted">
-            {a.source}
-          </span>
-        ) : (
-          <span className="text-muted">—</span>
-        ),
+      key: "materials",
+      header: "Materials",
+      sortValue: (a) => currentMaterialCount(a),
+      render: (a) => (
+        <button
+          type="button"
+          className="text-left text-sm text-ink hover:underline"
+          onClick={() => {
+            setActiveId(a.id);
+            setFocusMaterials(true);
+          }}
+        >
+          {materialCountLabel(currentMaterialCount(a))}
+        </button>
+      ),
     },
     {
       key: "applied_date",
       header: "Applied",
       sortValue: (a) => a.applied_date || "",
-      render: (a) => <span className="text-muted">{a.applied_date || "—"}</span>,
+      render: (a) => <span className="text-muted">{formatAppliedDate(a.applied_date)}</span>,
     },
     {
       key: "actions",
       header: "",
-      headerClassName: "w-48",
+      headerClassName: "w-40",
       render: (a) => (
         <div className="flex flex-wrap items-center gap-2">
-          {a.url && (
-            <a href={externalUrl(a.url)} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">
-              Open source
-            </a>
-          )}
-          <button
-            type="button"
-            onClick={() => { setActiveId(a.id); setTab("packet"); }}
-            className="text-xs font-medium text-ink hover:underline"
-          >
-            Open materials
-          </button>
           {a.stage === "draft" && (
             <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
               Mark submitted
             </button>
           )}
-          {a.stage === "closed" && (
-            <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
-              Reopen (mark submitted)
-            </button>
-          )}
-          {!applicationWasSubmitted(a) && (
-            <button
-              type="button"
-              onClick={() => onCancelDraft(a.id)}
-              className="text-muted transition-colors hover:text-red-600"
-              aria-label={`Cancel draft ${a.title}`}
-            >
-              Cancel draft
-            </button>
-          )}
+          <details className="relative text-xs text-muted">
+            <summary className="cursor-pointer hover:text-ink">More</summary>
+            <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
+              {a.url && (
+                <a
+                  href={externalUrl(a.url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block px-3 py-2 hover:bg-bg"
+                >
+                  Open source
+                </a>
+              )}
+              {a.stage !== "draft" && a.stage !== "closed" && (
+                <button type="button" onClick={() => onSubmit(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
+                  Record another submission
+                </button>
+              )}
+              {a.stage === "closed" && (
+                <button type="button" onClick={() => onSubmit(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
+                  Reopen (mark submitted)
+                </button>
+              )}
+              {!applicationWasSubmitted(a) && (
+                <button
+                  type="button"
+                  onClick={() => onCancelDraft(a.id)}
+                  className="block w-full px-3 py-2 text-left hover:bg-bg hover:text-red-600"
+                >
+                  Cancel draft
+                </button>
+              )}
+            </div>
+          </details>
         </div>
       ),
     },
@@ -471,6 +482,19 @@ export default function ApplicationsPage() {
         </p>
       )}
 
+      {submitId && apps.find((a) => a.id === submitId) && (
+        <div className="mb-4">
+          <SubmitConfirm
+            app={apps.find((a) => a.id === submitId)!}
+            onClose={() => setSubmitId(null)}
+            onDone={() => {
+              setSubmitId(null);
+              void refresh();
+            }}
+          />
+        </div>
+      )}
+
       <DataTable
         rows={visible}
         columns={columns}
@@ -510,7 +534,12 @@ export default function ApplicationsPage() {
               Close
             </button>
           </div>
-          <ApplicationWorkspace app={active} tab={tab} onTab={setTab} onChanged={() => void refresh()} />
+          <ApplicationWorkspace
+            app={active}
+            focusMaterials={focusMaterials}
+            onChanged={() => void refresh()}
+            onSubmitRequest={() => setSubmitId(active.id)}
+          />
         </div>
       )}
     </div>

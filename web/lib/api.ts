@@ -483,7 +483,14 @@ export async function putIdleCleanupSettings(
   }
 }
 
-export type MaterialKind = "resume" | "cover_letter" | "portfolio" | "transcript" | "other";
+export type MaterialKind =
+  | "resume"
+  | "cover_letter"
+  | "portfolio"
+  | "transcript"
+  | "other"
+  | "message_template"
+  | "application_answer";
 
 export interface MaterialVersion {
   id: string;
@@ -497,6 +504,7 @@ export interface MaterialVersion {
   byte_size: number;
   url: string;
   notes: string;
+  text?: string;
   archived_at?: string | null;
   created_at: string;
   display_label?: string;
@@ -537,6 +545,16 @@ export function getMaterials(includeArchived = false): Promise<Material[]> {
   return getJSON<Material[]>(`/api/materials${q}`, []);
 }
 
+export async function getMaterial(id: string, includeArchived = true): Promise<Material | null> {
+  if (demo.DEMO) {
+    return demo.demoMaterials.find((m) => m.id === id) ?? null;
+  }
+  return getJSON<Material | null>(
+    `/api/materials/${encodeURIComponent(id)}?include_archived=${includeArchived ? "true" : "false"}`,
+    null,
+  );
+}
+
 export async function createMaterial(body: {
   title: string;
   kind?: string;
@@ -546,6 +564,7 @@ export async function createMaterial(body: {
   version_label?: string;
   version_purpose?: string[];
   version_notes?: string;
+  content?: string;
 }): Promise<Material | null> {
   if (demo.DEMO) {
     const created = demo.makeDemoMaterial(body);
@@ -629,7 +648,7 @@ export async function archiveMaterial(id: string, restore = false): Promise<Mate
 
 export async function addMaterialVersion(
   materialId: string,
-  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string },
+  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string; content?: string },
 ): Promise<MaterialVersion | null> {
   if (demo.DEMO) {
     const found = demo.demoMaterials.find((m) => m.id === materialId);
@@ -678,6 +697,10 @@ export function materialVersionFileUrl(versionId: string): string {
   return `${API_BASE}/api/material-versions/${encodeURIComponent(versionId)}/file`;
 }
 
+export function submissionSnapshotFileUrl(appId: string, submissionId: string, index: number): string {
+  return `${API_BASE}/api/applications/${encodeURIComponent(appId)}/submissions/${encodeURIComponent(submissionId)}/items/${index}/file`;
+}
+
 export async function getPacket(appId: string): Promise<PacketItem[]> {
   if (demo.DEMO) return demo.demoPacketFor(appId);
   const data = await getJSON<{ items: PacketItem[] }>(
@@ -703,6 +726,27 @@ export async function replacePacket(appId: string, versionIds: string[]): Promis
     return data.items;
   } catch {
     return [];
+  }
+}
+
+export async function addPacketBinding(appId: string, versionId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    const current = demo.demoPacketFor(appId).map((item) => item.binding.material_version_id);
+    if (!current.includes(versionId)) demo.setDemoPacket(appId, [...current, versionId]);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet/bindings`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ material_version_id: versionId }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -1303,6 +1347,7 @@ export interface PacketSnapshotItem {
   version_label: string;
   original_filename: string;
   file_ref: string;
+  snapshot_file_ref?: string;
   url: string;
   material_purpose: string[];
   version_purpose: string[];
@@ -1322,6 +1367,14 @@ export interface ApplicationSubmission {
     note: string;
   };
   notes: string;
+  idempotency_key?: string;
+}
+
+export interface ApplicationCommNote {
+  id: string;
+  application_id: string;
+  body: string;
+  created_at: string;
 }
 
 export interface Application {
@@ -1347,6 +1400,8 @@ export interface Application {
   updated_at: string;
   raw_data: Record<string, unknown>;
   submissions?: ApplicationSubmission[];
+  current_material_count?: number;
+  comm_notes?: ApplicationCommNote[];
 }
 
 export interface ApplicationCreateBody {
@@ -1482,12 +1537,22 @@ export async function updateApplication(
   }
 }
 
+export type SubmitResult =
+  | { ok: true; application: Application }
+  | { ok: false; code: string; message: string };
+
 export async function submitApplication(
   id: string,
-  body: { channel?: string; notes?: string } = {},
-): Promise<Application | null> {
+  body: {
+    channel?: string;
+    notes?: string;
+    confirm_empty?: boolean;
+    expected_version_ids?: string[] | null;
+    idempotency_key?: string;
+  } = {},
+): Promise<SubmitResult> {
   if (demo.DEMO) {
-    return Promise.resolve(demo.recordDemoSubmission(id, body.notes ?? ""));
+    return demo.recordDemoSubmissionResult(id, body);
   }
   try {
     const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/submit`, {
@@ -1495,10 +1560,59 @@ export async function submitApplication(
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(body),
     });
+    if (res.ok) {
+      return { ok: true, application: (await res.json()) as Application };
+    }
+    const payload = (await res.json().catch(() => null)) as
+      | { detail?: string | { code?: string; message?: string } }
+      | null;
+    const detail = payload?.detail;
+    if (detail && typeof detail === "object") {
+      return {
+        ok: false,
+        code: detail.code || "error",
+        message: detail.message || "Could not record submission",
+      };
+    }
+    return { ok: false, code: "error", message: typeof detail === "string" ? detail : "Could not record submission" };
+  } catch {
+    return { ok: false, code: "error", message: "Could not record submission" };
+  }
+}
+
+export async function listCommNotes(appId: string): Promise<ApplicationCommNote[]> {
+  if (demo.DEMO) return demo.listDemoCommNotes(appId);
+  return getJSON<ApplicationCommNote[]>(
+    `/api/applications/${encodeURIComponent(appId)}/comm-notes`,
+    [],
+  );
+}
+
+export async function addCommNote(appId: string, body: string): Promise<ApplicationCommNote | null> {
+  if (demo.DEMO) return demo.addDemoCommNote(appId, body);
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(appId)}/comm-notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ body }),
+    });
     if (!res.ok) return null;
-    return (await res.json()) as Application;
+    return (await res.json()) as ApplicationCommNote;
   } catch {
     return null;
+  }
+}
+
+export async function deleteCommNote(appId: string, noteId: string): Promise<boolean> {
+  if (demo.DEMO) return demo.deleteDemoCommNote(appId, noteId);
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/comm-notes/${encodeURIComponent(noteId)}`,
+      { method: "DELETE", headers: { ...authHeaders() } },
+    );
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
