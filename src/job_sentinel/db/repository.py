@@ -808,9 +808,7 @@ class JobRepository:
 
     def _touch_job_activity(self, job_id: str) -> None:
         now = _now_iso()
-        self._table(_JOBS_TABLE).update(
-            job_id, {"last_activity_at": now, "updated_at": now}
-        )
+        self._table(_JOBS_TABLE).update(job_id, {"last_activity_at": now, "updated_at": now})
 
     def _attach_job_tasks(self, jobs: list[Job]) -> list[Job]:
         grouped = self.list_job_tasks_for_jobs([j.id for j in jobs])
@@ -833,7 +831,7 @@ class JobRepository:
             return grouped
         placeholders = ",".join("?" * len(ids))
         rows = self._table(_JOB_TASKS_TABLE).rows_where(
-            f"job_id IN ({placeholders})",  # noqa: S608
+            f"job_id IN ({placeholders})",
             list(ids),
             order_by="sort_order ASC, created_at ASC",
         )
@@ -1588,7 +1586,7 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "close_reason": job.close_reason.value if job.close_reason is not None else None,
         "deadline": _optional_date_str(job.deadline),
         "follow_up_at": _optional_date_str(job.follow_up_at),
-        "last_activity_at": _optional_iso(job.last_activity_at or job.discovered_at),
+        "last_activity_at": _optional_iso(job.last_activity_at),
         "match_score": job.match_score,
         "market": job.market,
         "filter_state": job.filter_state or "included",

@@ -212,7 +212,7 @@ def test_collect_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = client.get("/api/jobs").json()
     assert len(jobs) == 1
     assert jobs[0]["source"] == "liepin"
-    assert jobs[0]["status"] is None
+    assert jobs[0]["status"] == JobStatus.UNDER_STUDY.value
 
 
 def test_collect_api_uses_selected_sources_and_max_results(

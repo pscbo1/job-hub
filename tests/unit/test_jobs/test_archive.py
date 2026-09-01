@@ -75,9 +75,7 @@ def test_task_activity_prevents_idle_archive(tmp_path: Path) -> None:
         done_job = repo.get_hub_job(stored.id)
         assert done_job is not None
         assert should_auto_archive(done_job, idle_days=14, now=now) is False
-        idle = done_job.model_copy(
-            update={"last_activity_at": datetime(2026, 8, 1, tzinfo=UTC)}
-        )
+        idle = done_job.model_copy(update={"last_activity_at": datetime(2026, 8, 1, tzinfo=UTC)})
         assert should_auto_archive(idle, idle_days=14, now=now) is True
     finally:
         repo.close()

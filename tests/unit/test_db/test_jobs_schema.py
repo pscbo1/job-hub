@@ -371,9 +371,7 @@ class TestJobTasks:
         stored = repo.upsert_job(_job())
         assert stored.tasks == []
         assert stored.last_activity_at is None
-        created = repo.create_job_task(
-            stored.id, title="Finish OA", due_at=date(2026, 9, 3)
-        )
+        created = repo.create_job_task(stored.id, title="Finish OA", due_at=date(2026, 9, 3))
         assert created is not None
         assert created.title == "Finish OA"
         assert created.due_at == date(2026, 9, 3)

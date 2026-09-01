@@ -893,7 +893,6 @@ export interface ApplicationCreateBody {
   applied_date?: string;
   deadline?: string;
   notes?: string;
-  posting_id?: string;
   job_id?: string;
   resume_document_id?: string | null;
 }
