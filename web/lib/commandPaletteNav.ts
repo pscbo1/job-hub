@@ -17,16 +17,16 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
     },
     { label: "Chat", hint: "Ask Sentinel about your jobs", href: "/chat" },
     {
-      label: "Job Pool",
-      hint: "Discover collected jobs",
+      label: "Discover",
+      hint: "Job pool — save, reference, start application",
       href: "/jobs",
       keywords: "jobs discover pool",
     },
     {
-      label: "My Jobs",
-      hint: "Saved, under study, and in-progress jobs",
-      href: "/my-jobs",
-      keywords: "saved favorite todo application",
+      label: "Tasks",
+      hint: "Next steps, deadlines, drafts",
+      href: "/tasks",
+      keywords: "tasks next step deadline draft",
     },
     {
       label: "Applications",

@@ -9,8 +9,6 @@ import { PopoverSelect } from "@/components/ui/popover-select";
 import {
   type Application,
   type ApplicationStage,
-  type CloseReason,
-  CLOSE_REASON_LABELS_ZH,
   abandonApplication,
   closeApplication,
   getApplications,
@@ -43,41 +41,17 @@ function ExportMenu({ count }: { count: number }) {
         className="flex h-9 items-center gap-1.5 rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm hover:border-ink/30 transition-colors"
         aria-label="Export applications"
       >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" x2="12" y1="15" y2="3" />
-        </svg>
         Export
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-20 mt-1 w-40 rounded-lg border border-line bg-surface shadow-lg overflow-hidden">
-            <button
-              onClick={() => download("csv")}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-ink hover:bg-bg transition-colors"
-            >
-              <span className="text-xs font-mono text-muted">CSV</span>
-              Spreadsheet
+          <div className="absolute right-0 z-20 mt-1 w-40 overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
+            <button onClick={() => download("csv")} className="flex w-full px-4 py-2.5 text-sm hover:bg-bg">
+              CSV
             </button>
-            <button
-              onClick={() => download("json")}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-ink hover:bg-bg transition-colors border-t border-line"
-            >
-              <span className="text-xs font-mono text-muted">JSON</span>
-              Raw data
+            <button onClick={() => download("json")} className="flex w-full border-t border-line px-4 py-2.5 text-sm hover:bg-bg">
+              JSON
             </button>
           </div>
         </>
@@ -86,7 +60,8 @@ function ExportMenu({ count }: { count: number }) {
   );
 }
 
-const STAGES: ApplicationStage[] = ["draft", "applied", "interview", "offer", "closed"];
+const OPEN_STAGES: ApplicationStage[] = ["draft", "applied", "interview", "offer"];
+const PIPELINE_STAGES: ApplicationStage[] = ["applied", "interview", "offer", "closed"];
 
 const STAGE_STYLES: Record<ApplicationStage, string> = {
   draft: "bg-stone-200 text-stone-700",
@@ -96,49 +71,55 @@ const STAGE_STYLES: Record<ApplicationStage, string> = {
   closed: "bg-stone-100 text-stone-500",
 };
 
+type BoardView = "open" | "closed";
+
 export default function ApplicationsPage() {
   const [apps, setApps] = useState<Application[]>([]);
-  const [stats, setStats] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
   const [apiDown, setApiDown] = useState(false);
-  const [filter, setFilter] = useState<ApplicationStage | "all">("all");
+  const [board, setBoard] = useState<BoardView>("open");
+  const [staleOnly, setStaleOnly] = useState(false);
+  const [stageFilter, setStageFilter] = useState<ApplicationStage | "all">("all");
+  const [sourceFilter, setSourceFilter] = useState("");
   const [query, setQuery] = useState("");
+  const [notesId, setNotesId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
 
   async function refresh() {
-    const [list, st] = await Promise.all([getApplications(undefined, 500), getApplicationStats()]);
+    const list = await getApplications(undefined, 500, {
+      view: board,
+      staleApplied: board === "open" && staleOnly,
+    });
     setApps(list);
-    setStats(st);
+    setSelected([]);
   }
 
   useEffect(() => {
-    Promise.all([getApplications(undefined, 500), getApplicationStats()])
+    void Promise.all([getApplications(undefined, 500, { view: "open" }), getApplicationStats()])
       .then(([list, st]) => {
-        // getApplications returns [] on API-down; distinguish via stats call.
         if (list.length === 0 && Object.keys(st).length === 0) setApiDown(true);
         setApps(list);
-        setStats(st);
       })
       .finally(() => setLoaded(true));
   }, []);
 
+  useEffect(() => {
+    if (!loaded) return;
+    void refresh();
+  }, [board, staleOnly]);
+
   async function onStage(id: string, stage: ApplicationStage) {
+    const row = apps.find((a) => a.id === id);
+    if (!row) return;
+    if (row.stage === "draft" && stage !== "draft") return;
     setApps((prev) => prev.map((a) => (a.id === id ? { ...a, stage } : a)));
     const ok = await updateApplication(id, { stage });
     if (ok) void refresh();
   }
 
   async function onSubmit(id: string) {
+    if (!window.confirm("Mark this application as submitted?")) return;
     const ok = await submitApplication(id);
-    if (ok) void refresh();
-  }
-
-  async function onClose(id: string, reason: CloseReason) {
-    const ok = await closeApplication(id, reason);
-    if (ok) void refresh();
-  }
-
-  async function onReapply(id: string) {
-    const ok = await submitApplication(id, { notes: "re-apply" });
     if (ok) void refresh();
   }
 
@@ -150,42 +131,76 @@ export default function ApplicationsPage() {
     void refresh();
   }
 
+  async function onCloseSelected() {
+    const ids = selected.slice();
+    for (const id of ids) {
+      await closeApplication(id);
+    }
+    void refresh();
+  }
+
+  async function onNotes(id: string, notes: string) {
+    setApps((prev) => prev.map((a) => (a.id === id ? { ...a, notes } : a)));
+    await updateApplication(id, { notes });
+  }
+
+  const sources = useMemo(
+    () => [...new Set(apps.map((a) => a.source).filter(Boolean))].sort(),
+    [apps],
+  );
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return apps.filter((a) => {
-      if (filter !== "all" && a.stage !== filter) return false;
+      if (stageFilter !== "all" && a.stage !== stageFilter) return false;
+      if (sourceFilter && a.source !== sourceFilter) return false;
       if (!q) return true;
-      return [a.title, a.employer, a.location, a.source].join(" ").toLowerCase().includes(q);
+      return [a.title, a.employer, a.location, a.source, a.notes].join(" ").toLowerCase().includes(q);
     });
-  }, [apps, filter, query]);
+  }, [apps, stageFilter, sourceFilter, query]);
 
   const columns: Column<Application>[] = [
+    {
+      key: "select",
+      header: "",
+      headerClassName: "w-8",
+      render: (a) =>
+        staleOnly ? (
+          <input
+            type="checkbox"
+            checked={selected.includes(a.id)}
+            onChange={(e) =>
+              setSelected((ids) =>
+                e.target.checked ? [...ids, a.id] : ids.filter((id) => id !== a.id),
+              )
+            }
+            aria-label={`Select ${a.title}`}
+          />
+        ) : null,
+    },
     {
       key: "title",
       header: "Role",
       sortValue: (a) => a.title.toLowerCase(),
       render: (a) => (
-        <div className="min-w-0">
+        <button type="button" className="min-w-0 text-left" onClick={() => setNotesId(a.id)}>
           <div className="font-medium text-ink">{a.title || "Untitled"}</div>
-          <div className="text-xs text-muted">
-            {[a.employer, a.location].filter(Boolean).join(" · ")}
-          </div>
-        </div>
+          <div className="text-xs text-muted">{[a.employer, a.location].filter(Boolean).join(" · ")}</div>
+        </button>
       ),
     },
     {
       key: "stage",
       header: "Stage",
-      sortValue: (a) => STAGES.indexOf(a.stage),
+      sortValue: (a) => ["draft", "applied", "interview", "offer", "closed"].indexOf(a.stage),
       render: (a) => (
         <PopoverSelect
           value={a.stage}
           onChange={(v) => onStage(a.id, v as ApplicationStage)}
           aria-label={`Stage for ${a.title}`}
-          options={(a.stage === "draft"
-            ? (["draft"] as ApplicationStage[])
-            : STAGES.filter((s) => s !== "draft" && (s !== "closed" || a.stage === "closed"))
-          ).map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))}
+          options={(a.stage === "draft" ? (["draft"] as ApplicationStage[]) : PIPELINE_STAGES).map(
+            (s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }),
+          )}
           className={cn(
             "h-8 min-w-[110px] border-0 px-3 pr-8 text-xs font-medium capitalize shadow-none",
             STAGE_STYLES[a.stage],
@@ -213,105 +228,31 @@ export default function ApplicationsPage() {
       render: (a) => <span className="text-muted">{a.applied_date || "—"}</span>,
     },
     {
-      key: "deadline",
-      header: "Deadline",
-      sortValue: (a) => a.deadline || "9999",
-      render: (a) => {
-        if (!a.deadline) return <span className="text-muted">—</span>;
-        const t = Date.parse(a.deadline);
-        if (Number.isNaN(t)) return <span className="text-muted text-xs">{a.deadline}</span>;
-        const days = Math.ceil((t - Date.now()) / 86_400_000);
-        if (days < 0)
-          return (
-            <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-500">
-              passed
-            </span>
-          );
-        return (
-          <span
-            className={cn(
-              "rounded-full px-2 py-0.5 text-xs font-medium",
-              days === 0
-                ? "bg-red-100 text-red-700"
-                : days <= 3
-                  ? "bg-red-50 text-red-600"
-                  : days <= 7
-                    ? "bg-amber-100 text-amber-700"
-                    : "bg-stone-100 text-stone-600",
-            )}
-          >
-            {days === 0 ? "today" : `${days}d`}
-          </span>
-        );
-      },
-    },
-    {
-      key: "updated_at",
-      header: "Updated",
-      sortValue: (a) => a.updated_at,
-      render: (a) => (
-        <span className="text-xs text-muted">{a.updated_at.slice(0, 10)}</span>
-      ),
-    },
-    {
       key: "actions",
       header: "",
-      headerClassName: "w-24",
+      headerClassName: "w-40",
       render: (a) => (
         <div className="flex flex-wrap items-center gap-2">
           {a.url && (
-            <a
-              href={externalUrl(a.url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-brand hover:underline"
-              title="Open posting"
-            >
+            <a href={externalUrl(a.url)} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">
               Open source
             </a>
           )}
-          {(a.stage === "draft" || a.stage === "closed") && (
-            <button
-              type="button"
-              onClick={() => (a.stage === "closed" ? onReapply(a.id) : onSubmit(a.id))}
-              className="text-xs font-medium text-ink hover:underline"
-            >
-              {a.stage === "closed" ? "Mark submitted (re-apply)" : "Mark submitted"}
+          {a.stage === "draft" && (
+            <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
+              Mark submitted
             </button>
           )}
-          {a.stage !== "draft" && a.stage !== "closed" && (
-            <label className="text-xs text-muted">
-              Close
-              <select
-                aria-label={`Close ${a.title}`}
-                defaultValue=""
-                onChange={(e) => {
-                  const v = e.target.value as CloseReason;
-                  if (v) void onClose(a.id, v);
-                  e.currentTarget.value = "";
-                }}
-                className="ml-1 rounded border border-line bg-surface px-1 py-0.5 text-xs"
-              >
-                <option value="">reason</option>
-                {(Object.keys(CLOSE_REASON_LABELS_ZH) as CloseReason[]).map((r) => (
-                  <option key={r} value={r}>
-                    {CLOSE_REASON_LABELS_ZH[r]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {a.stage === "closed" && a.close_reason && (
-            <span className="text-xs text-muted">
-              {CLOSE_REASON_LABELS_ZH[a.close_reason] ?? a.close_reason}
-            </span>
+          {a.stage === "closed" && (
+            <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
+              Reopen (mark submitted)
+            </button>
           )}
           {!applicationWasSubmitted(a) && (
             <button
               type="button"
               onClick={() => onCancelDraft(a.id)}
               className="text-muted transition-colors hover:text-red-600"
-              title="Cancel draft"
               aria-label={`Cancel draft ${a.title}`}
             >
               Cancel draft
@@ -321,6 +262,8 @@ export default function ApplicationsPage() {
       ),
     },
   ];
+
+  const notesRow = apps.find((a) => a.id === notesId) ?? null;
 
   if (!loaded) {
     return <div className="mx-auto max-w-5xl px-5 py-20 text-center text-muted">Loading…</div>;
@@ -338,42 +281,88 @@ export default function ApplicationsPage() {
       <header className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
         <p className="mt-1 text-sm text-muted">
-          Your pipeline from draft through closed. Close reasons are 未录用 / 无回复 / 主动结束 / 其他 — never Rejected.
+          Start Application creates a draft. Mark submitted to enter Applied. Closed is history.
         </p>
       </header>
 
-      {/* Funnel */}
-      <div className="mb-6 grid grid-cols-3 gap-3 sm:grid-cols-6">
-        {STAGES.map((s) => (
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setBoard("open");
+            setStaleOnly(false);
+            setStageFilter("all");
+          }}
+          className={cn(
+            "rounded-full border px-3 py-1 text-xs font-medium",
+            board === "open" && !staleOnly ? "border-ink bg-ink text-white" : "border-line text-muted",
+          )}
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setBoard("closed");
+            setStaleOnly(false);
+            setStageFilter("all");
+          }}
+          className={cn(
+            "rounded-full border px-3 py-1 text-xs font-medium",
+            board === "closed" ? "border-ink bg-ink text-white" : "border-line text-muted",
+          )}
+        >
+          Closed
+        </button>
+        {board === "open" && (
           <button
-            key={s}
-            onClick={() => setFilter((f) => (f === s ? "all" : s))}
+            type="button"
+            onClick={() => setStaleOnly((v) => !v)}
             className={cn(
-              "rounded-xl border p-3 text-left transition-colors",
-              filter === s ? "border-ink bg-bg" : "border-line bg-surface hover:border-ink/30",
+              "rounded-full border px-3 py-1 text-xs font-medium",
+              staleOnly ? "border-amber-700 bg-amber-50 text-amber-900" : "border-line text-muted",
             )}
           >
-            <div className="text-2xl font-bold text-ink">{stats[s] ?? 0}</div>
-            <div className="text-xs capitalize text-muted">{s}</div>
+            No update 14d+
           </button>
-        ))}
+        )}
       </div>
 
-      {/* Toolbar */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search role, employer, location…"
-          className="h-10 w-full max-w-sm rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm placeholder:text-muted/70 focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+          className="h-10 w-full max-w-sm rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm"
         />
-        {filter !== "all" && (
+        <PopoverSelect
+          value={stageFilter}
+          onChange={(v) => setStageFilter(v as ApplicationStage | "all")}
+          aria-label="Stage"
+          className="w-36"
+          options={[
+            { value: "all", label: "All stages" },
+            ...(board === "closed" ? (["closed"] as ApplicationStage[]) : OPEN_STAGES).map((s) => ({
+              value: s,
+              label: s[0].toUpperCase() + s.slice(1),
+            })),
+          ]}
+        />
+        <PopoverSelect
+          value={sourceFilter}
+          onChange={setSourceFilter}
+          aria-label="Source"
+          className="w-40"
+          options={[{ value: "", label: "All sources" }, ...sources.map((s) => ({ value: s, label: s }))]}
+        />
+        {staleOnly && selected.length > 0 && (
           <button
-            onClick={() => setFilter("all")}
-            className="text-sm text-brand hover:underline"
+            type="button"
+            onClick={() => void onCloseSelected()}
+            className="h-9 rounded-lg border border-ink bg-ink px-3 text-sm text-white"
           >
-            Clear filter ({filter})
+            Close selected ({selected.length})
           </button>
         )}
         <span className="ml-auto text-sm text-muted">{visible.length} shown</span>
@@ -384,23 +373,37 @@ export default function ApplicationsPage() {
         rows={visible}
         columns={columns}
         getRowKey={(a) => a.id}
-        initialSortKey="updated_at"
-        initialSortDir="desc"
+        initialSortKey="title"
+        initialSortDir="asc"
         empty={
           <Card className="grid min-h-[12rem] place-items-center text-center">
             <div className="max-w-xs space-y-1">
-              <CardTitle>No applications yet</CardTitle>
+              <CardTitle>No applications</CardTitle>
               <CardSub>
-                Collect roles from{" "}
-                <a href="/search" className="text-brand hover:underline">
-                  Collect Jobs
-                </a>{" "}
-                and track them in Job Pool.
+                Start an application from Discover. Search results cannot create a draft on their own.
               </CardSub>
             </div>
           </Card>
         }
       />
+
+      {notesRow && (
+        <div className="mt-4 rounded-xl border border-line bg-surface p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-ink">Notes — {notesRow.title}</h2>
+            <button type="button" onClick={() => setNotesId(null)} className="text-xs text-muted">
+              Close
+            </button>
+          </div>
+          <textarea
+            defaultValue={notesRow.notes}
+            onBlur={(e) => void onNotes(notesRow.id, e.target.value)}
+            rows={6}
+            className="w-full rounded-lg border border-line bg-bg p-3 text-sm text-ink"
+            placeholder="Optional notes. Close reasons can live here."
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -32,8 +32,11 @@ describe("command palette product cut", () => {
     expect(labels).not.toContain("studio");
     expect(labels).not.toContain("profile");
     expect(labels).not.toContain("documents");
+    expect(labels).not.toContain("my jobs");
     expect(hrefs).not.toContain("/studio");
     expect(hrefs).not.toContain("/profile");
     expect(hrefs).not.toContain("/resumes");
+    expect(hrefs).toContain("/tasks");
+    expect(hrefs).not.toContain("/my-jobs");
   });
 });

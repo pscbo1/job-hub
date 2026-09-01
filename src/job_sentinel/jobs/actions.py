@@ -1,4 +1,4 @@
-"""Product transitions for Job engagement and the 1:1 Application.
+"""Product transitions for Save, Reference, Application, and Dismiss.
 
 Business rules live here, not in route handlers or UI components.
 """
@@ -15,7 +15,6 @@ from job_sentinel.core.models import (
     ApplicationSubmission,
     CloseReason,
     Job,
-    JobEngagement,
     PacketSnapshot,
 )
 from job_sentinel.ingestion.filters import (
@@ -24,18 +23,11 @@ from job_sentinel.ingestion.filters import (
     dismiss_hub_job,
     undismiss_hub_job,
 )
+from job_sentinel.jobs.membership import OPEN_APPLICATION_STAGES
 
 if TYPE_CHECKING:
     from job_sentinel.db.repository import JobRepository
 
-OPEN_APPLICATION_STAGES = frozenset(
-    {
-        ApplicationStage.DRAFT,
-        ApplicationStage.APPLIED,
-        ApplicationStage.INTERVIEW,
-        ApplicationStage.OFFER,
-    }
-)
 PIPELINE_STAGES = frozenset(
     {
         ApplicationStage.APPLIED,
@@ -43,9 +35,6 @@ PIPELINE_STAGES = frozenset(
         ApplicationStage.OFFER,
         ApplicationStage.CLOSED,
     }
-)
-MY_JOBS_ENGAGEMENT = frozenset(
-    {JobEngagement.REFERENCE, JobEngagement.UNDER_STUDY, JobEngagement.TO_DO}
 )
 
 
@@ -74,22 +63,21 @@ def _touch(repo: JobRepository, job_id: str) -> None:
 
 
 def _clear_dismiss_if_needed(repo: JobRepository, job: Job) -> Job:
-    """Save / Start Review / Reference while dismissed: clear dismiss first."""
+    """Save / Reference while dismissed: restore first."""
     if job.dismissed_at is None:
         return job
-    restored = restore_dismiss(repo, job.id)
-    return restored
+    return restore_dismiss(repo, job.id)
 
 
 def _assert_mutex(job: Job) -> None:
     if job.favorite and job.dismissed_at is not None:
         raise TrackingError("Save and Dismiss cannot both be set")
-    if job.engagement is not None and job.dismissed_at is not None:
-        raise TrackingError("Engagement and Dismiss cannot both be set")
+    if job.reference and job.dismissed_at is not None:
+        raise TrackingError("Reference and Dismiss cannot both be set")
 
 
 def save_job(repo: JobRepository, job_id: str, *, saved: bool = True) -> Job:
-    """Product Save (favorite). Independent of engagement."""
+    """Product Save (favorite). Independent of Reference."""
     job = _require_job(repo, job_id)
     if saved:
         job = _clear_dismiss_if_needed(repo, job)
@@ -106,40 +94,14 @@ def save_job(repo: JobRepository, job_id: str, *, saved: bool = True) -> Job:
     return stored
 
 
-def start_review(repo: JobRepository, job_id: str) -> Job:
-    """Set engagement=under_study. Clears dismiss first if needed."""
-    job = _clear_dismiss_if_needed(repo, _require_job(repo, job_id))
-    updated = repo.update_hub_job_tracking(job.id, engagement=JobEngagement.UNDER_STUDY)
-    if updated is None:
-        raise TrackingError(f"Job {job_id} not found", status_code=404)
-    _assert_mutex(updated)
-    _touch(repo, job_id)
-    stored = repo.get_hub_job(job_id)
-    if stored is None:
-        raise TrackingError(f"Job {job_id} not found", status_code=404)
-    return stored
-
-
-def set_reference(repo: JobRepository, job_id: str) -> Job:
-    """Mark the job as a reference sample."""
-    job = _clear_dismiss_if_needed(repo, _require_job(repo, job_id))
-    updated = repo.update_hub_job_tracking(job.id, engagement=JobEngagement.REFERENCE)
-    if updated is None:
-        raise TrackingError(f"Job {job_id} not found", status_code=404)
-    _assert_mutex(updated)
-    _touch(repo, job_id)
-    stored = repo.get_hub_job(job_id)
-    if stored is None:
-        raise TrackingError(f"Job {job_id} not found", status_code=404)
-    return stored
-
-
-def set_engagement(repo: JobRepository, job_id: str, engagement: JobEngagement | None) -> Job:
-    """Explicit engagement change (including clearing)."""
+def set_reference(repo: JobRepository, job_id: str, *, referenced: bool = True) -> Job:
+    """Independent Reference flag. Can coexist with Save and Application."""
     job = _require_job(repo, job_id)
-    if engagement is not None:
+    if referenced:
         job = _clear_dismiss_if_needed(repo, job)
-    updated = repo.update_hub_job_tracking(job.id, engagement=engagement)
+        updated = repo.update_hub_job_tracking(job.id, reference=True, engagement=None)
+    else:
+        updated = repo.update_hub_job_tracking(job_id, reference=False)
     if updated is None:
         raise TrackingError(f"Job {job_id} not found", status_code=404)
     _assert_mutex(updated)
@@ -155,7 +117,7 @@ def _active_application(repo: JobRepository, job_id: str) -> Application | None:
 
 
 def dismiss_job(repo: JobRepository, job_id: str, *, note: str = "") -> Job:
-    """Discovery noise: clear Save + engagement, set dismissed_at."""
+    """Discovery noise: clear Save + Reference, set dismissed_at."""
     _require_job(repo, job_id)
     app = _active_application(repo, job_id)
     if app is not None and app.stage in OPEN_APPLICATION_STAGES:
@@ -166,6 +128,7 @@ def dismiss_job(repo: JobRepository, job_id: str, *, note: str = "") -> Job:
     repo.update_hub_job_tracking(
         job_id,
         favorite=False,
+        reference=False,
         engagement=None,
         dismissed_at=_now(),
         dismissed_note=note,
@@ -182,7 +145,7 @@ def dismiss_job(repo: JobRepository, job_id: str, *, note: str = "") -> Job:
 
 
 def restore_dismiss(repo: JobRepository, job_id: str) -> Job:
-    """Clear dismissed_at only. Do not restore favorite or engagement."""
+    """Clear dismissed_at only. Do not restore Save or Reference."""
     _require_job(repo, job_id)
     repo.update_hub_job_tracking(job_id, dismissed_at=None, dismissed_note="")
     restored = undismiss_hub_job(repo, job_id)
@@ -202,30 +165,30 @@ def application_was_submitted(app: Application) -> bool:
     return app.stage in PIPELINE_STAGES
 
 
-def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Application]:
-    """Create the unique Application draft and set Job engagement=to_do.
+def _is_normal_discover_job(job: Job) -> bool:
+    if job.dismissed_at is not None:
+        return False
+    return (job.filter_state or "included").strip().lower() != "excluded"
 
-    New drafts require Save (favorite) or Under Study. An existing Application
-    is returned as-is so a second draft cannot be minted.
+
+def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Application]:
+    """Create the unique Application draft bound to a stable Job.
+
+    Allowed from any normal Discover job (no Save / Under Study prerequisite).
     """
-    job = _clear_dismiss_if_needed(repo, _require_job(repo, job_id))
+    job = _require_job(repo, job_id)
+    if not _is_normal_discover_job(job):
+        raise TrackingError(
+            "Restore the job before starting an application.",
+            status_code=409,
+        )
     existing = repo.get_application_for_job(job_id, include_deleted=True)
     if existing is not None and existing.deleted_at is None:
-        if job.engagement != JobEngagement.TO_DO:
-            job = repo.update_hub_job_tracking(job_id, engagement=JobEngagement.TO_DO) or job
         _touch(repo, job_id)
         stored = repo.get_hub_job(job_id)
         if stored is None:
             raise TrackingError(f"Job {job_id} not found", status_code=404)
         return stored, existing
-    if not job.favorite and job.engagement not in {
-        JobEngagement.UNDER_STUDY,
-        JobEngagement.TO_DO,
-    }:
-        raise TrackingError(
-            "Start Application requires Save or Under Study on the Job.",
-            status_code=409,
-        )
     if existing is not None and existing.deleted_at is not None:
         repo.restore_deleted_application(existing.id)
         app = repo.get_application(existing.id)
@@ -245,10 +208,6 @@ def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Applicatio
             app = repo.create_application(app)
         except ValueError as exc:
             raise TrackingError(str(exc), status_code=409) from exc
-    updated = repo.update_hub_job_tracking(job_id, engagement=JobEngagement.TO_DO)
-    if updated is None:
-        raise TrackingError(f"Job {job_id} not found", status_code=404)
-    job = updated
     repo.append_application_event(
         ApplicationEvent(
             application_id=app.id,
@@ -308,7 +267,6 @@ def mark_submitted(
         )
     )
     if app.job_id:
-        repo.update_hub_job_tracking(app.job_id, engagement=JobEngagement.TO_DO)
         _touch(repo, app.job_id)
     stored = repo.get_application(app.id)
     if stored is None:
@@ -317,7 +275,7 @@ def mark_submitted(
 
 
 def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
-    """Delete a never-submitted draft. Do not set Closed. Job to_do → under_study."""
+    """Delete a never-submitted draft. Do not set Closed."""
     app = repo.get_application(application_id)
     if app is None or app.deleted_at is not None:
         raise TrackingError(f"Application {application_id} not found", status_code=404)
@@ -329,13 +287,8 @@ def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
     repo.soft_delete_application(app.id)
     job: Job | None = None
     if app.job_id:
-        current = repo.get_hub_job(app.job_id)
-        if current is not None and current.engagement == JobEngagement.TO_DO:
-            job = repo.update_hub_job_tracking(app.job_id, engagement=JobEngagement.UNDER_STUDY)
-        else:
-            job = current
-        if app.job_id:
-            _touch(repo, app.job_id)
+        job = repo.get_hub_job(app.job_id)
+        _touch(repo, app.job_id)
     return job
 
 
@@ -343,10 +296,10 @@ def close_application(
     repo: JobRepository,
     application_id: str,
     *,
-    reason: CloseReason,
+    reason: CloseReason | None = None,
     note: str = "",
 ) -> Application:
-    """Close a submitted application. Closed is not used for never-submitted drafts."""
+    """Close a submitted application. close_reason is optional. Closed is history."""
     app = repo.get_application(application_id)
     if app is None or app.deleted_at is not None:
         raise TrackingError(f"Application {application_id} not found", status_code=404)
@@ -370,7 +323,7 @@ def close_application(
             kind="closed",
             payload={
                 "from_stage": previous.value,
-                "close_reason": reason.value,
+                "close_reason": reason.value if reason is not None else None,
                 "close_note": note,
             },
         )
@@ -391,19 +344,20 @@ def set_application_stage(
     close_reason: CloseReason | None = None,
     close_note: str = "",
 ) -> Application:
-    """Advance interview/offer, or close with a reason. Draft is not a user-set target."""
+    """Direct Applied/Interview/Offer/Closed changes. Draft→Applied needs Mark Submitted."""
     app = repo.get_application(application_id)
     if app is None or app.deleted_at is not None:
         raise TrackingError(f"Application {application_id} not found", status_code=404)
     if stage == ApplicationStage.DRAFT:
         raise TrackingError("Cannot move a submitted application back to draft", status_code=409)
     if stage == ApplicationStage.CLOSED:
-        if close_reason is None:
-            raise TrackingError("close_reason is required when closing", status_code=422)
         return close_application(repo, application_id, reason=close_reason, note=close_note)
-    if stage == ApplicationStage.APPLIED:
-        return mark_submitted(repo, application_id)
-    if not app.submissions and app.stage == ApplicationStage.DRAFT:
+    if stage == ApplicationStage.APPLIED and not application_was_submitted(app):
+        raise TrackingError(
+            "Mark Submitted before moving from draft to applied.",
+            status_code=409,
+        )
+    if not application_was_submitted(app) and app.stage == ApplicationStage.DRAFT:
         raise TrackingError("Mark Submitted before moving to interview or offer", status_code=409)
     previous = app.stage
     repo.update_application(app.id, stage=stage, close_reason=None, close_note="")
@@ -423,7 +377,7 @@ def set_application_stage(
 
 
 def archive_job(repo: JobRepository, job_id: str, *, reason: str = "") -> Job:
-    """Job-level long-term stow. Orthogonal to Application Closed."""
+    """Job-level stow used by excluded auto-archive. Orthogonal to Application Closed."""
     _require_job(repo, job_id)
     updated = repo.update_hub_job_tracking(
         job_id,
@@ -449,28 +403,6 @@ def restore_archive(repo: JobRepository, job_id: str) -> Job:
     if stored is None:
         raise TrackingError(f"Job {job_id} not found", status_code=404)
     return stored
-
-
-def my_jobs_predicate_sql() -> str:
-    """SQL fragment: favorite OR engagement in My Jobs set OR has Application."""
-    return """(
-        COALESCE(favorite, 0) = 1
-        OR engagement IN ('reference', 'under_study', 'to_do')
-        OR EXISTS (
-            SELECT 1 FROM applications a
-            WHERE a.job_id = jobs.id
-              AND (a.deleted_at IS NULL OR a.deleted_at = '')
-        )
-    )"""
-
-
-def default_stow_sql(*, include_dismissed: bool, include_archived: bool) -> str:
-    clauses: list[str] = []
-    if not include_dismissed:
-        clauses.append("(dismissed_at IS NULL OR dismissed_at = '')")
-    if not include_archived:
-        clauses.append("(archived_at IS NULL OR archived_at = '')")
-    return " AND ".join(clauses) if clauses else "1=1"
 
 
 def is_manual_dismiss(job: Job) -> bool:

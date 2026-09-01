@@ -66,8 +66,8 @@ export default async function MarketJobsPage({
         <MarketSwitch current={market} page="jobs" />
         <h1 className="text-3xl font-bold tracking-tight text-ink">Discover</h1>
         <p className="mt-1 text-sm text-muted">
-          {marketLabel(market)} jobs from collectors. Save, start review, or open the source. New
-          jobs have no engagement until you act.
+          {marketLabel(market)} jobs from collectors. Save, mark Reference, or start an application.
+          New jobs have no tracking until you act.
         </p>
       </div>
 

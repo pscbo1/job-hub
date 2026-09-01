@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { jobsPoolHref } from "@/lib/discoveredRange";
-import { myJobsPath, searchPath, type MarketId } from "@/lib/markets";
+import { searchPath, type MarketId } from "@/lib/markets";
 import { readLastMarket, readPoolPrefs } from "@/lib/marketPrefs";
 
 export function LegacyMarketRedirect({ page }: { page: "jobs" | "search" | "my-jobs" }) {
@@ -17,7 +17,7 @@ export function LegacyMarketRedirect({ page }: { page: "jobs" | "search" | "my-j
       return;
     }
     if (page === "my-jobs") {
-      router.replace(myJobsPath(market));
+      router.replace("/tasks");
       return;
     }
     const prefs = readPoolPrefs(market);
@@ -38,7 +38,7 @@ export function LegacyMarketRedirect({ page }: { page: "jobs" | "search" | "my-j
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-12 text-sm text-muted">
-      Opening {page === "search" ? "Collect Jobs" : page === "my-jobs" ? "My Jobs" : "Discover"}…
+      Opening {page === "search" ? "Collect Jobs" : page === "my-jobs" ? "Tasks" : "Discover"}…
     </div>
   );
 }

@@ -1,28 +1,16 @@
-"""Optional idle auto-archive: sets Job.archived_at. Never Closed / auto_archived.
+"""Idle auto-archive for Excluded / Dismissed jobs only.
 
-Settings live in ``sentinel_meta`` (``hub_archive_settings``). Default is **off**.
-When enabled, an idle job is stowed with ``archived_at``; engagement and
-Application stage are left unchanged.
+Settings live in ``sentinel_meta`` (``hub_archive_settings``). Default is **off**,
+idle_days=14. When enabled, only dismissed or filter-excluded jobs are stowed
+with ``archived_at``. Saved, Reference, active Applications, and plain included
+jobs are never auto-archived.
 
-Skip when any of these hold:
+Archived excluded jobs remain listed under the Discover Excluded view.
 
-* Already archived or dismissed.
-* Engagement is Reference (explicit keep-aside).
-* Application is in Applied / Interview / Offer (in-progress pipeline).
-* ``follow_up_at`` is on or after today.
-* ``next_step`` is non-blank after strip.
-* The job has incomplete checklist tasks. Task CRUD also bumps
-  ``last_activity_at``.
+How to run:
 
-Idle clock uses ``last_activity_at`` (user PATCH and task CRUD). Collector
-upserts leave it NULL. Missing ``last_activity_at`` falls back to
-``discovered_at``.
-
-How to run (no OS/email push and no boot-time scheduler hook):
-
-* ``POST /api/jobs/archive-run`` — UI / API; pass ``force`` to run while off.
-* ``job-sentinel archive`` — for cron; no-ops unless settings.enabled, or pass
-  ``--force``.
+* Discover Settings, ``PUT /api/archive-settings``, ``POST /api/jobs/archive-run``.
+* ``job-sentinel archive`` — for cron; no-ops unless settings.enabled, or ``--force``.
 * ``job-sentinel archive --dry-run`` — report without writing.
 """
 
@@ -34,21 +22,14 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from job_sentinel.core.models import ApplicationStage, JobEngagement
 from job_sentinel.jobs.actions import archive_job
+from job_sentinel.jobs.membership import OPEN_APPLICATION_STAGES, is_excluded_or_dismissed
 
 if TYPE_CHECKING:
     from job_sentinel.core.models import Job
     from job_sentinel.db.repository import JobRepository
 
 _META_KEY = "hub_archive_settings"
-_IN_PROGRESS_APP = frozenset(
-    {
-        ApplicationStage.APPLIED,
-        ApplicationStage.INTERVIEW,
-        ApplicationStage.OFFER,
-    }
-)
 
 
 class ArchiveSettings(BaseModel):
@@ -84,7 +65,7 @@ def save_archive_settings(repo: JobRepository, settings: ArchiveSettings) -> Arc
 
 
 def _idle_since(job: Job) -> datetime:
-    return job.last_activity_at or job.discovered_at
+    return job.dismissed_at or job.last_activity_at or job.discovered_at
 
 
 def should_auto_archive(
@@ -94,23 +75,18 @@ def should_auto_archive(
     now: datetime | None = None,
     in_progress_application: bool = False,
 ) -> bool:
+    """True only for idle Excluded/Dismissed jobs that are not Saved/Reference/active."""
     if job.archived_at is not None:
         return False
-    if job.dismissed_at is not None:
+    if not is_excluded_or_dismissed(job):
         return False
-    if job.engagement == JobEngagement.REFERENCE:
+    if job.favorite:
+        return False
+    if job.reference:
         return False
     if in_progress_application:
         return False
-    if (job.next_step or "").strip():
-        return False
-    if any(not task.done for task in job.tasks):
-        return False
     moment = now or datetime.now(tz=UTC)
-    if job.follow_up_at is not None:
-        follow = job.follow_up_at.date()
-        if follow >= moment.date():
-            return False
     cutoff = moment - timedelta(days=settings.idle_days)
     activity = _idle_since(job)
     if activity.tzinfo is None:
@@ -135,12 +111,12 @@ def run_idle_archive(
     for job in repo.list_all_hub_jobs():
         result.scanned += 1
         app = repo.get_application_for_job(job.id)
-        in_progress = app is not None and app.stage in _IN_PROGRESS_APP
+        in_progress = app is not None and app.stage in OPEN_APPLICATION_STAGES
         if not should_auto_archive(job, rules, now=moment, in_progress_application=in_progress):
             result.skipped += 1
             continue
         result.job_ids.append(job.id)
         if not dry_run:
-            archive_job(repo, job.id, reason="idle")
+            archive_job(repo, job.id, reason="idle_excluded")
         result.archived += 1
     return result

@@ -114,11 +114,12 @@ class StatusRequest(BaseModel):
 
 
 class HubJobStatusRequest(BaseModel):
-    """Job Pool tracking patch. ``status`` is accepted as an engagement alias."""
+    """Job Pool tracking patch. ``status`` is accepted as a legacy engagement alias."""
 
     engagement: JobEngagement | None = None
     status: JobEngagement | None = None
     favorite: bool | None = None
+    reference: bool | None = None
     comment: str | None = None
     next_step: str | None = None
     deadline: datetime | None = None
@@ -347,7 +348,7 @@ class MarkSubmittedRequest(BaseModel):
 
 
 class CloseApplicationRequest(BaseModel):
-    close_reason: CloseReason
+    close_reason: CloseReason | None = None
     close_note: str = ""
 
 
@@ -593,6 +594,8 @@ def create_app(
         view: str = "discover",
         include_dismissed: bool = False,
         include_archived: bool = False,
+        q: str = "",
+        has_draft: bool | None = None,
     ) -> list[Job]:
         """Job Pool: canonical ``jobs`` rows (not legacy ``job_postings``)."""
         from job_sentinel.db.repository import JobRepository
@@ -611,8 +614,10 @@ def create_app(
                 status_code=422, detail="filter_state must be included, excluded, or all"
             )
         view_key = view.strip().lower()
-        if view_key not in {"discover", "my_jobs"}:
-            raise HTTPException(status_code=422, detail="view must be discover or my_jobs")
+        if view_key == "my_jobs":
+            view_key = "tasks"
+        if view_key not in {"discover", "tasks"}:
+            raise HTTPException(status_code=422, detail="view must be discover or tasks")
         since_dt = _parse_since(since)
         mid = _parse_market_param(market)
         source_filter = _parse_source_list(sources)
@@ -647,6 +652,8 @@ def create_app(
                 view=view_key,
                 include_dismissed=include_dismissed,
                 include_archived=include_archived,
+                q=q,
+                has_draft=has_draft,
             )
         finally:
             repo.close()
@@ -656,9 +663,9 @@ def create_app(
 
     @app.patch("/api/jobs/{job_id}", response_model=Job)
     def patch_hub_job(job_id: str, req: HubJobStatusRequest) -> Job:
-        """Update Job tracking: Save, engagement, comment, next step, deadline."""
+        """Update Job tracking: Save, Reference, comment, next step, deadline."""
         from job_sentinel.db.repository import JobRepository
-        from job_sentinel.jobs.actions import TrackingError, save_job, set_engagement
+        from job_sentinel.jobs.actions import TrackingError, save_job, set_reference
 
         repo = JobRepository(db_path)
         try:
@@ -669,15 +676,22 @@ def create_app(
             try:
                 if req.favorite is not None:
                     job = save_job(repo, job_id, saved=req.favorite)
+                if req.reference is not None:
+                    job = set_reference(repo, job_id, referenced=req.reference)
                 fields_set = req.model_fields_set
                 if "engagement" in fields_set or (
                     "status" in fields_set and req.favorite is None and req.engagement is None
                 ):
-                    # Explicit null clears engagement; status alias only when engagement omitted.
-                    if "engagement" in fields_set:
-                        job = set_engagement(repo, job_id, req.engagement)
-                    elif "status" in fields_set:
-                        job = set_engagement(repo, job_id, req.status)
+                    requested = req.engagement if "engagement" in fields_set else req.status
+                    if requested == JobEngagement.REFERENCE:
+                        job = set_reference(repo, job_id, referenced=True)
+                    elif requested in {JobEngagement.UNDER_STUDY, JobEngagement.TO_DO}:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="under_study and to_do are not writable.",
+                        )
+                    elif requested is None:
+                        job = repo.update_hub_job_tracking(job_id, engagement=None) or job
                 tracking: dict[str, Any] = {}
                 if req.comment is not None:
                     tracking["comment"] = req.comment
@@ -709,15 +723,27 @@ def create_app(
 
     @app.post("/api/jobs/{job_id}/start-review", response_model=Job)
     def start_review_hub_job(job_id: str) -> Job:
-        from job_sentinel.jobs.actions import start_review
-
-        return _job_action(db_path, job_id, lambda repo: start_review(repo, job_id))
+        del job_id
+        raise HTTPException(
+            status_code=410,
+            detail="Start Review / Under Study is not part of the sealed workflow.",
+        )
 
     @app.post("/api/jobs/{job_id}/reference", response_model=Job)
     def reference_hub_job(job_id: str) -> Job:
         from job_sentinel.jobs.actions import set_reference
 
-        return _job_action(db_path, job_id, lambda repo: set_reference(repo, job_id))
+        return _job_action(
+            db_path, job_id, lambda repo: set_reference(repo, job_id, referenced=True)
+        )
+
+    @app.post("/api/jobs/{job_id}/unreference", response_model=Job)
+    def unreference_hub_job(job_id: str) -> Job:
+        from job_sentinel.jobs.actions import set_reference
+
+        return _job_action(
+            db_path, job_id, lambda repo: set_reference(repo, job_id, referenced=False)
+        )
 
     @app.get("/api/jobs/{job_id}/tasks", response_model=list[JobTask])
     def list_hub_job_tasks(job_id: str) -> list[JobTask]:
@@ -1081,19 +1107,32 @@ def create_app(
     def list_applications(
         stage: ApplicationStage | None = None,
         limit: int = 200,
+        view: str = "all",
+        stale_applied: bool = False,
     ) -> list[dict[str, Any]]:
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.membership import OPEN_APPLICATION_STAGES, enrich_application_stale
 
+        view_key = view.strip().lower()
+        if view_key not in {"all", "open", "closed"}:
+            raise HTTPException(status_code=422, detail="view must be all, open, or closed")
         repo = JobRepository(db_path)
         try:
             apps = repo.list_applications(stage=stage, limit=limit)
+            apps = [enrich_application_stale(repo, a) for a in apps]
         finally:
             repo.close()
+        if view_key == "open":
+            apps = [a for a in apps if a.stage in OPEN_APPLICATION_STAGES]
+        elif view_key == "closed":
+            apps = [a for a in apps if a.stage == ApplicationStage.CLOSED]
+        if stale_applied:
+            apps = [a for a in apps if a.stale_applied]
         return [a.model_dump(mode="json") for a in apps]
 
     @app.post("/api/applications")
     def create_application(req: ApplicationCreateRequest, request: Request) -> dict[str, Any]:
-        """Create a draft via Start Application. Requires job_id on Save / Under Study."""
+        """Create a draft via Start Application. Requires a stable job_id."""
         if auth_mode != "off" and _bearer_user(request) is None:
             raise HTTPException(status_code=401, detail="Login required.")
 
@@ -1101,9 +1140,9 @@ def create_app(
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "Application drafts are created with Start Application on a "
-                    "saved or under-study Job. Pass job_id, or POST "
-                    "/api/jobs/{id}/start-application."
+                    "Application drafts are created with Start Application on a Job. "
+                    "Pass job_id, or POST /api/jobs/{id}/start-application. "
+                    "Search results cannot create an orphan draft."
                 ),
             )
 
@@ -1303,8 +1342,7 @@ def create_app(
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "Submitted applications cannot be deleted. Close the "
-                        "Application or archive the Job."
+                        "Submitted applications cannot be deleted. Close the Application instead."
                     ),
                 )
             try:

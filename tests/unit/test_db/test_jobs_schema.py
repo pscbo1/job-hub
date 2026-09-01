@@ -61,6 +61,7 @@ class TestMigration:
         jobs_cols = _column_names(repo, "jobs")
         assert _DROP.isdisjoint(jobs_cols)
         assert "favorite" in jobs_cols
+        assert "reference" in jobs_cols
         assert "engagement" in jobs_cols
         assert "dismissed_at" in jobs_cols
         assert "archived_at" in jobs_cols
@@ -202,12 +203,12 @@ class TestMigration:
         plain = repo.get_hub_job("j-null")
         dismissed = repo.get_hub_job("j-dismiss")
         assert saved is not None and saved.favorite is True and saved.engagement is None
-        assert applied is not None and applied.engagement == JobEngagement.TO_DO
+        assert applied is not None and applied.engagement is None
         app = repo.get_application_for_job("j-applied")
         assert app is not None
         assert app.stage == ApplicationStage.APPLIED
         assert app.submissions
-        assert ref is not None and ref.engagement == JobEngagement.REFERENCE
+        assert ref is not None and ref.reference is True and ref.engagement is None
         assert plain is not None and plain.engagement is None
         assert dismissed is not None
         assert dismissed.dismissed_at is not None
@@ -250,7 +251,11 @@ class TestJobEngagement:
     @pytest.mark.parametrize("value", list(JobEngagement))
     def test_allowed_engagements(self, value: JobEngagement) -> None:
         job = Job(source="x", source_job_id="1", engagement=value)
-        assert job.engagement == value
+        if value is JobEngagement.REFERENCE:
+            assert job.reference is True
+            assert job.engagement is None
+        else:
+            assert job.engagement == value
 
 
 class TestUpsertInvariants:

@@ -49,7 +49,7 @@ const NAV_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   "/search": Search,
   "/chat": MessageSquare,
   "/jobs": Briefcase,
-  "/my-jobs": Package,
+  "/tasks": Package,
   "/applications": ClipboardList,
   "/settings": Settings,
   "/login": LogIn,

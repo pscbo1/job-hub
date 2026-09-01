@@ -55,10 +55,11 @@ class ApplicationStatus(StrEnum):
 
 
 class JobEngagement(StrEnum):
-    """Job-side follow-up intent. Not an application lifecycle.
+    """Legacy Job-side intent. Read-compat only.
 
-    ``None`` in the DB means Discovery-only (new ingest). Applied / interview /
-    offer / closed live on Application, never on Job.
+    Sealed Part 1 (2026-09-01): Reference is an independent boolean. Under Study
+    and To Do are not user-facing. New writes should leave ``engagement`` null.
+    Applied / interview / offer / closed live on Application, never on Job.
     """
 
     REFERENCE = "reference"
@@ -259,8 +260,15 @@ class Job(BaseModel):
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     fingerprint: str = Field(default="")
-    engagement: JobEngagement | None = Field(default=None)
-    favorite: bool = Field(default=False, description="Product Save. Independent of engagement.")
+    engagement: JobEngagement | None = Field(
+        default=None,
+        description="Legacy read-compat only. New writes leave this null.",
+    )
+    favorite: bool = Field(default=False, description="Product Save. Independent of Reference.")
+    reference: bool = Field(
+        default=False,
+        description="Independent keep-aside. Can coexist with Save and Application.",
+    )
     comment: str = Field(default="")
     next_step: str = Field(default="")
     deadline: datetime | None = Field(default=None)
@@ -309,8 +317,20 @@ class Job(BaseModel):
             data.setdefault("favorite", True)
             data["engagement"] = None
             return data
+        if value == "reference":
+            data.setdefault("reference", True)
+            data["engagement"] = None
+            return data
         data["engagement"] = value
         return data
+
+    @model_validator(mode="after")
+    def _promote_legacy_reference_engagement(self) -> Job:
+        """engagement=reference → reference=true, engagement=null."""
+        if self.engagement == JobEngagement.REFERENCE:
+            self.reference = True
+            self.engagement = None
+        return self
 
     @field_validator("engagement", mode="before")
     @classmethod
@@ -414,7 +434,10 @@ class ApplicationEvent(BaseModel):
 
 
 class Application(BaseModel):
-    """One Application per Job. Stage is draft | applied | interview | offer | closed."""
+    """One Application per Job. Stage is draft | applied | interview | offer | closed.
+
+    Closed is history/archive. ``close_reason`` is optional. Packet UI is later.
+    """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     job_id: str | None = Field(default=None)
@@ -437,6 +460,10 @@ class Application(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     raw_data: dict[str, Any] = Field(default_factory=dict)
     submissions: list[ApplicationSubmission] = Field(default_factory=list)
+    stale_applied: bool = Field(
+        default=False,
+        description="Computed: Applied with no meaningful update for 14d+.",
+    )
 
     @model_validator(mode="before")
     @classmethod

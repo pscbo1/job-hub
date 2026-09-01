@@ -1026,7 +1026,7 @@ def archive(
     """Archive idle Job Pool rows (cron-friendly). No-op unless enabled, unless --force.
 
     Settings: GET/PUT /api/archive-settings (enabled default off, idle_days=14).
-    Writes Job.archived_at only — never Application Closed.
+    Writes Job.archived_at only for Excluded/Dismissed jobs — never Application Closed.
     """
     from job_sentinel.config.settings import get_settings
     from job_sentinel.db.repository import JobRepository
@@ -1041,7 +1041,7 @@ def archive(
         repo.close()
     if result.disabled:
         console.print(
-            "[yellow]Auto-archive is off.[/] Enable it in Job Pool settings or pass --force."
+            "[yellow]Auto-archive is off.[/] Enable it in Discover settings or pass --force."
         )
         return
     mode = "dry-run" if result.dry_run else "archived"

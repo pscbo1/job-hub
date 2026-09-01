@@ -1,5 +1,5 @@
-import { LegacyMarketRedirect } from "@/components/LegacyMarketRedirect";
+import { redirect } from "next/navigation";
 
 export default function MyJobsRedirectPage() {
-  return <LegacyMarketRedirect page="my-jobs" />;
+  redirect("/tasks");
 }

@@ -116,8 +116,8 @@ export function jobsPath(market: MarketId): string {
   return `/${market}/jobs`;
 }
 
-export function myJobsPath(market: MarketId): string {
-  return `/${market}/my-jobs`;
+export function myJobsPath(_market: MarketId): string {
+  return "/tasks";
 }
 
 export function searchPath(market: MarketId): string {

@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -72,20 +72,18 @@ _MATERIALS_TABLE = "materials"
 _MATERIAL_VERSIONS_TABLE = "material_versions"
 _APP_BINDINGS_TABLE = "application_material_bindings"
 _DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
-_ENGAGEMENT_VALUES = ("reference", "under_study", "to_do")
 _UNSET: Any = object()
 _APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
 _LEGACY_JOB_STATUSES = frozenset({"applied", "interview", "interviewing", "offer", "closed"})
 
 
 def _legacy_status_projection(engagement: str | None) -> str | None:
-    """Project engagement onto the leftover ``jobs.status`` column.
+    """Leftover ``jobs.status`` column. Sealed writes leave it null.
 
     Existing v5 databases CHECK ``status`` against saved/to_do/applied/closed/
     reference. ``under_study`` must never be written there.
     """
-    if engagement in {"reference", "to_do"}:
-        return engagement
+    del engagement
     return None
 
 
@@ -256,6 +254,7 @@ class JobRepository:
                 status TEXT DEFAULT NULL,
                 engagement TEXT DEFAULT NULL,
                 favorite INTEGER NOT NULL DEFAULT 0,
+                reference INTEGER NOT NULL DEFAULT 0,
                 comment TEXT NOT NULL DEFAULT '',
                 next_step TEXT NOT NULL DEFAULT '',
                 deadline TEXT,
@@ -274,6 +273,7 @@ class JobRepository:
                     OR engagement IN ('reference', 'under_study', 'to_do')
                 ),
                 CHECK (NOT (favorite = 1 AND dismissed_at IS NOT NULL AND dismissed_at != '')),
+                CHECK (NOT (reference = 1 AND dismissed_at IS NOT NULL AND dismissed_at != '')),
                 CHECK (
                     NOT (
                         engagement IS NOT NULL
@@ -300,6 +300,7 @@ class JobRepository:
             "status",
             "engagement",
             "favorite",
+            "reference",
             "dismissed_at",
             "archived_at",
             "source",
@@ -352,8 +353,23 @@ class JobRepository:
             alters.append("ALTER TABLE jobs ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''")
         if "last_activity_at" not in names:
             alters.append("ALTER TABLE jobs ADD COLUMN last_activity_at TEXT")
+        if "reference" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN reference INTEGER NOT NULL DEFAULT 0")
         for sql in alters:
             self._db.execute(sql)
+
+    def _backfill_reference_from_engagement(self) -> None:
+        """engagement=reference → reference=1, engagement=null (idempotent)."""
+        names = {col.name for col in self._table(_JOBS_TABLE).columns}
+        if "reference" not in names:
+            return
+        self._db.execute(
+            """
+            UPDATE jobs
+            SET reference = 1, engagement = NULL, status = NULL
+            WHERE engagement = 'reference' OR status = 'reference'
+            """
+        )
 
     def _ensure_prd02_tables(self) -> None:
         self._ensure_prd02_job_columns()
@@ -362,6 +378,7 @@ class JobRepository:
         self._ensure_application_events_table()
         self._ensure_materials_stub_tables()
         self._backfill_prd02_from_legacy_status()
+        self._backfill_reference_from_engagement()
 
     def _ensure_prd02_application_columns(self) -> None:
         names = {col.name for col in self._table(_APP_TABLE).columns}
@@ -495,34 +512,35 @@ class JobRepository:
                 reason_list = list(reasons) if isinstance(reasons, list) else []
 
             target_engagement: str | None
-            if current_engagement in _ENGAGEMENT_VALUES:
+            if current_engagement in {"under_study", "to_do"}:
                 target_engagement = str(current_engagement)
             else:
                 target_engagement = None
             target_favorite = favorite
+            target_reference = int(row.get("reference") or 0)
             target_dismissed = dismissed_at if dismissed_at else None
 
             if status == "saved":
                 target_favorite = 1
                 target_engagement = None
-            elif status == "reference":
-                target_engagement = "reference"
-            elif status == "under_study":
-                target_engagement = "under_study"
-            elif status == "to_do":
-                target_engagement = "to_do"
+            elif status == "reference" or current_engagement == "reference":
+                target_reference = 1
+                target_engagement = None
             elif status in _LEGACY_JOB_STATUSES:
-                target_engagement = "to_do"
+                target_engagement = None
                 self._ensure_migrated_application(job_id, row, status)
 
             if "manual_dismiss" in reason_list:
                 if not target_dismissed:
                     target_dismissed = _now_iso()
                 target_favorite = 0
+                target_reference = 0
                 target_engagement = None
 
             if target_favorite == 1 and target_dismissed:
                 target_favorite = 0
+            if target_reference == 1 and target_dismissed:
+                target_reference = 0
             if target_engagement is not None and target_dismissed:
                 target_engagement = None
 
@@ -530,6 +548,8 @@ class JobRepository:
             updates: dict[str, Any] = {}
             if favorite != target_favorite:
                 updates["favorite"] = target_favorite
+            if int(row.get("reference") or 0) != target_reference:
+                updates["reference"] = target_reference
             if (current_engagement or None) != target_engagement:
                 updates["engagement"] = target_engagement
             if (row.get("status") or None) != target_status:
@@ -540,7 +560,7 @@ class JobRepository:
                 self._table(_JOBS_TABLE).update(job_id, updates)
         self._db.execute(
             """
-            UPDATE jobs SET favorite = 0, engagement = NULL, status = NULL
+            UPDATE jobs SET favorite = 0, reference = 0, engagement = NULL, status = NULL
             WHERE dismissed_at IS NOT NULL AND dismissed_at != ''
             """
         )
@@ -708,6 +728,9 @@ class JobRepository:
             self._ensure_prd02_tables()
         if from_version < 7:
             self._ensure_job_tasks_table()
+        if from_version < 8:
+            self._ensure_prd02_job_columns()
+            self._backfill_reference_from_engagement()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -877,11 +900,14 @@ class JobRepository:
         view: str = "discover",
         include_dismissed: bool = False,
         include_archived: bool = False,
+        q: str = "",
+        has_draft: bool | None = None,
     ) -> list[Job]:
         """Job Pool rows, newest ``discovered_at`` first.
 
         ``filter_state``: ``included`` (default pool), ``excluded``, or ``all``.
-        ``view``: ``discover`` (default) or ``my_jobs``.
+        ``view``: ``discover`` (default) or ``tasks`` (``my_jobs`` is a deprecated alias).
+        ``q`` searches title/company/next_step/task title/application notes — not discovered_at.
         """
         scan_limit = max(1, min(limit, 500))
         needs_scan = bool(
@@ -904,9 +930,26 @@ class JobRepository:
             )
         view_key = view.strip().lower()
         if view_key == "my_jobs":
-            from job_sentinel.jobs.actions import my_jobs_predicate_sql
+            view_key = "tasks"
+        if view_key == "tasks":
+            from job_sentinel.jobs.membership import TASKS_PREDICATE_SQL
 
-            clauses.append(my_jobs_predicate_sql())
+            clauses.append(TASKS_PREDICATE_SQL)
+        needle = q.strip().lower()
+        if needle:
+            from job_sentinel.jobs.membership import TASKS_SEARCH_SQL
+
+            like = f"%{needle}%"
+            clauses.append(TASKS_SEARCH_SQL)
+            params.extend([like, like, like, like, like])
+        if has_draft is True:
+            from job_sentinel.jobs.membership import HAS_DRAFT_SQL
+
+            clauses.append(HAS_DRAFT_SQL)
+        elif has_draft is False:
+            from job_sentinel.jobs.membership import HAS_DRAFT_SQL
+
+            clauses.append(f"NOT {HAS_DRAFT_SQL}")
         hide_stowed = state not in {"excluded", "all"}
         if not include_dismissed and hide_stowed:
             clauses.append("(dismissed_at IS NULL OR dismissed_at = '')")
@@ -976,6 +1019,7 @@ class JobRepository:
         *,
         engagement: JobEngagement | object | None = _UNSET,
         favorite: bool | object = _UNSET,
+        reference: bool | object = _UNSET,
         comment: str | object = _UNSET,
         next_step: str | object = _UNSET,
         deadline: datetime | object | None = _UNSET,
@@ -995,6 +1039,8 @@ class JobRepository:
             payload["status"] = _legacy_status_projection(value)
         if favorite is not _UNSET:
             payload["favorite"] = 1 if favorite else 0
+        if reference is not _UNSET:
+            payload["reference"] = 1 if reference else 0
         if comment is not _UNSET:
             payload["comment"] = comment
         if next_step is not _UNSET:
@@ -1302,6 +1348,7 @@ class JobRepository:
         """
         if self.get_application(app_id) is None:
             return False
+        fields.pop("stale_applied", None)
         fields["updated_at"] = _now_iso()
         if "stage" in fields and isinstance(fields["stage"], ApplicationStage):
             fields["stage"] = fields["stage"].value
@@ -1827,6 +1874,7 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "status": _legacy_status_projection(engagement),
         "engagement": engagement,
         "favorite": 1 if job.favorite else 0,
+        "reference": 1 if job.reference else 0,
         "comment": job.comment,
         "next_step": job.next_step,
         "deadline": _optional_iso(job.deadline),
@@ -1874,6 +1922,7 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         fingerprint=row.get("fingerprint", ""),
         engagement=engagement,
         favorite=bool(int(row.get("favorite") or 0)),
+        reference=bool(int(row.get("reference") or 0)) or engagement == JobEngagement.REFERENCE,
         comment=row.get("comment") or "",
         next_step=row.get("next_step") or "",
         deadline=_parse_optional_dt(row.get("deadline")),

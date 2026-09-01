@@ -66,7 +66,7 @@ def test_jobs_empty_without_db(tmp_path: Path) -> None:
 
 
 def test_jobs_listed_and_status_updated(tmp_path: Path) -> None:
-    from job_sentinel.core.models import Job, JobEngagement
+    from job_sentinel.core.models import Job
     from job_sentinel.db.repository import JobRepository
 
     db = tmp_path / "j.db"
@@ -82,25 +82,27 @@ def test_jobs_listed_and_status_updated(tmp_path: Path) -> None:
     assert jobs[0]["status"] is None
 
     upd = client.patch(f"/api/jobs/{stored.id}", json={"engagement": "to_do"})
-    assert upd.status_code == 200
-    assert upd.json()["engagement"] == JobEngagement.TO_DO.value
-    assert upd.json()["status"] == JobEngagement.TO_DO.value
+    assert upd.status_code == 422
+
+    referenced = client.patch(f"/api/jobs/{stored.id}", json={"reference": True})
+    assert referenced.status_code == 200
+    assert referenced.json()["reference"] is True
+    assert referenced.json()["engagement"] is None
 
     again = client.get("/api/jobs").json()
-    assert again[0]["engagement"] == "to_do"
+    assert again[0]["reference"] is True
 
-    cleared = client.patch(f"/api/jobs/{stored.id}", json={"engagement": None})
+    cleared = client.patch(f"/api/jobs/{stored.id}", json={"reference": False})
     assert cleared.status_code == 200
-    assert cleared.json()["engagement"] is None
+    assert cleared.json()["reference"] is False
 
     bad = client.patch(f"/api/jobs/{stored.id}", json={"engagement": "applied"})
     assert bad.status_code == 422
 
     ok_review = client.patch(f"/api/jobs/{stored.id}", json={"engagement": "under_study"})
-    assert ok_review.status_code == 200
-    assert ok_review.json()["engagement"] == "under_study"
+    assert ok_review.status_code == 422
 
-    missing = client.patch("/api/jobs/ghost", json={"engagement": "reference"})
+    missing = client.patch("/api/jobs/ghost", json={"reference": True})
     assert missing.status_code == 404
 
 

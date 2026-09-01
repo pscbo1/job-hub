@@ -27,7 +27,7 @@ function Monogram({ name }: { name: string }) {
 /**
  * A single search result (from any source). Results are ephemeral — not in the
  * DB. Open the source or go to Discover; drafts are created only via Start
- * Application on a saved or under-study Job.
+ * Application on a stable Job.
  */
 export function SearchResultCard({ job, index }: { job: JobPosting; index: number }) {
   const reduced = useReducedMotion();

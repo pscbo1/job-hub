@@ -16,18 +16,18 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ### Added
 
-- **PRD02 sealed product model (2026-09-01).** Job engagement is `null | reference | under_study | to_do`. Save reuses `favorite`. Application is 1:1 with Job (`draft | applied | interview | offer | closed`). Discover / My Jobs / Application IA. Dismiss↔Save mutex. Job-level archive (`archived_at`). Mark Submitted, abandon draft, Closed re-apply.
+- **Sealed Part 1 holistic model (2026-09-01).** Nav is Collect Jobs · Discover · Tasks · Applications. Reference is an independent boolean (coexists with Save and Application). Under Study / user-facing To Do removed. Application Closed is history; close_reason optional. Start Application from any normal Discover job. Tasks membership is next_step / deadline / unfinished task / draft. Auto-archive excluded jobs only (default OFF, 14 days).
 - Job checklist tasks (`job_tasks`), DDL / open-task chips, To Do-first sort, and `job-sentinel archive --force|--dry-run` (ported from unmerged Slice 1 PR #1 onto the sealed model).
 
 ### Changed
 
-- New jobs keep `engagement=null` (not Under Study). Applied / Interview / Offer / Closed no longer live on Job.
-- Application close reasons: `not_selected` / `no_response` / `withdrew` / `other` (Chinese UI: 未录用 / 无回复 / 主动结束 / 其他). No Rejected stage, column, or close_reason word.
-- Idle auto-archive (default off) sets Job `archived_at`, never Closed / `auto_archived`. Skips incomplete tasks, Reference, and in-progress Applications. Collectors leave `last_activity_at` unset.
+- New jobs have no Save/Reference until the user acts. Applied / Interview / Offer / Closed live only on Application. Closed is history.
+- Application close reasons remain optional (`not_selected` / `no_response` / `withdrew` / `other`). No required Close modal. No Rejected stage.
+- Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.
 
 ### Fixed
 
-- Search result cards no longer create Application drafts; Discover Save / Start Review then Start Application is the only draft path.
+- Search result cards no longer create Application drafts; Start Application on a stable Discover Job is the only draft path.
 - Submitted Applications cannot be hard-deleted (UI or `DELETE /api/applications/{id}`). Cancel draft remains for never-submitted drafts; submitted rows use Closed / Job Archive.
 - Command Palette and More nav no longer advertise Studio, Profile, or Documents.
 

@@ -206,6 +206,7 @@ export interface HubJob {
   engagement: JobEngagement | null;
   status: JobEngagement | null;
   favorite?: boolean;
+  reference?: boolean;
   comment?: string;
   next_step?: string;
   deadline?: string | null;
@@ -259,9 +260,11 @@ export interface JobsListQuery {
   sources?: string[];
   remote?: boolean;
   postedDays?: number | string;
-  view?: "discover" | "my_jobs";
+  view?: "discover" | "tasks" | "my_jobs";
   includeDismissed?: boolean;
   includeArchived?: boolean;
+  q?: string;
+  hasDraft?: boolean;
 }
 
 export function getJobs(
@@ -281,6 +284,9 @@ export function getJobs(
   if (query.view) q.set("view", query.view);
   if (query.includeDismissed) q.set("include_dismissed", "true");
   if (query.includeArchived) q.set("include_archived", "true");
+  if (query.q) q.set("q", query.q);
+  if (query.hasDraft === true) q.set("has_draft", "true");
+  if (query.hasDraft === false) q.set("has_draft", "false");
   return getJSON<HubJob[]>(`/api/jobs?${q.toString()}`, []);
 }
 
@@ -296,6 +302,7 @@ export async function patchHubJob(
   body: {
     engagement?: JobEngagement | null;
     favorite?: boolean;
+    reference?: boolean;
     comment?: string;
     next_step?: string;
     deadline?: string | null;
@@ -322,9 +329,10 @@ export async function patchHubJob(
     }
     const next: HubJob = {
       ...current,
-      engagement: body.engagement !== undefined ? body.engagement : current.engagement,
-      status: body.engagement !== undefined ? body.engagement : current.status,
-      favorite: body.favorite !== undefined ? body.favorite : current.favorite,
+        engagement: body.engagement !== undefined ? body.engagement : current.engagement,
+        status: body.engagement !== undefined ? body.engagement : current.status,
+        favorite: body.favorite !== undefined ? body.favorite : current.favorite,
+        reference: body.reference !== undefined ? body.reference : current.reference,
       comment: body.comment !== undefined ? body.comment : current.comment,
       next_step: body.next_step !== undefined ? body.next_step : current.next_step,
       deadline: body.deadline !== undefined ? body.deadline : current.deadline,
@@ -349,9 +357,8 @@ export async function patchHubJob(
 
 async function postJobAction(jobId: string, action: string, body: object = {}): Promise<HubJob | null> {
   if (demo.DEMO) {
-    const engagement =
-      action === "start-review" ? "under_study" : action === "reference" ? "reference" : null;
-    const favorite = action === "save";
+    const referenced = action === "reference" ? true : action === "unreference" ? false : undefined;
+    const favorite = action === "save" ? true : action === "unsave" ? false : undefined;
     const dismissed = action === "dismiss" ? new Date().toISOString() : null;
     return {
       id: jobId,
@@ -362,9 +369,10 @@ async function postJobAction(jobId: string, action: string, body: object = {}): 
       job_url: "",
       published_at: null,
       discovered_at: "",
-      engagement: action === "dismiss" ? null : engagement,
-      status: action === "dismiss" ? null : engagement,
+      engagement: action === "dismiss" ? null : null,
+      status: action === "dismiss" ? null : null,
       favorite: action === "dismiss" ? false : favorite,
+      reference: action === "dismiss" ? false : referenced,
       dismissed_at: dismissed,
       match_score: null,
       filter_state: action === "dismiss" ? "excluded" : "included",
@@ -390,17 +398,44 @@ export function saveHubJob(jobId: string): Promise<HubJob | null> {
 export function unsaveHubJob(jobId: string): Promise<HubJob | null> {
   return postJobAction(jobId, "unsave");
 }
-export function startReviewHubJob(jobId: string): Promise<HubJob | null> {
-  return postJobAction(jobId, "start-review");
-}
 export function referenceHubJob(jobId: string): Promise<HubJob | null> {
   return postJobAction(jobId, "reference");
+}
+export function unreferenceHubJob(jobId: string): Promise<HubJob | null> {
+  return postJobAction(jobId, "unreference");
 }
 export function archiveHubJob(jobId: string, reason = ""): Promise<HubJob | null> {
   return postJobAction(jobId, "archive", { reason });
 }
 export function unarchiveHubJob(jobId: string): Promise<HubJob | null> {
   return postJobAction(jobId, "unarchive");
+}
+
+export interface ArchiveSettings {
+  enabled: boolean;
+  idle_days: number;
+}
+
+export function getArchiveSettings(): Promise<ArchiveSettings> {
+  if (demo.DEMO) return Promise.resolve({ enabled: false, idle_days: 14 });
+  return getJSON<ArchiveSettings>("/api/archive-settings", { enabled: false, idle_days: 14 });
+}
+
+export async function putArchiveSettings(
+  body: ArchiveSettings,
+): Promise<ArchiveSettings | null> {
+  if (demo.DEMO) return body;
+  try {
+    const res = await fetch(`${API_BASE}/api/archive-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ArchiveSettings;
+  } catch {
+    return null;
+  }
 }
 
 function demoJobById(jobId: string): HubJob | undefined {
@@ -504,8 +539,8 @@ export async function startApplicationForJob(
         job_url: "",
         published_at: null,
         discovered_at: "",
-        engagement: "to_do",
-        status: "to_do",
+        engagement: null,
+        status: null,
         match_score: null,
       },
       application: {
@@ -531,7 +566,7 @@ export async function startApplicationForJob(
 export async function dismissHubJob(jobId: string): Promise<HubJob | null> {
   const job = await postJobAction(jobId, "dismiss");
   if (demo.DEMO && job) {
-    return { ...job, filter_state: "excluded", filter_reasons: ["manual_dismiss"], favorite: false, engagement: null, status: null };
+        return { ...job, filter_state: "excluded", filter_reasons: ["manual_dismiss"], favorite: false, reference: false, engagement: null, status: null };
   }
   return job;
 }
@@ -974,6 +1009,7 @@ export interface Application {
   notes: string;
   close_reason?: CloseReason | null;
   close_note?: string;
+  stale_applied?: boolean;
   posting_id: string | null;
   resume_document_id: string | null;
   created_at: string;
@@ -1036,14 +1072,24 @@ export interface GeneratedDocument {
 export function getApplications(
   stage?: ApplicationStage,
   limit = 200,
+  query: { view?: "open" | "closed" | "all"; staleApplied?: boolean } = {},
 ): Promise<Application[]> {
-  if (demo.DEMO)
-    return Promise.resolve(
-      stage ? demo.demoApplications.filter((a) => a.stage === stage) : demo.demoApplications,
-    );
+  if (demo.DEMO) {
+    let rows = demo.demoApplications;
+    if (stage) rows = rows.filter((a) => a.stage === stage);
+    if (query.view === "open") {
+      rows = rows.filter((a) => a.stage !== "closed");
+    } else if (query.view === "closed") {
+      rows = rows.filter((a) => a.stage === "closed");
+    }
+    if (query.staleApplied) rows = rows.filter((a) => a.stale_applied);
+    return Promise.resolve(rows);
+  }
   const params = new URLSearchParams();
   if (stage) params.set("stage", stage);
   params.set("limit", String(limit));
+  if (query.view && query.view !== "all") params.set("view", query.view);
+  if (query.staleApplied) params.set("stale_applied", "true");
   return getJSON<Application[]>(`/api/applications?${params}`, []);
 }
 
@@ -1123,7 +1169,7 @@ export async function submitApplication(
 
 export async function closeApplication(
   id: string,
-  close_reason: CloseReason,
+  close_reason: CloseReason | null = null,
   close_note = "",
 ): Promise<Application | null> {
   if (demo.DEMO) {
