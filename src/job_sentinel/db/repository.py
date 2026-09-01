@@ -1045,7 +1045,7 @@ class JobRepository:
             return grouped
         placeholders = ",".join("?" * len(ids))
         rows = self._table(_JOB_TASKS_TABLE).rows_where(
-            f"job_id IN ({placeholders})",  # noqa: S608 — placeholders only, ids bound
+            f"job_id IN ({placeholders})",
             list(ids),
             order_by="sort_order ASC, created_at ASC",
         )

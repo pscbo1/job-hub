@@ -136,9 +136,7 @@ def run_idle_archive(
         result.scanned += 1
         app = repo.get_application_for_job(job.id)
         in_progress = app is not None and app.stage in _IN_PROGRESS_APP
-        if not should_auto_archive(
-            job, rules, now=moment, in_progress_application=in_progress
-        ):
+        if not should_auto_archive(job, rules, now=moment, in_progress_application=in_progress):
             result.skipped += 1
             continue
         result.job_ids.append(job.id)

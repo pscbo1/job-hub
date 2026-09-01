@@ -48,9 +48,7 @@ def test_task_crud_bumps_last_activity(tmp_path: Path) -> None:
 
 def test_collector_upsert_does_not_set_last_activity(tmp_path: Path) -> None:
     repo = JobRepository(tmp_path / "j.db")
-    first = repo.upsert_job(
-        _job(last_activity_at=datetime.now(tz=UTC), title="v1")
-    )
+    first = repo.upsert_job(_job(last_activity_at=datetime.now(tz=UTC), title="v1"))
     assert first.last_activity_at is None
     again = repo.upsert_job(first.model_copy(update={"title": "v2"}))
     assert again.last_activity_at is None

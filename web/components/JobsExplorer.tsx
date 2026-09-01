@@ -194,7 +194,7 @@ export function JobsExplorer({
     const q = query.trim().toLowerCase();
     const filtered = jobs.filter((j) => {
       const s = engagementOf(j);
-      if (!jobVisibleInPool(s, filter, true, row.archived_at)) return false;
+      if (!jobVisibleInPool(s, filter, true, merged(j).archived_at)) return false;
       if (!q) return true;
       return [j.title, j.company, j.location, j.source]
         .join(" ")
