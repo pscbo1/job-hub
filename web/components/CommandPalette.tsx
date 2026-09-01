@@ -6,8 +6,6 @@ import {
   Briefcase,
   ClipboardList,
   CornerDownLeft,
-  FileText,
-  FolderOpen,
   Home,
   LayoutDashboard,
   LogIn,
@@ -15,11 +13,11 @@ import {
   Package,
   Search,
   Settings,
-  Wand2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { COMMAND_PALETTE_NAV } from "@/lib/commandPaletteNav";
 import { cn } from "@/lib/utils";
 
 function GithubIcon({ className }: { className?: string }) {
@@ -45,19 +43,24 @@ interface Item {
   keywords?: string;
 }
 
+const NAV_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  "/": Home,
+  "/dashboard": LayoutDashboard,
+  "/search": Search,
+  "/chat": MessageSquare,
+  "/jobs": Briefcase,
+  "/my-jobs": Package,
+  "/applications": ClipboardList,
+  "/settings": Settings,
+  "/login": LogIn,
+};
+
 const ITEMS: Item[] = [
-  { label: "Home", hint: "Landing page", icon: Home, href: "/", group: "Navigate" },
-  { label: "Dashboard", hint: "Pipeline, deadlines, activity", icon: LayoutDashboard, href: "/dashboard", group: "Navigate", keywords: "overview funnel stats home" },
-  { label: "Collect Jobs", hint: "Collect jobs from Zhaopin, Liepin, Boss", icon: Search, href: "/search", group: "Navigate", keywords: "search collect zhaopin liepin boss mcp-jobs" },
-  { label: "Chat", hint: "Ask Sentinel about your jobs", icon: MessageSquare, href: "/chat", group: "Navigate" },
-  { label: "Profile", hint: "Your résumé, rendered live", icon: FileText, href: "/profile", group: "Navigate" },
-  { label: "Studio", hint: "Tailor + score against a job description", icon: Wand2, href: "/studio", group: "Navigate" },
-  { label: "Job Pool", hint: "Discover collected jobs", icon: Briefcase, href: "/jobs", group: "Navigate", keywords: "jobs discover pool" },
-  { label: "My Jobs", hint: "Saved, under study, and in-progress jobs", icon: Package, href: "/my-jobs", group: "Navigate", keywords: "saved favorite todo application" },
-  { label: "Applications", hint: "Draft through closed — no rejected stage", icon: ClipboardList, href: "/applications", group: "Navigate", keywords: "tracker pipeline applied interview offer closed" },
-  { label: "Documents", hint: "Generated résumés & cover letters", icon: FolderOpen, href: "/resumes", group: "Navigate", keywords: "resume cover letter library pdf history" },
-  { label: "Settings", hint: "LLM providers, API keys, model config", icon: Settings, href: "/settings", group: "Navigate", keywords: "llm model api key provider openrouter groq gemini ollama" },
-  { label: "Sign in", hint: "Account / demo access", icon: LogIn, href: "/login", group: "Navigate", keywords: "login account" },
+  ...COMMAND_PALETTE_NAV.map((row) => ({
+    ...row,
+    icon: NAV_ICONS[row.href] ?? Search,
+    group: "Navigate" as const,
+  })),
   {
     label: "GitHub",
     hint: "Star the repo — it keeps the project alive",

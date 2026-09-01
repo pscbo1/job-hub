@@ -115,7 +115,7 @@ export function JobActions({
           Reference
         </button>
       )}
-      {(variant === "my" || saved || engagement === "under_study") && (
+      {(saved || engagement === "under_study" || engagement === "to_do") && (
         <button
           type="button"
           disabled={busy}

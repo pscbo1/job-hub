@@ -85,27 +85,15 @@ def test_list_applications_stage_filter(tmp_path: Path) -> None:
 # ── POST /api/applications ────────────────────────────────────────────────────
 
 
-def test_create_application_manual(tmp_path: Path) -> None:
+def test_create_application_requires_job_id(tmp_path: Path) -> None:
     resp = _client(tmp_path).post(
         "/api/applications",
         json={"title": "Backend Eng", "employer": "BigCo", "stage": "draft"},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["title"] == "Backend Eng"
-    assert body["stage"] == "draft"
-    assert "id" in body
+    assert resp.status_code == 422
 
 
-def test_create_application_from_posting_404(tmp_path: Path) -> None:
-    resp = _client(tmp_path).post(
-        "/api/applications",
-        json={"posting_id": "nonexistent-id"},
-    )
-    assert resp.status_code == 404
-
-
-def test_create_application_from_posting(tmp_path: Path) -> None:
+def test_create_application_from_posting_rejected(tmp_path: Path) -> None:
     from job_sentinel.core.models import JobPosting
 
     db = tmp_path / "j.db"
@@ -122,12 +110,7 @@ def test_create_application_from_posting(tmp_path: Path) -> None:
     repo.close()
 
     resp = _client(tmp_path).post("/api/applications", json={"posting_id": "p-001"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["title"] == "ML Engineer"
-    assert body["employer"] == "AI Corp"
-    assert body["posting_id"] == "p-001"
-    assert body["stage"] == "draft"
+    assert resp.status_code == 422
 
 
 # ── GET /api/applications/{id} ────────────────────────────────────────────────
@@ -177,8 +160,19 @@ def test_delete_application(tmp_path: Path) -> None:
     resp = _client(tmp_path).delete(f"/api/applications/{app.id}")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
-    # Confirm it's gone.
+    # Confirm it's gone from the default list and GET.
+    listed = _client(tmp_path).get("/api/applications")
+    assert all(row["id"] != app.id for row in listed.json())
     assert _client(tmp_path).get(f"/api/applications/{app.id}").status_code == 404
+
+
+def test_delete_submitted_application_rejected(tmp_path: Path) -> None:
+    app = _seed_app(tmp_path, stage=ApplicationStage.APPLIED)
+    resp = _client(tmp_path).delete(f"/api/applications/{app.id}")
+    assert resp.status_code == 409
+    still = _client(tmp_path).get(f"/api/applications/{app.id}")
+    assert still.status_code == 200
+    assert still.json()["id"] == app.id
 
 
 def test_delete_application_not_found(tmp_path: Path) -> None:

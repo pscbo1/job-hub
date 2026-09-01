@@ -100,6 +100,14 @@ def test_start_application_creates_draft_and_todo(tmp_path: Path) -> None:
     repo.close()
 
 
+def test_start_application_requires_save_or_review(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    stored = repo.upsert_job(_job())
+    with pytest.raises(TrackingError, match="Save or Under Study"):
+        start_application(repo, stored.id)
+    repo.close()
+
+
 def test_abandon_draft_does_not_close(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     stored = repo.upsert_job(_job(favorite=True))
@@ -123,6 +131,7 @@ def test_abandon_draft_does_not_close(tmp_path: Path) -> None:
 def test_mark_submitted_and_reapply_after_close(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     stored = repo.upsert_job(_job())
+    save_job(repo, stored.id)
     _job_row, app = start_application(repo, stored.id)
     submitted = mark_submitted(repo, app.id, channel="liepin")
     assert submitted.stage.value == "applied"
@@ -144,6 +153,7 @@ def test_mark_submitted_and_reapply_after_close(tmp_path: Path) -> None:
 def test_cannot_close_unsubmitted_draft(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     stored = repo.upsert_job(_job())
+    save_job(repo, stored.id)
     _job_row, app = start_application(repo, stored.id)
     with pytest.raises(TrackingError):
         close_application(repo, app.id, reason=CloseReason.WITHDREW)
@@ -153,6 +163,7 @@ def test_cannot_close_unsubmitted_draft(tmp_path: Path) -> None:
 def test_cannot_dismiss_with_open_application(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     stored = repo.upsert_job(_job())
+    save_job(repo, stored.id)
     start_application(repo, stored.id)
     with pytest.raises(TrackingError):
         dismiss_job(repo, stored.id)

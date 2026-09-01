@@ -1156,18 +1156,9 @@ export async function abandonApplication(id: string): Promise<boolean> {
   }
 }
 
-/** Delete a tracked application. Returns true on success. */
+/** Delete a never-submitted draft. Submitted applications must be Closed, not deleted. */
 export async function deleteApplication(id: string): Promise<boolean> {
-  if (demo.DEMO) return true;
-  try {
-    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      headers: authHeaders(),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  return abandonApplication(id);
 }
 
 /** Count of applications per stage plus total. */

@@ -13,12 +13,12 @@ import {
   CLOSE_REASON_LABELS_ZH,
   abandonApplication,
   closeApplication,
-  deleteApplication,
   getApplications,
   getApplicationStats,
   submitApplication,
   updateApplication,
 } from "@/lib/api";
+import { applicationWasSubmitted } from "@/lib/applicationLifecycle";
 import { cn, externalUrl } from "@/lib/utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
@@ -142,11 +142,11 @@ export default function ApplicationsPage() {
     if (ok) void refresh();
   }
 
-  async function onDelete(id: string) {
+  async function onCancelDraft(id: string) {
     const row = apps.find((a) => a.id === id);
+    if (!row || applicationWasSubmitted(row)) return;
     setApps((prev) => prev.filter((a) => a.id !== id));
-    if (row?.stage === "draft") await abandonApplication(id);
-    else await deleteApplication(id);
+    await abandonApplication(id);
     void refresh();
   }
 
@@ -306,14 +306,17 @@ export default function ApplicationsPage() {
               {CLOSE_REASON_LABELS_ZH[a.close_reason] ?? a.close_reason}
             </span>
           )}
-          <button
-            onClick={() => onDelete(a.id)}
-            className="text-muted transition-colors hover:text-red-600"
-            title={a.stage === "draft" ? "Abandon draft" : "Delete"}
-            aria-label={a.stage === "draft" ? `Abandon ${a.title}` : `Delete ${a.title}`}
-          >
-            {a.stage === "draft" ? "Abandon" : "✕"}
-          </button>
+          {!applicationWasSubmitted(a) && (
+            <button
+              type="button"
+              onClick={() => onCancelDraft(a.id)}
+              className="text-muted transition-colors hover:text-red-600"
+              title="Cancel draft"
+              aria-label={`Cancel draft ${a.title}`}
+            >
+              Cancel draft
+            </button>
+          )}
         </div>
       ),
     },

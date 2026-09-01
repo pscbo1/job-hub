@@ -33,7 +33,6 @@ from job_sentinel.api.chat import ChatMessage, ChatReply
 from job_sentinel.api.chat import answer as chat_answer
 from job_sentinel.api.ops import OpsConfigError, OpsConflictError, get_runner
 from job_sentinel.core.models import (
-    Application,
     ApplicationStage,
     ApplicationStatus,
     CloseReason,
@@ -1094,70 +1093,31 @@ def create_app(
 
     @app.post("/api/applications")
     def create_application(req: ApplicationCreateRequest, request: Request) -> dict[str, Any]:
-        """
-        Create a tracked application.
-
-        Pass ``posting_id`` to populate fields from a stored JobPosting (stage
-        defaults to draft).  Otherwise supply manual fields.
-        """
+        """Create a draft via Start Application. Requires job_id on Save / Under Study."""
         if auth_mode != "off" and _bearer_user(request) is None:
             raise HTTPException(status_code=401, detail="Login required.")
 
+        if not req.job_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Application drafts are created with Start Application on a "
+                    "saved or under-study Job. Pass job_id, or POST "
+                    "/api/jobs/{id}/start-application."
+                ),
+            )
+
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, start_application
 
         repo = JobRepository(db_path)
         try:
-            if req.job_id:
-                from job_sentinel.jobs.actions import TrackingError, start_application
-
-                try:
-                    _job, app = start_application(repo, req.job_id)
-                except TrackingError as exc:
-                    raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-                return app.model_dump(mode="json")
-            if req.posting_id:
-                posting = repo.get_job(req.posting_id)
-                if posting is None:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Posting {req.posting_id} not found.",
-                    )
-                app = Application(
-                    title=req.title or posting.title,
-                    employer=req.employer or posting.employer,
-                    location=req.location or posting.location,
-                    url=req.url or posting.portal_url,
-                    source=req.source or posting.source_adapter,
-                    stage=req.stage,
-                    salary=req.salary,
-                    applied_date=req.applied_date,
-                    deadline=req.deadline or posting.deadline,
-                    notes=req.notes,
-                    posting_id=req.posting_id,
-                    resume_document_id=req.resume_document_id,
-                )
-            else:
-                app = Application(
-                    job_id=req.job_id,
-                    title=req.title,
-                    employer=req.employer,
-                    location=req.location,
-                    url=req.url,
-                    source=req.source,
-                    stage=req.stage,
-                    salary=req.salary,
-                    applied_date=req.applied_date,
-                    deadline=req.deadline,
-                    notes=req.notes,
-                    posting_id=req.posting_id,
-                    resume_document_id=req.resume_document_id,
-                )
-            result = repo.create_application(app)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            _job, app = start_application(repo, req.job_id)
+        except TrackingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         finally:
             repo.close()
-        return result.model_dump(mode="json")
+        return app.model_dump(mode="json")
 
     @app.get("/api/applications/export")
     def export_applications(fmt: str = "csv") -> StreamingResponse:
@@ -1226,7 +1186,7 @@ def create_app(
             app = repo.get_application(app_id)
         finally:
             repo.close()
-        if app is None:
+        if app is None or app.deleted_at is not None:
             raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
         return app.model_dump(mode="json")
 
@@ -1328,14 +1288,31 @@ def create_app(
             raise HTTPException(status_code=401, detail="Login required.")
 
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import (
+            TrackingError,
+            abandon_draft,
+            application_was_submitted,
+        )
 
         repo = JobRepository(db_path)
         try:
-            found = repo.delete_application(app_id)
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
+            if application_was_submitted(app):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Submitted applications cannot be deleted. Close the "
+                        "Application or archive the Job."
+                    ),
+                )
+            try:
+                abandon_draft(repo, app_id)
+            except TrackingError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         finally:
             repo.close()
-        if not found:
-            raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
         return {"ok": True}
 
     # ── Generated Documents ───────────────────────────────────────────────
@@ -1716,8 +1693,8 @@ def create_app(
         """
         Search for jobs across enabled sources.
 
-        Results are ephemeral — not written to the DB. The user later
-        "tracks" one via POST /api/applications.
+        Results are ephemeral — not written to the DB. Collect into Discover,
+        then Save / Start Review / Start Application on the Job.
         """
         from job_sentinel.config.settings import get_settings
         from job_sentinel.sources.base import JobQuery

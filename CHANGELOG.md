@@ -27,6 +27,10 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ### Fixed
 
+- Search result cards no longer create Application drafts; Discover Save / Start Review then Start Application is the only draft path.
+- Submitted Applications cannot be hard-deleted (UI or `DELETE /api/applications/{id}`). Cancel draft remains for never-submitted drafts; submitted rows use Closed / Job Archive.
+- Command Palette and More nav no longer advertise Studio, Profile, or Documents.
+
 - **Release workflow left the sdist and wheel unattached.** When a release was
   cut by hand before the tag was pushed, `gh release create` failed with
   "a release with the same tag name already exists", which aborted the job

@@ -195,8 +195,19 @@ def restore_dismiss(repo: JobRepository, job_id: str) -> Job:
     return stored
 
 
+def application_was_submitted(app: Application) -> bool:
+    """True once the application has been submitted at least once."""
+    if app.submissions:
+        return True
+    return app.stage in PIPELINE_STAGES
+
+
 def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Application]:
-    """Create the unique Application draft and set Job engagement=to_do."""
+    """Create the unique Application draft and set Job engagement=to_do.
+
+    New drafts require Save (favorite) or Under Study. An existing Application
+    is returned as-is so a second draft cannot be minted.
+    """
     job = _clear_dismiss_if_needed(repo, _require_job(repo, job_id))
     existing = repo.get_application_for_job(job_id, include_deleted=True)
     if existing is not None and existing.deleted_at is None:
@@ -207,6 +218,14 @@ def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Applicatio
         if stored is None:
             raise TrackingError(f"Job {job_id} not found", status_code=404)
         return stored, existing
+    if not job.favorite and job.engagement not in {
+        JobEngagement.UNDER_STUDY,
+        JobEngagement.TO_DO,
+    }:
+        raise TrackingError(
+            "Start Application requires Save or Under Study on the Job.",
+            status_code=409,
+        )
     if existing is not None and existing.deleted_at is not None:
         repo.restore_deleted_application(existing.id)
         app = repo.get_application(existing.id)
@@ -302,7 +321,7 @@ def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
     app = repo.get_application(application_id)
     if app is None or app.deleted_at is not None:
         raise TrackingError(f"Application {application_id} not found", status_code=404)
-    if app.stage != ApplicationStage.DRAFT or app.submissions:
+    if application_was_submitted(app) or app.stage != ApplicationStage.DRAFT:
         raise TrackingError(
             "Only a never-submitted draft can be abandoned. Close a submitted application instead.",
             status_code=409,

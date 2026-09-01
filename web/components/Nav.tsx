@@ -20,8 +20,6 @@ const PRIMARY = [
 
 const SECONDARY = [
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/studio", label: "Studio" },
-  { href: "/profile", label: "Profile" },
   { href: "/chat", label: "Chat" },
   { href: "/interview", label: "Interview Prep" },
   { href: "/settings", label: "Settings" },

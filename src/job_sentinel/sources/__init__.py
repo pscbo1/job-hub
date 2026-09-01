@@ -16,8 +16,8 @@ Follow-company ATS boards (no auth):
   company_boards (greenhouse, lever, ashby, workday)
 
 Search results map onto JobPosting and are returned ephemeral — NOT
-written to the database. The user later "tracks" a posting, which
-creates an Application via POST /api/applications.
+written to the database. Collect into Discover, then Save / Start Review
+on the Job before Start Application.
 """
 
 from __future__ import annotations
