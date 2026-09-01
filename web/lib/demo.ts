@@ -493,25 +493,25 @@ export function makeDemoVersion(
 
 export function demoPacketFor(appId: string): PacketItem[] {
   const ids = demoPacketIds[appId] ?? [];
-  return ids
-    .map((versionId, index) => {
-      const materialRow = demoMaterials.find((m) => m.versions.some((v) => v.id === versionId));
-      const versionRow = materialRow?.versions.find((v) => v.id === versionId) ?? null;
-      if (!materialRow || !versionRow) return null;
-      return {
-        binding: {
-          id: `bind-${appId}-${versionId}`,
-          application_id: appId,
-          material_id: materialRow.id,
-          material_version_id: versionRow.id,
-          sort_order: index,
-          created_at: "2026-06-12T10:00:00Z",
-        },
-        material: materialRow,
-        version: versionRow,
-      };
-    })
-    .filter((row): row is PacketItem => row !== null);
+  const items: PacketItem[] = [];
+  ids.forEach((versionId, index) => {
+    const materialRow = demoMaterials.find((m) => m.versions.some((v) => v.id === versionId));
+    const versionRow = materialRow?.versions.find((v) => v.id === versionId);
+    if (!materialRow || !versionRow) return;
+    items.push({
+      binding: {
+        id: `bind-${appId}-${versionId}`,
+        application_id: appId,
+        material_id: materialRow.id,
+        material_version_id: versionRow.id,
+        sort_order: index,
+        created_at: "2026-06-12T10:00:00Z",
+      },
+      material: materialRow,
+      version: versionRow,
+    });
+  });
+  return items;
 }
 
 export function setDemoPacket(appId: string, versionIds: string[]): void {
