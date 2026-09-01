@@ -284,7 +284,15 @@ V0 不展示 profile views、已读未回、浏览量、收藏量和无明确动
 
 Favorite 是独立 boolean，只表达收藏，不承担生命周期语义。
 
-### 10.3 Closing Rule
+### 10.3 Sponsorship
+
+`sponsorship` 存储签证 / 工作许可 / 雇主担保（visa / work-permit / employer-sponsorship）信息，不是生命周期状态。
+
+- CN 岗位可以留空（unknown / 无证据）。
+- EN 与 Global 岗位在 JD 或官方登记册有信号时应优先写入。
+- 现有 enrichment 与 Job Pool 展示（EN 可选显示）保留；pipeline / Status 工作不删除、不改设计。
+
+### 10.4 Closing Rule
 
 已投递约 14 天无推进且没有明确 Next Step 的岗位，可由用户触发批量 Closed。V0 不自动执行关闭。
 
@@ -592,6 +600,7 @@ V0 不调用付费 Threat Intelligence provider，也不把“未发现异常”
 | next_step | text | nullable |
 | comment | text | nullable |
 | applied_at | timestamptz | nullable |
+| sponsorship | jsonb | visa / work-permit / employer-sponsorship; CN may be empty; EN and Global prefer fill when available |
 | filter_state | text | included / excluded / review |
 | filter_reasons | jsonb | default [] |
 | trust_state | text | known / review / blocked |
@@ -604,6 +613,7 @@ Constraints：
 - status ∈ NULL / saved / to_do / applied / closed / reference。
 - status 变为 Applied 且 applied_at 为空时自动写入当前时间。
 - primary_source_url 必须对应至少一条 job_sources。
+- sponsorship 可为空。CN 允许 unknown；EN / Global 在有信号时优先填充。现有 enrichment 与展示路径保持不变。
 
 ### 16.6 `job_sources`
 

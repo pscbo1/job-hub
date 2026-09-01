@@ -53,6 +53,7 @@ Disable or remove upstream surfaces that expose these features in the V0 UI. Pre
 - High-confidence duplicate rules may merge automatically; uncertain matches enter Review.
 - Human-set Status, Favorite, Next Step, Comment, and applied_at are never overwritten by a collector run.
 - Favorite is independent from lifecycle Status.
+- `sponsorship` stores visa / work-permit / employer-sponsorship info. CN jobs may leave it empty. EN and Global jobs should prefer filling it when available. Keep existing enrichment and Job Pool display; do not remove or redesign sponsorship in pipeline/tracking PRs.
 - New jobs default to `NULL` (no lifecycle status until the user sets one).
 - Valid Status values are `saved`, `to_do`, `applied`, `closed`, and `reference`.
 - Setting Status to `Applied` writes applied_at when it is empty.

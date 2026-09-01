@@ -567,8 +567,8 @@ class JobRepository:
         Fingerprint is never used to merge. Ingest fields only on update —
         ``status``, ``match_score``, ``discovered_at``, ``favorite``,
         ``next_step``, ``comment``, ``applied_at``, ``close_reason``,
-        ``deadline``, ``follow_up_at``, and ``last_activity_at``
-        are preserved.
+        ``deadline``, ``follow_up_at``, ``last_activity_at``, and
+        ``sponsorship`` are preserved (enrichment writes sponsorship separately).
         """
         source_job_id = job.source_job_id.strip() or source_job_id_from_canonical_url(
             job.canonical_url

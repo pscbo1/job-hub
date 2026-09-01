@@ -278,7 +278,13 @@ class Job(BaseModel):
     )
     filter_state: str = Field(default="included")
     filter_reasons: list[str] = Field(default_factory=list)
-    sponsorship: SponsorshipInfo = Field(default_factory=SponsorshipInfo)
+    sponsorship: SponsorshipInfo = Field(
+        default_factory=SponsorshipInfo,
+        description=(
+            "Visa / work-permit / employer-sponsorship. CN jobs may leave this empty; "
+            "EN and Global jobs prefer filling it when available."
+        ),
+    )
     country: str = Field(
         default="",
         description="Job location country (ISO/EU/XX). Independent of source_market.",
