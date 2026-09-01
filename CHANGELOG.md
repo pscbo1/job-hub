@@ -14,6 +14,16 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ## [Unreleased]
 
+### Added
+
+- **PRD02 sealed product model (2026-09-01).** Job engagement is `null | reference | under_study | to_do`. Save reuses `favorite`. Application is 1:1 with Job (`draft | applied | interview | offer | closed`). Discover / My Jobs / Application IA. Dismiss↔Save mutex. Job-level archive (`archived_at`). Mark Submitted, abandon draft, Closed re-apply.
+
+### Changed
+
+- New jobs keep `engagement=null` (not Under Study). Applied / Interview / Offer / Closed no longer live on Job.
+- Application close reasons: `not_selected` / `no_response` / `withdrew` / `other` (Chinese UI: 未录用 / 无回复 / 主动结束 / 其他). No Rejected stage, column, or close_reason word.
+- Idle auto-archive (default off) sets Job `archived_at`, never Closed.
+
 ### Fixed
 
 - **Release workflow left the sdist and wheel unattached.** When a release was

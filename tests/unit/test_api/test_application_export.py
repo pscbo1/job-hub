@@ -36,7 +36,7 @@ def _seed(tmp_path: Path, count: int = 2) -> list[Application]:
             location="Remote",
             url=f"https://example.com/{i}",
             source="manual",
-            stage=ApplicationStage.APPLIED if i % 2 == 0 else ApplicationStage.SAVED,
+            stage=ApplicationStage.APPLIED if i % 2 == 0 else ApplicationStage.DRAFT,
             notes=f"note {i}",
         )
         repo.create_application(a)

@@ -21,6 +21,8 @@ Schema evolution
 from __future__ import annotations
 
 import json
+import sqlite3
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -30,14 +32,18 @@ from pydantic import ValidationError
 
 from job_sentinel.core.models import (
     Application,
+    ApplicationEvent,
     ApplicationStage,
     ApplicationStatus,
+    ApplicationSubmission,
+    CloseReason,
     DocumentKind,
     GeneratedDocument,
     Job,
+    JobEngagement,
     JobPosting,
     JobRaw,
-    JobStatus,
+    PacketSnapshot,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
 )
@@ -49,7 +55,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -58,7 +64,27 @@ _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
 _SPONSOR_EMPLOYERS = "sponsor_employers"
 _SPONSOR_SYNC = "sponsor_registry_sync"
-_FORBIDDEN_JOB_COLUMNS = frozenset({"favorite", "next_step", "comment", "applied_at"})
+_SUBMISSIONS_TABLE = "application_submissions"
+_APP_EVENTS_TABLE = "application_events"
+_MATERIALS_TABLE = "materials"
+_MATERIAL_VERSIONS_TABLE = "material_versions"
+_APP_BINDINGS_TABLE = "application_material_bindings"
+_DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
+_ENGAGEMENT_VALUES = ("reference", "under_study", "to_do")
+_UNSET: Any = object()
+_APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
+_LEGACY_JOB_STATUSES = frozenset({"applied", "interview", "interviewing", "offer", "closed"})
+
+
+def _legacy_status_projection(engagement: str | None) -> str | None:
+    """Project engagement onto the leftover ``jobs.status`` column.
+
+    Existing v5 databases CHECK ``status`` against saved/to_do/applied/closed/
+    reference. ``under_study`` must never be written there.
+    """
+    if engagement in {"reference", "to_do"}:
+        return engagement
+    return None
 
 
 class JobRepository:
@@ -144,6 +170,7 @@ class JobRepository:
         self._ensure_applications_table()
         self._ensure_documents_table()
         self._ensure_v0_tables()
+        self._ensure_prd02_tables()
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -224,30 +251,54 @@ class JobRepository:
                 updated_at TEXT NOT NULL,
                 fingerprint TEXT NOT NULL DEFAULT '',
                 status TEXT DEFAULT NULL,
+                engagement TEXT DEFAULT NULL,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                comment TEXT NOT NULL DEFAULT '',
+                next_step TEXT NOT NULL DEFAULT '',
+                deadline TEXT,
+                follow_up_at TEXT,
+                dismissed_at TEXT,
+                dismissed_note TEXT NOT NULL DEFAULT '',
+                archived_at TEXT,
+                archive_reason TEXT NOT NULL DEFAULT '',
+                last_activity_at TEXT,
                 match_score REAL,
                 market TEXT NOT NULL DEFAULT '',
                 filter_state TEXT NOT NULL DEFAULT 'included',
                 filter_reasons TEXT NOT NULL DEFAULT '[]',
                 CHECK (
-                    status IS NULL
-                    OR status IN ('saved', 'to_do', 'applied', 'closed', 'reference')
+                    engagement IS NULL
+                    OR engagement IN ('reference', 'under_study', 'to_do')
+                ),
+                CHECK (NOT (favorite = 1 AND dismissed_at IS NOT NULL AND dismissed_at != '')),
+                CHECK (
+                    NOT (
+                        engagement IS NOT NULL
+                        AND dismissed_at IS NOT NULL
+                        AND dismissed_at != ''
+                    )
                 )
             )
             """
         )
         jobs = self._table(_JOBS_TABLE)
-        extra = {col.name for col in jobs.columns} & _FORBIDDEN_JOB_COLUMNS
+        extra = {col.name for col in jobs.columns} & _DROP_JOB_COLUMNS
         if extra:
             jobs.transform(drop=extra)
-            logger.debug("Dropped non-V0 columns from jobs: {}", extra)
+            logger.debug("Dropped non-PRD02 columns from jobs: {}", extra)
 
         self._ensure_job_filter_columns()
         self._ensure_job_sponsorship_column()
+        self._ensure_prd02_job_columns()
         jobs.create_index(["source", "source_job_id"], unique=True, if_not_exists=True)
         for col in (
             "discovered_at",
             "published_at",
             "status",
+            "engagement",
+            "favorite",
+            "dismissed_at",
+            "archived_at",
             "source",
             "fingerprint",
             "canonical_url",
@@ -271,6 +322,281 @@ class JobRepository:
         names = {col.name for col in self._table(_JOBS_TABLE).columns}
         if "sponsorship" not in names:
             self._db.execute("ALTER TABLE jobs ADD COLUMN sponsorship TEXT NOT NULL DEFAULT '{}'")
+
+    def _ensure_prd02_job_columns(self) -> None:
+        """Add sealed-model columns to existing jobs tables (idempotent)."""
+        names = {col.name for col in self._table(_JOBS_TABLE).columns}
+        alters: list[str] = []
+        if "engagement" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN engagement TEXT DEFAULT NULL")
+        if "favorite" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
+        if "comment" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+        if "next_step" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN next_step TEXT NOT NULL DEFAULT ''")
+        if "deadline" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN deadline TEXT")
+        if "follow_up_at" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN follow_up_at TEXT")
+        if "dismissed_at" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN dismissed_at TEXT")
+        if "dismissed_note" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN dismissed_note TEXT NOT NULL DEFAULT ''")
+        if "archived_at" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN archived_at TEXT")
+        if "archive_reason" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''")
+        if "last_activity_at" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN last_activity_at TEXT")
+        for sql in alters:
+            self._db.execute(sql)
+
+    def _ensure_prd02_tables(self) -> None:
+        self._ensure_prd02_job_columns()
+        self._ensure_prd02_application_columns()
+        self._ensure_application_submissions_table()
+        self._ensure_application_events_table()
+        self._ensure_materials_stub_tables()
+        self._backfill_prd02_from_legacy_status()
+
+    def _ensure_prd02_application_columns(self) -> None:
+        names = {col.name for col in self._table(_APP_TABLE).columns}
+        if "job_id" not in names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN job_id TEXT")
+        if "close_reason" not in names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN close_reason TEXT")
+        if "close_note" not in names:
+            self._db.execute(
+                "ALTER TABLE applications ADD COLUMN close_note TEXT NOT NULL DEFAULT ''"
+            )
+        if "deleted_at" not in names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN deleted_at TEXT")
+        extra = {col.name for col in self._table(_APP_TABLE).columns} & {"archived_at"}
+        if extra:
+            self._table(_APP_TABLE).transform(drop=extra)
+            logger.debug("Dropped applications.archived_at (archive is Job-level only)")
+        self._db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS applications_job_id_active
+            ON applications(job_id)
+            WHERE job_id IS NOT NULL AND job_id != ''
+              AND (deleted_at IS NULL OR deleted_at = '')
+            """
+        )
+        self._remap_legacy_application_stages()
+
+    def _remap_legacy_application_stages(self) -> None:
+        self._db.execute("UPDATE applications SET stage = 'draft' WHERE stage = 'saved'")
+        self._db.execute("UPDATE applications SET stage = 'interview' WHERE stage = 'interviewing'")
+        self._db.execute(
+            """
+            UPDATE applications
+            SET stage = 'closed',
+                close_reason = CASE
+                    WHEN close_reason IS NULL OR close_reason = '' THEN 'not_selected'
+                    ELSE close_reason
+                END
+            WHERE stage = 'rejected'
+            """
+        )
+        self._db.execute("UPDATE applications SET stage = 'closed' WHERE stage = 'archived'")
+
+    def _ensure_application_submissions_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS application_submissions (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL,
+                submitted_at TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT '',
+                packet_snapshot TEXT NOT NULL DEFAULT '{}',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._table(_SUBMISSIONS_TABLE).create_index(["application_id"], if_not_exists=True)
+
+    def _ensure_application_events_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS application_events (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._table(_APP_EVENTS_TABLE).create_index(["application_id"], if_not_exists=True)
+
+    def _ensure_materials_stub_tables(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS materials (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'other',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS material_versions (
+                id TEXT PRIMARY KEY,
+                material_id TEXT NOT NULL,
+                version_label TEXT NOT NULL DEFAULT '',
+                file_ref TEXT NOT NULL DEFAULT '',
+                url TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS application_material_bindings (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL,
+                material_version_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    def _backfill_prd02_from_legacy_status(self) -> None:
+        """Map jobs.status (saved/applied/closed/…) onto engagement + applications."""
+        rows = list(self._table(_JOBS_TABLE).rows)
+        for row in rows:
+            job_id = str(row["id"])
+            status = str(row.get("status") or "")
+            current_engagement = row.get("engagement")
+            favorite = int(row.get("favorite") or 0)
+            dismissed_at = row.get("dismissed_at")
+            reasons = row.get("filter_reasons") or "[]"
+            if isinstance(reasons, str):
+                try:
+                    reason_list = json.loads(reasons)
+                except json.JSONDecodeError:
+                    reason_list = []
+            else:
+                reason_list = list(reasons) if isinstance(reasons, list) else []
+
+            target_engagement: str | None
+            if current_engagement in _ENGAGEMENT_VALUES:
+                target_engagement = str(current_engagement)
+            else:
+                target_engagement = None
+            target_favorite = favorite
+            target_dismissed = dismissed_at if dismissed_at else None
+
+            if status == "saved":
+                target_favorite = 1
+                target_engagement = None
+            elif status == "reference":
+                target_engagement = "reference"
+            elif status == "under_study":
+                target_engagement = "under_study"
+            elif status == "to_do":
+                target_engagement = "to_do"
+            elif status in _LEGACY_JOB_STATUSES:
+                target_engagement = "to_do"
+                self._ensure_migrated_application(job_id, row, status)
+
+            if "manual_dismiss" in reason_list:
+                if not target_dismissed:
+                    target_dismissed = _now_iso()
+                target_favorite = 0
+                target_engagement = None
+
+            if target_favorite == 1 and target_dismissed:
+                target_favorite = 0
+            if target_engagement is not None and target_dismissed:
+                target_engagement = None
+
+            target_status = _legacy_status_projection(target_engagement)
+            updates: dict[str, Any] = {}
+            if favorite != target_favorite:
+                updates["favorite"] = target_favorite
+            if (current_engagement or None) != target_engagement:
+                updates["engagement"] = target_engagement
+            if (row.get("status") or None) != target_status:
+                updates["status"] = target_status
+            if target_dismissed and not dismissed_at:
+                updates["dismissed_at"] = target_dismissed
+            if updates:
+                self._table(_JOBS_TABLE).update(job_id, updates)
+        self._db.execute(
+            """
+            UPDATE jobs SET favorite = 0, engagement = NULL, status = NULL
+            WHERE dismissed_at IS NOT NULL AND dismissed_at != ''
+            """
+        )
+
+    def _ensure_migrated_application(
+        self, job_id: str, row: dict[str, Any], legacy_status: str
+    ) -> None:
+        existing = list(
+            self._table(_APP_TABLE).rows_where(
+                f"job_id = ? AND {_APP_ACTIVE_SQL}",
+                [job_id],
+                limit=1,
+            )
+        )
+        if existing:
+            return
+        stage = {
+            "applied": "applied",
+            "interview": "interview",
+            "interviewing": "interview",
+            "offer": "offer",
+            "closed": "closed",
+        }.get(legacy_status, "applied")
+        close_reason = "other" if stage == "closed" else None
+        now = _now_iso()
+        app_id = uuid.uuid4().hex
+        self._table(_APP_TABLE).insert(
+            {
+                "id": app_id,
+                "job_id": job_id,
+                "title": row.get("title") or "",
+                "employer": row.get("company") or "",
+                "location": row.get("location") or "",
+                "url": row.get("job_url") or "",
+                "source": row.get("source") or "",
+                "stage": stage,
+                "salary": row.get("salary") or "",
+                "applied_date": "",
+                "deadline": "",
+                "notes": "",
+                "close_reason": close_reason,
+                "close_note": "",
+                "posting_id": "",
+                "resume_document_id": "",
+                "deleted_at": None,
+                "created_at": now,
+                "updated_at": now,
+                "raw_data": "{}",
+            }
+        )
+        if stage != "draft":
+            self._table(_SUBMISSIONS_TABLE).insert(
+                {
+                    "id": uuid.uuid4().hex,
+                    "application_id": app_id,
+                    "submitted_at": now,
+                    "channel": "migrated",
+                    "packet_snapshot": "{}",
+                    "notes": "legacy job status migration",
+                    "created_at": now,
+                }
+            )
 
     def _ensure_sponsorship_tables(self) -> None:
         self._ensure_job_sponsorship_column()
@@ -354,6 +680,8 @@ class JobRepository:
             self._ensure_job_filter_columns()
         if from_version < 5:
             self._ensure_sponsorship_tables()
+        if from_version < 6:
+            self._ensure_prd02_tables()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -421,7 +749,8 @@ class JobRepository:
 
         Dedup: (1) ``(source, source_job_id)`` (2) non-empty ``canonical_url``.
         Fingerprint is never used to merge. Ingest fields only on update —
-        ``status``, ``match_score``, and ``discovered_at`` are preserved.
+        human tracking (engagement, favorite, dismiss, archive, comment, next
+        step) and ``discovered_at`` / ``match_score`` are preserved.
         """
         source_job_id = job.source_job_id.strip() or source_job_id_from_canonical_url(
             job.canonical_url
@@ -515,12 +844,14 @@ class JobRepository:
         posted_since: datetime | None = None,
         country: str | None = None,
         remote: bool | None = None,
+        view: str = "discover",
+        include_dismissed: bool = False,
+        include_archived: bool = False,
     ) -> list[Job]:
         """Job Pool rows, newest ``discovered_at`` first.
 
         ``filter_state``: ``included`` (default pool), ``excluded``, or ``all``.
-        Market / source / posted date are SQL filters. Country and remote are
-        applied after location normalization so ISO mapping stays in one place.
+        ``view``: ``discover`` (default) or ``my_jobs``.
         """
         scan_limit = max(1, min(limit, 500))
         needs_scan = bool(
@@ -541,6 +872,16 @@ class JobRepository:
             clauses.append(
                 "(filter_state IS NULL OR filter_state = '' OR filter_state = 'included')"
             )
+        view_key = view.strip().lower()
+        if view_key == "my_jobs":
+            from job_sentinel.jobs.actions import my_jobs_predicate_sql
+
+            clauses.append(my_jobs_predicate_sql())
+        hide_stowed = state not in {"excluded", "all"}
+        if not include_dismissed and hide_stowed:
+            clauses.append("(dismissed_at IS NULL OR dismissed_at = '')")
+        if not include_archived and hide_stowed:
+            clauses.append("(archived_at IS NULL OR archived_at = '')")
         if market_values:
             market_clause, market_params = _market_sql(market_values, empty_market_sources)
             clauses.append(market_clause)
@@ -595,18 +936,66 @@ class JobRepository:
         )
         return self.get_hub_job(job_id)
 
-    def update_hub_job_status(self, job_id: str, status: JobStatus | None) -> Job | None:
-        """Set lifecycle status. ``None`` clears it. Does not touch ingest fields."""
+    def update_hub_job_status(self, job_id: str, status: JobEngagement | None) -> Job | None:
+        """Set engagement. ``None`` clears it. Does not touch ingest fields."""
+        return self.update_hub_job_tracking(job_id, engagement=status)
+
+    def update_hub_job_tracking(
+        self,
+        job_id: str,
+        *,
+        engagement: JobEngagement | object | None = _UNSET,
+        favorite: bool | object = _UNSET,
+        comment: str | object = _UNSET,
+        next_step: str | object = _UNSET,
+        deadline: datetime | object | None = _UNSET,
+        follow_up_at: datetime | object | None = _UNSET,
+        dismissed_at: datetime | object | None = _UNSET,
+        dismissed_note: str | object = _UNSET,
+        archived_at: datetime | object | None = _UNSET,
+        archive_reason: str | object = _UNSET,
+    ) -> Job | None:
+        """Patch human tracking fields. ``_UNSET`` means leave unchanged."""
         if self.get_hub_job(job_id) is None:
             return None
-        self._table(_JOBS_TABLE).update(
-            job_id,
-            {
-                "status": None if status is None else status.value,
-                "updated_at": _now_iso(),
-            },
-        )
+        payload: dict[str, Any] = {"updated_at": _now_iso()}
+        if engagement is not _UNSET:
+            value = engagement.value if isinstance(engagement, JobEngagement) else None
+            payload["engagement"] = value
+            payload["status"] = _legacy_status_projection(value)
+        if favorite is not _UNSET:
+            payload["favorite"] = 1 if favorite else 0
+        if comment is not _UNSET:
+            payload["comment"] = comment
+        if next_step is not _UNSET:
+            payload["next_step"] = next_step
+        if deadline is not _UNSET:
+            payload["deadline"] = (
+                _optional_iso(deadline) if isinstance(deadline, datetime) else None
+            )
+        if follow_up_at is not _UNSET:
+            payload["follow_up_at"] = (
+                _optional_iso(follow_up_at) if isinstance(follow_up_at, datetime) else None
+            )
+        if dismissed_at is not _UNSET:
+            payload["dismissed_at"] = (
+                _optional_iso(dismissed_at) if isinstance(dismissed_at, datetime) else None
+            )
+        if dismissed_note is not _UNSET:
+            payload["dismissed_note"] = dismissed_note
+        if archived_at is not _UNSET:
+            payload["archived_at"] = (
+                _optional_iso(archived_at) if isinstance(archived_at, datetime) else None
+            )
+        if archive_reason is not _UNSET:
+            payload["archive_reason"] = archive_reason
+        self._table(_JOBS_TABLE).update(job_id, payload)
         return self.get_hub_job(job_id)
+
+    def touch_hub_job_activity(self, job_id: str) -> None:
+        if self.get_hub_job(job_id) is None:
+            return
+        self._table(_JOBS_TABLE).update(job_id, {"last_activity_at": _now_iso()})
 
     def update_hub_job_sponsorship(self, job_id: str, info: SponsorshipInfo) -> Job | None:
         """Store sponsorship enrichment. Does not touch status or ingest fields."""
@@ -732,7 +1121,16 @@ class JobRepository:
 
     def create_application(self, app: Application) -> Application:
         """Persist a new Application row and return it."""
-        self._table(_APP_TABLE).insert(_app_to_row(app))
+        if app.job_id:
+            existing = self.get_application_for_job(app.job_id, include_deleted=False)
+            if existing is not None:
+                msg = f"Job {app.job_id} already has an application"
+                raise ValueError(msg)
+        try:
+            self._table(_APP_TABLE).insert(_app_to_row(app))
+        except sqlite3.IntegrityError as exc:
+            msg = f"Job {app.job_id} already has an application"
+            raise ValueError(msg) from exc
         logger.debug("Application created | id={}", app.id)
         return app
 
@@ -740,29 +1138,47 @@ class JobRepository:
         """Fetch a single Application by id, or None."""
         try:
             row = self._table(_APP_TABLE).get(app_id)
-            return _app_from_row(dict(row))
+            return self._application_from_storage(dict(row))
         except sqlite_utils.db.NotFoundError:
             return None
+
+    def get_application_for_job(
+        self, job_id: str, *, include_deleted: bool = False
+    ) -> Application | None:
+        if not job_id:
+            return None
+        if include_deleted:
+            where = "job_id = ?"
+            params: list[str] = [job_id]
+        else:
+            where = f"job_id = ? AND {_APP_ACTIVE_SQL}"
+            params = [job_id]
+        rows = list(self._table(_APP_TABLE).rows_where(where, params, limit=1))
+        return self._application_from_storage(dict(rows[0])) if rows else None
 
     def list_applications(
         self,
         stage: ApplicationStage | None = None,
         limit: int = 200,
+        *,
+        include_deleted: bool = False,
     ) -> list[Application]:
         """Return applications newest-first, optionally filtered by stage."""
+        clauses: list[str] = []
+        params: list[str] = []
+        if not include_deleted:
+            clauses.append(_APP_ACTIVE_SQL)
         if stage is not None:
-            rows = self._table(_APP_TABLE).rows_where(
-                "stage = ?",
-                [stage.value],
-                order_by="created_at DESC",
-                limit=limit,
-            )
-        else:
-            rows = self._table(_APP_TABLE).rows_where(
-                order_by="created_at DESC",
-                limit=limit,
-            )
-        return [_app_from_row(dict(r)) for r in rows]
+            clauses.append("stage = ?")
+            params.append(stage.value)
+        where = " AND ".join(clauses) if clauses else "1=1"
+        rows = self._table(_APP_TABLE).rows_where(
+            where,
+            params,
+            order_by="created_at DESC",
+            limit=limit,
+        )
+        return [self._application_from_storage(dict(r)) for r in rows]
 
     def update_application(self, app_id: str, **fields: Any) -> bool:
         """
@@ -773,27 +1189,89 @@ class JobRepository:
         if self.get_application(app_id) is None:
             return False
         fields["updated_at"] = _now_iso()
-        # Coerce stage enum to its value string if passed.
         if "stage" in fields and isinstance(fields["stage"], ApplicationStage):
             fields["stage"] = fields["stage"].value
+        if "close_reason" in fields:
+            reason = fields["close_reason"]
+            if isinstance(reason, CloseReason):
+                fields["close_reason"] = reason.value
+            elif reason is None:
+                fields["close_reason"] = None
         self._table(_APP_TABLE).update(app_id, fields)
         return True
 
     def delete_application(self, app_id: str) -> bool:
-        """Delete an application. Returns True if the row existed."""
+        """Hard-delete an application. Returns True if the row existed."""
         if self.get_application(app_id) is None:
             return False
+        self._db.execute("DELETE FROM application_submissions WHERE application_id = ?", [app_id])
+        self._db.execute("DELETE FROM application_events WHERE application_id = ?", [app_id])
+        self._db.execute(
+            "DELETE FROM application_material_bindings WHERE application_id = ?", [app_id]
+        )
         self._table(_APP_TABLE).delete(app_id)
         return True
+
+    def soft_delete_application(self, app_id: str) -> bool:
+        if self.get_application(app_id) is None:
+            return False
+        self._table(_APP_TABLE).update(app_id, {"deleted_at": _now_iso(), "updated_at": _now_iso()})
+        return True
+
+    def restore_deleted_application(self, app_id: str) -> bool:
+        try:
+            row = self._table(_APP_TABLE).get(app_id)
+        except sqlite_utils.db.NotFoundError:
+            return False
+        self._table(_APP_TABLE).update(
+            app_id,
+            {
+                "deleted_at": None,
+                "stage": ApplicationStage.DRAFT.value,
+                "close_reason": None,
+                "close_note": "",
+                "updated_at": _now_iso(),
+            },
+        )
+        _ = row
+        return True
+
+    def append_application_submission(self, submission: ApplicationSubmission) -> None:
+        self._table(_SUBMISSIONS_TABLE).insert(_submission_to_row(submission))
+
+    def list_application_submissions(self, application_id: str) -> list[ApplicationSubmission]:
+        rows = self._table(_SUBMISSIONS_TABLE).rows_where(
+            "application_id = ?",
+            [application_id],
+            order_by="submitted_at ASC",
+        )
+        return [_submission_from_row(dict(r)) for r in rows]
+
+    def append_application_event(self, event: ApplicationEvent) -> None:
+        self._table(_APP_EVENTS_TABLE).insert(_event_to_row(event))
+
+    def list_application_events(self, application_id: str) -> list[ApplicationEvent]:
+        rows = self._table(_APP_EVENTS_TABLE).rows_where(
+            "application_id = ?",
+            [application_id],
+            order_by="created_at ASC",
+        )
+        return [_event_from_row(dict(r)) for r in rows]
+
+    def _application_from_storage(self, row: dict[str, Any]) -> Application:
+        app = _app_from_row(row)
+        app.submissions = self.list_application_submissions(app.id)
+        return app
 
     def application_stats(self) -> dict[str, int]:
         """Count of applications per stage, plus a 'total' key."""
         counts: dict[str, int] = {s.value: 0 for s in ApplicationStage}
         for row in self._db.execute(
-            f"SELECT stage, COUNT(*) AS cnt FROM {_APP_TABLE} GROUP BY stage"  # noqa: S608
+            f"SELECT stage, COUNT(*) AS cnt FROM {_APP_TABLE} "  # noqa: S608
+            f"WHERE {_APP_ACTIVE_SQL} GROUP BY stage"
         ).fetchall():
             counts[row[0]] = row[1]
-        counts["total"] = sum(counts.values())
+        counts["total"] = sum(v for k, v in counts.items() if k != "total")
         return counts
 
     def application_analytics(self) -> dict[str, object]:
@@ -808,16 +1286,17 @@ class JobRepository:
         # ── Funnel ────────────────────────────────────────────────────────
         stage_counts: dict[str, int] = {s.value: 0 for s in ApplicationStage}
         for row in self._db.execute(
-            f"SELECT stage, COUNT(*) AS cnt FROM {_APP_TABLE} GROUP BY stage"  # noqa: S608
+            f"SELECT stage, COUNT(*) AS cnt FROM {_APP_TABLE} "  # noqa: S608
+            f"WHERE {_APP_ACTIVE_SQL} GROUP BY stage"
         ).fetchall():
             stage_counts[row[0]] = row[1]
 
         applied = stage_counts.get(ApplicationStage.APPLIED, 0)
         funnel: list[dict[str, object]] = []
         downstream = [
-            ApplicationStage.INTERVIEWING,
+            ApplicationStage.INTERVIEW,
             ApplicationStage.OFFER,
-            ApplicationStage.REJECTED,
+            ApplicationStage.CLOSED,
         ]
         for stage in ApplicationStage:
             cnt = stage_counts[stage.value]
@@ -826,8 +1305,8 @@ class JobRepository:
                 pct = round(cnt / applied * 100, 1)
             funnel.append({"stage": stage.value, "count": cnt, "pct_of_applied": pct})
 
-        # Response = interviewing + offer (any non-silence after applying)
-        responded = stage_counts.get(ApplicationStage.INTERVIEWING, 0) + stage_counts.get(
+        # Response = interview + offer (any non-silence after applying)
+        responded = stage_counts.get(ApplicationStage.INTERVIEW, 0) + stage_counts.get(
             ApplicationStage.OFFER, 0
         )
         overall_response_rate: float | None = (
@@ -840,9 +1319,10 @@ class JobRepository:
             SELECT
                 source,
                 COUNT(*) AS total,
-                SUM(CASE WHEN stage IN ('interviewing','offer') THEN 1 ELSE 0 END) AS responded
+                SUM(CASE WHEN stage IN ('interview','offer') THEN 1 ELSE 0 END) AS responded
             FROM {_APP_TABLE}
-            WHERE stage NOT IN ('saved','archived')
+            WHERE stage NOT IN ('draft')
+              AND (deleted_at IS NULL OR deleted_at = '')
             GROUP BY source
             ORDER BY total DESC
             """  # noqa: S608
@@ -870,6 +1350,7 @@ class JobRepository:
             WHERE applied_date != ''
               AND applied_date IS NOT NULL
               AND date(applied_date) >= date('now', '-56 days')
+              AND {_APP_ACTIVE_SQL}
             GROUP BY week
             ORDER BY week ASC
             """  # noqa: S608
@@ -991,6 +1472,7 @@ def _parse_dt(value: str) -> datetime:
 def _app_to_row(app: Application) -> dict[str, Any]:
     return {
         "id": app.id,
+        "job_id": app.job_id,
         "title": app.title,
         "employer": app.employer,
         "location": app.location,
@@ -1001,8 +1483,11 @@ def _app_to_row(app: Application) -> dict[str, Any]:
         "applied_date": app.applied_date,
         "deadline": app.deadline,
         "notes": app.notes,
+        "close_reason": app.close_reason.value if app.close_reason else None,
+        "close_note": app.close_note,
         "posting_id": app.posting_id,
         "resume_document_id": app.resume_document_id,
+        "deleted_at": _optional_iso(app.deleted_at),
         "created_at": app.created_at.isoformat(),
         "updated_at": app.updated_at.isoformat(),
         "raw_data": json.dumps(app.raw_data),
@@ -1010,20 +1495,28 @@ def _app_to_row(app: Application) -> dict[str, Any]:
 
 
 def _app_from_row(row: dict[str, Any]) -> Application:
+    raw_reason = row.get("close_reason")
+    reason: CloseReason | None = None
+    if raw_reason and str(raw_reason) in {c.value for c in CloseReason}:
+        reason = CloseReason(str(raw_reason))
     return Application(
         id=row["id"],
+        job_id=row.get("job_id") or None,
         title=row.get("title", ""),
         employer=row.get("employer", ""),
         location=row.get("location", ""),
         url=row.get("url", ""),
         source=row.get("source", ""),
-        stage=ApplicationStage(row.get("stage", ApplicationStage.SAVED.value)),
+        stage=row.get("stage", ApplicationStage.DRAFT.value),
         salary=row.get("salary", ""),
         applied_date=row.get("applied_date", ""),
         deadline=row.get("deadline", ""),
         notes=row.get("notes", ""),
+        close_reason=reason,
+        close_note=row.get("close_note") or "",
         posting_id=row.get("posting_id") or None,
         resume_document_id=row.get("resume_document_id") or None,
+        deleted_at=_parse_optional_dt(row.get("deleted_at")),
         created_at=_parse_dt(row.get("created_at", "")),
         updated_at=_parse_dt(row.get("updated_at", "")),
         raw_data=json.loads(row.get("raw_data") or "{}"),
@@ -1157,6 +1650,7 @@ def _parse_optional_dt(value: object) -> datetime | None:
 
 
 def _hub_job_to_row(job: Job) -> dict[str, Any]:
+    engagement = job.engagement.value if job.engagement is not None else None
     return {
         "id": job.id,
         "source": job.source,
@@ -1174,7 +1668,18 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "last_seen_at": job.last_seen_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
         "fingerprint": job.fingerprint,
-        "status": job.status.value if job.status is not None else None,
+        "status": _legacy_status_projection(engagement),
+        "engagement": engagement,
+        "favorite": 1 if job.favorite else 0,
+        "comment": job.comment,
+        "next_step": job.next_step,
+        "deadline": _optional_iso(job.deadline),
+        "follow_up_at": _optional_iso(job.follow_up_at),
+        "dismissed_at": _optional_iso(job.dismissed_at),
+        "dismissed_note": job.dismissed_note,
+        "archived_at": _optional_iso(job.archived_at),
+        "archive_reason": job.archive_reason,
+        "last_activity_at": _optional_iso(job.last_activity_at),
         "match_score": job.match_score,
         "market": job.market,
         "filter_state": job.filter_state or "included",
@@ -1186,8 +1691,10 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
 def _hub_job_from_row(row: dict[str, Any]) -> Job:
     from job_sentinel.geo.country import normalize_location
 
-    raw_status = row.get("status")
-    status: JobStatus | None = JobStatus(raw_status) if raw_status else None
+    raw_engagement = row.get("engagement") or row.get("status")
+    engagement: JobEngagement | None = None
+    if raw_engagement and str(raw_engagement) in {e.value for e in JobEngagement}:
+        engagement = JobEngagement(str(raw_engagement))
     score = row.get("match_score")
     location = row.get("location", "") or ""
     employment = row.get("employment_type", "") or ""
@@ -1209,7 +1716,17 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         last_seen_at=_parse_dt(row.get("last_seen_at", "")),
         updated_at=_parse_dt(row.get("updated_at", "")),
         fingerprint=row.get("fingerprint", ""),
-        status=status,
+        engagement=engagement,
+        favorite=bool(int(row.get("favorite") or 0)),
+        comment=row.get("comment") or "",
+        next_step=row.get("next_step") or "",
+        deadline=_parse_optional_dt(row.get("deadline")),
+        follow_up_at=_parse_optional_dt(row.get("follow_up_at")),
+        dismissed_at=_parse_optional_dt(row.get("dismissed_at")),
+        dismissed_note=row.get("dismissed_note") or "",
+        archived_at=_parse_optional_dt(row.get("archived_at")),
+        archive_reason=row.get("archive_reason") or "",
+        last_activity_at=_parse_optional_dt(row.get("last_activity_at")),
         match_score=float(score) if score is not None else None,
         market=row.get("market", ""),
         filter_state=str(row.get("filter_state") or "included"),
@@ -1218,6 +1735,57 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         country=geo.code,
         country_name=geo.name,
         is_remote=geo.is_remote,
+    )
+
+
+def _submission_to_row(item: ApplicationSubmission) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "application_id": item.application_id,
+        "submitted_at": item.submitted_at.isoformat(),
+        "channel": item.channel,
+        "packet_snapshot": json.dumps(item.packet_snapshot.model_dump(mode="json")),
+        "notes": item.notes,
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+def _submission_from_row(row: dict[str, Any]) -> ApplicationSubmission:
+    raw = row.get("packet_snapshot") or "{}"
+    parsed = json.loads(raw) if isinstance(raw, str) else raw
+    snapshot = (
+        PacketSnapshot.model_validate(parsed) if isinstance(parsed, dict) else PacketSnapshot()
+    )
+    return ApplicationSubmission(
+        id=row["id"],
+        application_id=row.get("application_id", ""),
+        submitted_at=_parse_dt(row.get("submitted_at", "")),
+        channel=row.get("channel") or "",
+        packet_snapshot=snapshot,
+        notes=row.get("notes") or "",
+        created_at=_parse_dt(row.get("created_at", "")),
+    )
+
+
+def _event_to_row(event: ApplicationEvent) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "application_id": event.application_id,
+        "kind": event.kind,
+        "payload": json.dumps(event.payload),
+        "created_at": event.created_at.isoformat(),
+    }
+
+
+def _event_from_row(row: dict[str, Any]) -> ApplicationEvent:
+    raw = row.get("payload") or "{}"
+    parsed = json.loads(raw) if isinstance(raw, str) else raw
+    return ApplicationEvent(
+        id=row["id"],
+        application_id=row.get("application_id", ""),
+        kind=row.get("kind") or "",
+        payload=parsed if isinstance(parsed, dict) else {},
+        created_at=_parse_dt(row.get("created_at", "")),
     )
 
 

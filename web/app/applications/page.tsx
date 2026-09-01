@@ -9,9 +9,14 @@ import { PopoverSelect } from "@/components/ui/popover-select";
 import {
   type Application,
   type ApplicationStage,
+  type CloseReason,
+  CLOSE_REASON_LABELS_ZH,
+  abandonApplication,
+  closeApplication,
   deleteApplication,
   getApplications,
   getApplicationStats,
+  submitApplication,
   updateApplication,
 } from "@/lib/api";
 import { cn, externalUrl } from "@/lib/utils";
@@ -81,22 +86,14 @@ function ExportMenu({ count }: { count: number }) {
   );
 }
 
-const STAGES: ApplicationStage[] = [
-  "saved",
-  "applied",
-  "interviewing",
-  "offer",
-  "rejected",
-  "archived",
-];
+const STAGES: ApplicationStage[] = ["draft", "applied", "interview", "offer", "closed"];
 
 const STAGE_STYLES: Record<ApplicationStage, string> = {
-  saved: "bg-stone-200 text-stone-700",
+  draft: "bg-stone-200 text-stone-700",
   applied: "bg-sky-100 text-sky-700",
-  interviewing: "bg-violet-100 text-violet-700",
+  interview: "bg-violet-100 text-violet-700",
   offer: "bg-emerald-100 text-emerald-700",
-  rejected: "bg-red-100 text-red-700",
-  archived: "bg-stone-100 text-stone-500",
+  closed: "bg-stone-100 text-stone-500",
 };
 
 export default function ApplicationsPage() {
@@ -130,9 +127,26 @@ export default function ApplicationsPage() {
     if (ok) void refresh();
   }
 
+  async function onSubmit(id: string) {
+    const ok = await submitApplication(id);
+    if (ok) void refresh();
+  }
+
+  async function onClose(id: string, reason: CloseReason) {
+    const ok = await closeApplication(id, reason);
+    if (ok) void refresh();
+  }
+
+  async function onReapply(id: string) {
+    const ok = await submitApplication(id, { notes: "re-apply" });
+    if (ok) void refresh();
+  }
+
   async function onDelete(id: string) {
+    const row = apps.find((a) => a.id === id);
     setApps((prev) => prev.filter((a) => a.id !== id));
-    await deleteApplication(id);
+    if (row?.stage === "draft") await abandonApplication(id);
+    else await deleteApplication(id);
     void refresh();
   }
 
@@ -168,7 +182,10 @@ export default function ApplicationsPage() {
           value={a.stage}
           onChange={(v) => onStage(a.id, v as ApplicationStage)}
           aria-label={`Stage for ${a.title}`}
-          options={STAGES.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))}
+          options={(a.stage === "draft"
+            ? (["draft"] as ApplicationStage[])
+            : STAGES.filter((s) => s !== "draft" && (s !== "closed" || a.stage === "closed"))
+          ).map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))}
           className={cn(
             "h-8 min-w-[110px] border-0 px-3 pr-8 text-xs font-medium capitalize shadow-none",
             STAGE_STYLES[a.stage],
@@ -241,7 +258,7 @@ export default function ApplicationsPage() {
       header: "",
       headerClassName: "w-24",
       render: (a) => (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {a.url && (
             <a
               href={externalUrl(a.url)}
@@ -250,16 +267,52 @@ export default function ApplicationsPage() {
               className="text-brand hover:underline"
               title="Open posting"
             >
-              ↗
+              Open source
             </a>
+          )}
+          {(a.stage === "draft" || a.stage === "closed") && (
+            <button
+              type="button"
+              onClick={() => (a.stage === "closed" ? onReapply(a.id) : onSubmit(a.id))}
+              className="text-xs font-medium text-ink hover:underline"
+            >
+              {a.stage === "closed" ? "Mark submitted (re-apply)" : "Mark submitted"}
+            </button>
+          )}
+          {a.stage !== "draft" && a.stage !== "closed" && (
+            <label className="text-xs text-muted">
+              Close
+              <select
+                aria-label={`Close ${a.title}`}
+                defaultValue=""
+                onChange={(e) => {
+                  const v = e.target.value as CloseReason;
+                  if (v) void onClose(a.id, v);
+                  e.currentTarget.value = "";
+                }}
+                className="ml-1 rounded border border-line bg-surface px-1 py-0.5 text-xs"
+              >
+                <option value="">reason</option>
+                {(Object.keys(CLOSE_REASON_LABELS_ZH) as CloseReason[]).map((r) => (
+                  <option key={r} value={r}>
+                    {CLOSE_REASON_LABELS_ZH[r]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {a.stage === "closed" && a.close_reason && (
+            <span className="text-xs text-muted">
+              {CLOSE_REASON_LABELS_ZH[a.close_reason] ?? a.close_reason}
+            </span>
           )}
           <button
             onClick={() => onDelete(a.id)}
             className="text-muted transition-colors hover:text-red-600"
-            title="Delete"
-            aria-label={`Delete ${a.title}`}
+            title={a.stage === "draft" ? "Abandon draft" : "Delete"}
+            aria-label={a.stage === "draft" ? `Abandon ${a.title}` : `Delete ${a.title}`}
           >
-            ✕
+            {a.stage === "draft" ? "Abandon" : "✕"}
           </button>
         </div>
       ),
@@ -282,7 +335,7 @@ export default function ApplicationsPage() {
       <header className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
         <p className="mt-1 text-sm text-muted">
-          Your whole pipeline in one place — track every role from saved to offer.
+          Your pipeline from draft through closed. Close reasons are 未录用 / 无回复 / 主动结束 / 其他 — never Rejected.
         </p>
       </header>
 

@@ -153,7 +153,9 @@ export const demoHubJobs: HubJob[] = [
     job_url: "http://www.zhaopin.com/jobdetail/CC383625320J40878294709.htm",
     published_at: null,
     discovered_at: "2026-08-25T00:00:00Z",
+    engagement: null,
     status: null,
+    favorite: false,
     match_score: null,
     salary: "面议",
   },
@@ -166,7 +168,9 @@ export const demoHubJobs: HubJob[] = [
     job_url: "https://www.liepin.com/job/1985138523.shtml",
     published_at: null,
     discovered_at: "2026-08-25T00:00:00Z",
-    status: "saved",
+    status: "reference",
+    engagement: "reference",
+    favorite: true,
     match_score: null,
     salary: "23-50k·15薪",
   },
@@ -180,11 +184,11 @@ function uid(): string {
 
 export const demoApplications: Application[] = [
   app("Backend Engineer (Python)", "Stripe", "Remote", "remoteok", "applied", { applied_date: "2026-06-09", salary: "$120k–$160k" }),
-  app("ML Engineer", "Hugging Face", "Remote", "himalayas", "interviewing", { applied_date: "2026-06-05" }),
-  app("Platform Engineer", "Datadog", "New York, NY", "adzuna", "saved", {}),
+  app("ML Engineer", "Hugging Face", "Remote", "himalayas", "interview", { applied_date: "2026-06-05" }),
+  app("Platform Engineer", "Datadog", "New York, NY", "adzuna", "draft", {}),
   app("SWE Intern — Summer 2026", "Google", "Mountain View, CA", "manual", "applied", { applied_date: "2026-06-01" }),
   app("Backend Intern", "Cloudflare", "Remote", "remoteok", "offer", { applied_date: "2026-05-20" }),
-  app("Data Engineer", "Snowflake", "Austin, TX", "adzuna", "rejected", { applied_date: "2026-05-15" }),
+  app("Data Engineer", "Snowflake", "Austin, TX", "adzuna", "closed", { applied_date: "2026-05-15", close_reason: "not_selected" }),
 ];
 
 function app(
@@ -210,6 +214,8 @@ function app(
     notes: "",
     posting_id: null,
     resume_document_id: null,
+    close_reason: opts.close_reason ?? null,
+    close_note: opts.close_note ?? "",
     created_at: now,
     updated_at: now,
     raw_data: {},
@@ -217,12 +223,11 @@ function app(
 }
 
 export const demoStats: Record<string, number> = {
-  saved: 1,
+  draft: 1,
   applied: 2,
-  interviewing: 1,
+  interview: 1,
   offer: 1,
-  rejected: 1,
-  archived: 0,
+  closed: 1,
   total: 6,
 };
 

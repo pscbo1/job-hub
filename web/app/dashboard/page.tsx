@@ -22,12 +22,11 @@ import {
 import { cn } from "@/lib/utils";
 
 const STAGES: ApplicationStage[] = [
-  "saved",
+  "draft",
   "applied",
-  "interviewing",
+  "interview",
   "offer",
-  "rejected",
-  "archived",
+  "closed",
 ];
 
 export default function DashboardPage() {
@@ -73,7 +72,7 @@ export default function DashboardPage() {
   }
 
   const total = stats.total ?? 0;
-  const active = (stats.applied ?? 0) + (stats.interviewing ?? 0);
+  const active = (stats.applied ?? 0) + (stats.interview ?? 0);
   const deadlines: { j: HubJob; d: number }[] = [];
   const recentApps = [...apps]
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
@@ -95,7 +94,7 @@ export default function DashboardPage() {
       {/* Headline stats */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Tracked roles" value={total} />
-        <Stat label="Active (applied + interviewing)" value={active} />
+        <Stat label="Active (applied + interview)" value={active} />
         <Stat label="Offers" value={stats.offer ?? 0} accent="text-emerald-600" />
         <Stat label="Documents built" value={docs.length} />
       </div>
@@ -129,7 +128,7 @@ export default function DashboardPage() {
             </div>
             <div className="mt-1 text-xs text-muted">Overall response rate</div>
             <div className="mt-0.5 text-[11px] text-muted/70">
-              interviewing + offers ÷ applied
+              interview + offers ÷ applied
             </div>
           </Card>
 
@@ -154,7 +153,7 @@ export default function DashboardPage() {
                           "h-full rounded-full",
                           e.stage === "offer"
                             ? "bg-emerald-500"
-                            : e.stage === "rejected"
+                            : e.stage === "closed"
                               ? "bg-red-400"
                               : "bg-brand",
                         )}

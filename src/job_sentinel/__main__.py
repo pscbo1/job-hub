@@ -1024,7 +1024,7 @@ def _open_repo() -> _JobRepository:
 
 @apps_app.command("list")
 def apps_list(
-    stage: str = typer.Option("", "--stage", "-s", help="Filter by stage (saved/applied/…)"),
+    stage: str = typer.Option("", "--stage", "-s", help="Filter by stage (draft/applied/…)"),
     limit: int = typer.Option(200, "--limit", "-n", help="Max rows to show"),
 ) -> None:
     """List tracked applications."""
@@ -1072,7 +1072,7 @@ def apps_add(
     location: str = typer.Option("", "--location", "-l", help="Work location"),
     url: str = typer.Option("", "--url", "-u", help="Posting URL"),
     source: str = typer.Option("", "--source", help="Source (e.g. manual, adzuna)"),
-    stage: str = typer.Option("saved", "--stage", "-s", help="Initial stage"),
+    stage: str = typer.Option("draft", "--stage", "-s", help="Initial stage"),
     salary: str = typer.Option("", "--salary", help="Salary range / offer"),
     applied_date: str = typer.Option("", "--applied-date", help="ISO date (YYYY-MM-DD)"),
     deadline: str = typer.Option("", "--deadline", help="Application deadline"),

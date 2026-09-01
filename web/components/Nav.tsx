@@ -7,15 +7,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { OPEN_EVENT } from "@/components/CommandPalette";
 import { getAuthStatus, type AuthStatus } from "@/lib/api";
-import { jobsPath, marketFromPath, searchPath, type MarketId } from "@/lib/markets";
+import { jobsPath, marketFromPath, myJobsPath, searchPath, type MarketId } from "@/lib/markets";
 import { readLastMarket } from "@/lib/marketPrefs";
 import { cn } from "@/lib/utils";
 
 const PRIMARY = [
   { href: "/search", label: "Collect Jobs", page: "search" as const },
-  { href: "/jobs", label: "Job Pool", page: "jobs" as const },
+  { href: "/jobs", label: "Discover", page: "jobs" as const },
+  { href: "/my-jobs", label: "My Jobs", page: "my-jobs" as const },
   { href: "/applications", label: "Applications" },
-  { href: "/resumes", label: "Documents" },
 ];
 
 const SECONDARY = [
@@ -108,10 +108,12 @@ export function Nav() {
   function itemHref(l: (typeof PRIMARY)[number]): string {
     if (l.page === "search") return searchPath(market);
     if (l.page === "jobs") return jobsPath(market);
+    if (l.page === "my-jobs") return myJobsPath(market);
     return l.href;
   }
   function itemActive(l: (typeof PRIMARY)[number]): boolean {
-    if (l.page === "jobs") return /\/jobs(?:\/|$)/.test(pathname);
+    if (l.page === "jobs") return /\/jobs(?:\/|$)/.test(pathname) && !pathname.includes("my-jobs");
+    if (l.page === "my-jobs") return /\/my-jobs(?:\/|$)/.test(pathname);
     if (l.page === "search") return /\/search(?:\/|$)/.test(pathname);
     return isActive(l.href);
   }

@@ -50,7 +50,7 @@ export function SearchResultCard({ job, index }: { job: JobPosting; index: numbe
       location: job.location,
       url: job.portal_url,
       source: job.source_adapter,
-      stage: "saved",
+      stage: "draft",
     });
     setBusy(false);
     if (created) setTracked(true);

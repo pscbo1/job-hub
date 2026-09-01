@@ -11,7 +11,7 @@ import {
   type PoolView,
   resolveDiscoveredFilter,
 } from "@/lib/discoveredRange";
-import { MARKET_ORDER, parseMarketId, type MarketId } from "@/lib/markets";
+import { MARKET_ORDER, parseMarketId } from "@/lib/markets";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,7 @@ export function generateStaticParams() {
   return MARKET_ORDER.map((market) => ({ market }));
 }
 
-export default async function MarketJobsPage({
+export default async function MarketMyJobsPage({
   params,
   searchParams,
 }: {
@@ -53,21 +53,20 @@ export default async function MarketJobsPage({
     sources: sources.length ? sources : undefined,
     remote: remote || undefined,
     postedDays: postedDays || undefined,
+    view: "my_jobs" as const,
   };
-  const [jobs, otherPool, catalog] = await Promise.all([
-    getJobs(200, filter.since, pool, listQuery),
-    getJobs(200, filter.since, pool === "excluded" ? "included" : "excluded", listQuery),
+  const [jobs, catalog] = await Promise.all([
+    getJobs(200, filter.since, pool === "excluded" ? "all" : "included", listQuery),
     getCollectSources(market),
   ]);
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-5 py-12">
       <div className="space-y-3">
-        <MarketSwitch current={market} page="jobs" />
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Discover</h1>
+        <MarketSwitch current={market} page="my-jobs" />
+        <h1 className="text-3xl font-bold tracking-tight text-ink">My Jobs</h1>
         <p className="mt-1 text-sm text-muted">
-          {marketLabel(market)} jobs from collectors. Save, start review, or open the source. New
-          jobs have no engagement until you act.
+          Jobs you saved, marked reference / under study / to do, or started an application for.
         </p>
       </div>
 
@@ -76,18 +75,15 @@ export default async function MarketJobsPage({
         range={filter.range}
         customSince={filter.customSince}
         pool={pool}
-        otherCount={otherPool.length}
+        otherCount={0}
         market={market}
         country={country}
         remote={remote}
         postedDays={postedDays}
         sources={sources}
         catalogSources={(catalog?.sources ?? []).map((s) => ({ id: s.id, label: s.label }))}
+        variant="my"
       />
     </div>
   );
-}
-
-function marketLabel(market: MarketId): string {
-  return market === "cn" ? "CN Market" : "EN Market";
 }

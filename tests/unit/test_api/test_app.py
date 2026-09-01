@@ -66,7 +66,7 @@ def test_jobs_empty_without_db(tmp_path: Path) -> None:
 
 
 def test_jobs_listed_and_status_updated(tmp_path: Path) -> None:
-    from job_sentinel.core.models import Job, JobStatus
+    from job_sentinel.core.models import Job, JobEngagement
     from job_sentinel.db.repository import JobRepository
 
     db = tmp_path / "j.db"
@@ -81,21 +81,26 @@ def test_jobs_listed_and_status_updated(tmp_path: Path) -> None:
     assert any(j["id"] == stored.id for j in jobs)
     assert jobs[0]["status"] is None
 
-    upd = client.patch(f"/api/jobs/{stored.id}", json={"status": "applied"})
+    upd = client.patch(f"/api/jobs/{stored.id}", json={"engagement": "to_do"})
     assert upd.status_code == 200
-    assert upd.json()["status"] == JobStatus.APPLIED.value
+    assert upd.json()["engagement"] == JobEngagement.TO_DO.value
+    assert upd.json()["status"] == JobEngagement.TO_DO.value
 
     again = client.get("/api/jobs").json()
-    assert again[0]["status"] == "applied"
+    assert again[0]["engagement"] == "to_do"
 
-    cleared = client.patch(f"/api/jobs/{stored.id}", json={"status": None})
+    cleared = client.patch(f"/api/jobs/{stored.id}", json={"engagement": None})
     assert cleared.status_code == 200
-    assert cleared.json()["status"] is None
+    assert cleared.json()["engagement"] is None
 
-    bad = client.patch(f"/api/jobs/{stored.id}", json={"status": "under_study"})
+    bad = client.patch(f"/api/jobs/{stored.id}", json={"engagement": "applied"})
     assert bad.status_code == 422
 
-    missing = client.patch("/api/jobs/ghost", json={"status": "saved"})
+    ok_review = client.patch(f"/api/jobs/{stored.id}", json={"engagement": "under_study"})
+    assert ok_review.status_code == 200
+    assert ok_review.json()["engagement"] == "under_study"
+
+    missing = client.patch("/api/jobs/ghost", json={"engagement": "reference"})
     assert missing.status_code == 404
 
 
@@ -212,7 +217,7 @@ def test_filter_settings_round_trip_and_hide_jobs(tmp_path: Path) -> None:
 
 
 def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
-    from job_sentinel.core.models import Job, JobRaw, JobStatus
+    from job_sentinel.core.models import Job, JobRaw
     from job_sentinel.db.repository import JobRepository
 
     repo = JobRepository(tmp_path / "j.db")
@@ -222,7 +227,7 @@ def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
             source_job_id="d1",
             title="产品经理",
             company="示例",
-            status=JobStatus.SAVED,
+            favorite=True,
         )
     )
     repo.insert_job_raw(JobRaw(source="zhaopin", source_job_id="d1", job_id=job.id))
@@ -233,14 +238,18 @@ def test_dismiss_and_undismiss_hub_job(tmp_path: Path) -> None:
     body = gone.json()
     assert body["filter_state"] == "excluded"
     assert "manual_dismiss" in body["filter_reasons"]
-    assert body["status"] == "saved"
+    assert body["favorite"] is False
+    assert body["engagement"] is None
+    assert body["dismissed_at"]
     assert client.get("/api/jobs").json() == []
     hidden = client.get("/api/jobs", params={"filter_state": "excluded"}).json()
     assert hidden[0]["id"] == job.id
     back = client.post(f"/api/jobs/{job.id}/undismiss")
     assert back.status_code == 200
     assert back.json()["filter_state"] == "included"
-    assert back.json()["status"] == "saved"
+    assert back.json()["favorite"] is False
+    assert back.json()["engagement"] is None
+    assert back.json()["dismissed_at"] is None
     visible = client.get("/api/jobs").json()
     assert visible[0]["id"] == job.id
 

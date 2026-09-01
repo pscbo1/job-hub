@@ -10,11 +10,11 @@
 
 ## Current objective
 
-Deliver the smallest usable Job Hub V0:
+Deliver the smallest usable Job Hub V0, then the sealed PRD02 tracking model:
 
-`Channel / Manual Import → jobs_raw → Normalize → Trust Gate → Dedup → Rule Filter → Job Pool → Return to Source → Status / Next Step / Comment`
+`Channel / Manual Import → jobs_raw → Normalize → Trust Gate → Dedup → Rule Filter → Discover / Job Pool → My Jobs → Application`
 
-V0 is complete only when the Exit Criteria and Acceptance Criteria in `docs/PRD.md` pass.
+Job engagement is `null | reference | under_study | to_do`. Application stages are `draft | applied | interview | offer | closed`. There is no Rejected anywhere. Archive is Job-level (`archived_at`) only.
 
 ## Implementation strategy
 
@@ -35,7 +35,7 @@ Do not implement these without an explicit request:
 - Agent runtime or MCP integration
 - Resume, profile, document, or cover-letter generation
 - Telegram or email notifications
-- Full application CRM or communication history
+- Full application CRM or communication history (V0). PRD02 tracking is in scope: 1:1 Application, submissions, Job archive.
 - Grok Cloud collection
 - ATS autofill or automatic application submission
 - Supabase, Vercel, or cloud scheduling
@@ -51,12 +51,14 @@ Disable or remove upstream surfaces that expose these features in the V0 UI. Pre
 - Raw records are stored before normalization.
 - Repeated ingestion is idempotent.
 - High-confidence duplicate rules may merge automatically; uncertain matches enter Review.
-- Human-set Status, Favorite, Next Step, Comment, and applied_at are never overwritten by a collector run.
-- Favorite is independent from lifecycle Status.
-- New jobs default to `NULL` (no lifecycle status until the user sets one).
-- Valid Status values are `saved`, `to_do`, `applied`, `closed`, and `reference`.
-- Setting Status to `Applied` writes applied_at when it is empty.
-- Excluded jobs remain stored with filter reasons and stay hidden from the default view.
+- Human-set Favorite (Save), engagement, Next Step, Comment, dismissed_at, archived_at, and Application fields are never overwritten by a collector run.
+- Favorite (Save) is independent from engagement. New jobs default to `engagement=null` (not under_study).
+- Valid Job engagement values are `reference`, `under_study`, and `to_do` (or null).
+- Application stages are `draft`, `applied`, `interview`, `offer`, and `closed`. Never rejected.
+- 1 Job ↔ 1 Application. Re-apply appends a submission event and reopens Applied.
+- Dismiss and Save/engagement are mutually exclusive.
+- Setting Application to Closed requires a close_reason on the Application only.
+- Excluded / dismissed / archived jobs remain stored and stay hidden from the default view.
 - A failing source never aborts other sources or discards successful records.
 - CAPTCHA and login expiry require visible human action; do not bypass them.
 - External application and communication actions return the user to the original source.

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from job_sentinel.api.app import create_app
-from job_sentinel.core.models import JobStatus
+from job_sentinel.core.models import JobEngagement
 from job_sentinel.db.repository import JobRepository
 from job_sentinel.ingestion.mcp_jobs import load_ingest_file, parse_ingest_payload
 from job_sentinel.ingestion.normalize import (
@@ -66,7 +66,7 @@ def test_full_path_and_repeat_does_not_duplicate(tmp_path: Path) -> None:
         assert stored.company == "北京三快在线科技有限公司"
         assert stored.salary == "面议"
         discovered = stored.discovered_at
-        repo._db["jobs"].update(stored.id, {"status": "applied", "match_score": 0.9})
+        repo._db["jobs"].update(stored.id, {"engagement": "to_do", "match_score": 0.9})
 
         second = ingest_records(repo, records, run_id="run-2")
         assert second.raw_inserted == 2
@@ -77,7 +77,7 @@ def test_full_path_and_repeat_does_not_duplicate(tmp_path: Path) -> None:
 
         again = repo.get_hub_job(stored.id)
         assert again is not None
-        assert again.status == JobStatus.APPLIED
+        assert again.engagement == JobEngagement.TO_DO
         assert again.match_score == pytest.approx(0.9)
         assert again.discovered_at == discovered
         assert again.last_seen_at >= discovered

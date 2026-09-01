@@ -13,7 +13,7 @@ import {
 } from "@/components/JobPoolActions";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
-import type { HubJob, HubJobStatus } from "@/lib/api";
+import type { HubJob, JobEngagement } from "@/lib/api";
 import {
   DISCOVERED_RANGE_OPTIONS,
   jobsPoolHref,
@@ -34,18 +34,20 @@ import {
 } from "@/lib/sponsorshipDisplay";
 import { cn, externalUrl } from "@/lib/utils";
 
-const STATUSES: HubJobStatus[] = ["saved", "to_do", "applied", "closed", "reference"];
+const ENGAGEMENTS: JobEngagement[] = ["under_study", "to_do", "reference"];
 
-function statusChipLabel(key: string): string {
-  return key === "unset" ? "No status" : key;
+function engagementChipLabel(key: string): string {
+  if (key === "unset") return "Discovery";
+  if (key === "under_study") return "Under study";
+  if (key === "to_do") return "To do";
+  if (key === "reference") return "Reference";
+  return key;
 }
 
 const ACCENT: Record<string, string> = {
   unset: "bg-stone-300",
-  saved: "bg-sky-500",
+  under_study: "bg-sky-500",
   to_do: "bg-amber-500",
-  applied: "bg-violet-500",
-  closed: "bg-stone-400",
   reference: "bg-emerald-500",
 };
 
@@ -75,6 +77,7 @@ export function JobsExplorer({
   postedDays = "",
   sources = [],
   catalogSources = [],
+  variant = "discover",
 }: {
   jobs: HubJob[];
   range?: DiscoveredRange;
@@ -87,6 +90,7 @@ export function JobsExplorer({
   postedDays?: string;
   sources?: string[];
   catalogSources?: { id: string; label: string }[];
+  variant?: "discover" | "my";
 }) {
   const router = useRouter();
   const reduced = useReducedMotion();
@@ -94,7 +98,7 @@ export function JobsExplorer({
   const [filter, setFilter] = useState<string>("all");
   const [sort, setSort] = useState<"newest" | "published">("newest");
   const [showSponsorship, setShowSponsorship] = useState(false);
-  const [overrides, setOverrides] = useState<Record<string, HubJobStatus | null>>({});
+  const [overrides, setOverrides] = useState<Record<string, HubJob>>({});
   const poolActions = useJobPoolActions();
   const closeMenu = () => poolActions.setMenu(null);
   const menuRef = useDismissOutside(!!poolActions.menu, closeMenu);
@@ -161,13 +165,16 @@ export function JobsExplorer({
     router.push(href(next));
   }
 
-  const statusOf = (j: HubJob): HubJobStatus | null =>
-    Object.prototype.hasOwnProperty.call(overrides, j.id) ? overrides[j.id] : j.status;
+  const merged = (j: HubJob): HubJob => overrides[j.id] ?? j;
+  const engagementOf = (j: HubJob): JobEngagement | null => {
+    const row = merged(j);
+    return row.engagement ?? row.status ?? null;
+  };
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: jobs.length, unset: 0 };
     for (const j of jobs) {
-      const s = statusOf(j);
+      const s = engagementOf(j);
       const key = s ?? "unset";
       c[key] = (c[key] ?? 0) + 1;
     }
@@ -178,7 +185,7 @@ export function JobsExplorer({
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = jobs.filter((j) => {
-      const s = statusOf(j);
+      const s = engagementOf(j);
       if (filter === "unset" && s !== null) return false;
       if (filter !== "all" && filter !== "unset" && s !== filter) return false;
       if (!q) return true;
@@ -403,8 +410,8 @@ export function JobsExplorer({
             })}
           </div>
         )}
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
-          {["all", "unset", ...STATUSES].map((s) => (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by engagement">
+          {["all", "unset", ...ENGAGEMENTS].map((s) => (
             <button
               key={s}
               onClick={() => setFilter(s)}
@@ -416,7 +423,7 @@ export function JobsExplorer({
                   : "border-line bg-surface text-muted hover:border-ink/30 hover:text-ink",
               )}
             >
-              {statusChipLabel(s)}
+              {engagementChipLabel(s)}
               <span className={cn("ml-1.5 tabular-nums", filter === s ? "text-white/60" : "text-muted/60")}>
                 {counts[s] ?? 0}
               </span>
@@ -433,13 +440,14 @@ export function JobsExplorer({
               ? pool === "excluded"
                 ? "No excluded jobs for this date range."
                 : "No jobs in the pool yet. Use Collect Jobs, or import with job-sentinel ingest."
-              : "Try a different search, date, or status filter."}
+              : "Try a different search, date, or engagement filter."}
           </CardSub>
         </Card>
       ) : (
         <AnimatePresence initial={false} mode="popLayout">
           {visible.map((j, idx) => {
-            const st = statusOf(j);
+            const st = engagementOf(j);
+            const row = merged(j);
             return (
               <motion.div
                 key={j.id}
@@ -514,8 +522,8 @@ export function JobsExplorer({
                       </a>
                     )}
                     <JobActions
-                      jobId={j.id}
-                      status={st}
+                      job={row}
+                      variant={variant}
                       onChange={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
                     />
                   </div>

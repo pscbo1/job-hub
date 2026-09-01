@@ -4,20 +4,26 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { jobsPoolHref } from "@/lib/discoveredRange";
-import { MARKETS, MARKET_ORDER, searchPath, type MarketId } from "@/lib/markets";
+import { MARKETS, MARKET_ORDER, myJobsPath, searchPath, type MarketId } from "@/lib/markets";
 import { readPoolPrefs, writeLastMarket } from "@/lib/marketPrefs";
 import { cn } from "@/lib/utils";
+
+function hrefFor(market: MarketId, page: "jobs" | "search" | "my-jobs"): string {
+  if (page === "search") return searchPath(market);
+  if (page === "my-jobs") return myJobsPath(market);
+  return jobsPoolHref({ market, range: "7d" });
+}
 
 export function MarketSwitch({
   current,
   page,
 }: {
   current: MarketId;
-  page: "jobs" | "search";
+  page: "jobs" | "search" | "my-jobs";
 }) {
   const [hrefs, setHrefs] = useState<Record<MarketId, string>>({
-    cn: page === "search" ? searchPath("cn") : jobsPoolHref({ market: "cn", range: "7d" }),
-    en: page === "search" ? searchPath("en") : jobsPoolHref({ market: "en", range: "7d" }),
+    cn: hrefFor("cn", page),
+    en: hrefFor("en", page),
   });
 
   useEffect(() => {
@@ -26,6 +32,8 @@ export function MarketSwitch({
     for (const id of MARKET_ORDER) {
       if (page === "search") {
         next[id] = searchPath(id);
+      } else if (page === "my-jobs") {
+        next[id] = myJobsPath(id);
       } else {
         const prefs = readPoolPrefs(id);
         next[id] = jobsPoolHref({
