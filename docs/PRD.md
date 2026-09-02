@@ -374,6 +374,17 @@ Job 可有 checklist tasks 与主 DDL（`deadline`）。`follow_up_at` 是提醒
 4. 数据逐条进入 `jobs_raw`，随后进入 pipeline。
 5. 页面显示 created、updated、deduplicated、filtered、review、failed 数量和错误摘要。
 
+### 11.6 Add application V1
+
+1. 用户在 Applications 点击 Add application，填写必填 Job title、Company；link、
+   location、source note、CN/EN market 可选。
+2. 系统在单个 SQLite transaction 内写 `jobs_raw`、`jobs`、绑定的 Draft Application
+   和 created event。该入口不抓取 JD。
+3. `request_id` 保证重试幂等；取消过的 request 不可重放。无 URL 时不做公司/标题模糊合并。
+4. 新 URL 与已有 canonical URL 相同时先提示 Use existing / Create separately，不静默合并。
+5. 创建后打开 Application Overview；当前筛选隐藏新 Draft 时明确提示并提供 Show in list。
+6. 手动 Job 的 title、company、location、market、source note 不被后续同 URL collector 覆盖。
+
 ---
 
 ## 12. Channel Requirements
@@ -765,6 +776,8 @@ V0 不创建或不启用：
 ### 17.5 Applications, idle cleanup, Materials
 
 - `GET /api/applications?view=open|closed|all&stale_applied=&tag=`
+- `POST /api/applications/manual` — title/company 必填；原子创建 raw + manual Job + Draft；
+  `request_id` 幂等，URL duplicate 返回 409，`create_separately` 明确旁路 URL 合并
 - `GET|PUT /api/idle-cleanup-settings` — `enabled`, `idle_days`（默认 14）
 - `PATCH /api/applications/:id` — includes `exclude_from_idle`, optional `contact`, and optional `tags`
 - `GET /api/applications/tags` — unique tag strings already used on applications
@@ -1172,6 +1185,23 @@ Then 记录进入 Review，并显示具体原因。
 Given 现有岗位表包含历史与进行中的岗位，  
 When migration dry run 执行，  
 Then Name、Link、Market、Location、Status、Next Step、Comment 均有明确映射，错误与重复记录有报告。
+
+### MA-01–MA-14｜Add application V1
+
+1. 仅填写 trim 后非空的 title + company 即可创建一个 manual Job 和绑定 Draft。
+2. link、location、source note、market 可选字段在刷新后保持；link 只作为 Open source。
+3. 字段校验失败不写入 raw、Job、Application 或 event。
+4. 关闭/取消未提交表单不写数据库；脏表单必须显式 Discard。
+5. 相同 `request_id` 首次返回 201，重放返回 200，且只有一组 Job + Application。
+6. transaction 任一步失败时全部回滚，不留下无 Draft 的 Job。
+7. 创建成功保留筛选和滚动并打开 Overview；被筛选隐藏时 Show in list 可恢复可见。
+8. 相同规范 URL 返回 duplicate candidate；Use existing 或明确 Create separately。
+9. 两次无 URL 新建互相独立，不做 title/company 模糊合并。
+10. manual Draft 继续使用现有 Discover / Tasks / Materials 投影和 membership。
+11. Cancel Draft 保留 stable Job，并维持现有 notes、contact、task、材料库语义。
+12. 后续同 URL collector 不覆盖 manual title/company/location/market/source note。
+13. 390px 下 dialog、focus trap、首错聚焦、Esc/关闭焦点恢复可用。
+14. API 创建失败与创建后列表刷新失败分开表达；后者不得显示为创建失败。
 
 ---
 

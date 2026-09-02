@@ -34,9 +34,15 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Cancel Draft keeps communication notes on the Job (`job_id`). Discover/Tasks show a folded read-only list with the original occurred-at (`created_at`). Materials library stays.
 - Optional Application **Contact** free text (Overview). Empty is allowed and is not required to mark submitted. Cancel Draft copies leftover text onto the Job for lookup; it is never written to `Job.comment`.
 - Optional Application **Tags** (folded Overview). Free-text multi tags, reuse strings already used on other applications. Filter lives in View options. The list has no Tags column. Cancel Draft drops tags with the application.
+- **Add application V1.** Applications can atomically create a manual Job + Draft from
+  required title/company and optional link, location, source note, and market. Request
+  replay is idempotent, URL duplicates require an explicit reuse/separate choice, and
+  later collectors preserve manual identity fields.
 
 ### Fixed
 
+- Applications toolbar groups and fixed table columns now follow content-pane breakpoints;
+  compact rows keep all available actions in the accessible ellipsis menu.
 - Search result cards no longer create Application drafts; Start Application on a stable Discover Job is the only draft path.
 - Submitted Applications cannot be hard-deleted (UI or `DELETE /api/applications/{id}`). Cancel draft remains for never-submitted drafts; submitted rows use Closed / Job Archive.
 - Command Palette and More nav no longer advertise Studio, Profile, or Documents.
