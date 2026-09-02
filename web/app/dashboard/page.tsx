@@ -299,7 +299,7 @@ export default function DashboardPage() {
               </span>
             ))}
           </div>
-          <Link href="/search" className="mt-3 inline-block text-xs text-brand hover:underline">
+          <Link href="/company-sources" className="mt-3 inline-block text-xs text-brand hover:underline">
             Manage sources →
           </Link>
         </Card>

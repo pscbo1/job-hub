@@ -62,7 +62,7 @@ def collect_and_ingest(
     since = started.date().isoformat()
     capped = max(1, min(int(max_results), 200))
     try:
-        specs = resolve_collect_sources(source_ids, market=market)
+        specs = resolve_collect_sources(source_ids, market=market, repo=repo)
     except ValueError as exc:
         return CollectOutcome(
             status="failed",

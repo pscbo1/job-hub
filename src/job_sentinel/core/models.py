@@ -897,3 +897,72 @@ class ScrapeResult(BaseModel):
             f"total={self.total_scraped}, new={self.new_count}, "
             f"errors={len(self.errors)})"
         )
+
+
+REGISTRY_KINDS = ("company", "wechat", "community", "other")
+VERTICAL_KINDS = ("wechat", "community", "other")
+RegistryKind = Literal["company", "wechat", "community", "other"]
+
+
+def normalize_registry_kind(kind: object, channel_type: object = "") -> RegistryKind:
+    raw = str(kind or "company").strip().lower()
+    if raw in REGISTRY_KINDS:
+        return raw  # type: ignore[return-value]
+    if raw == "vertical":
+        typed = str(channel_type or "").strip().lower()
+        if typed in VERTICAL_KINDS:
+            return typed  # type: ignore[return-value]
+        return "other"
+    return "company"
+
+
+class CompanySource(BaseModel):
+    """One ``source_registry`` row. ``kind`` is company, wechat, community, or other."""
+
+    id: str
+    company: str
+    kind: RegistryKind = "company"
+    channel_type: str = ""
+    handle: str = ""
+    collect_cn: bool = False
+    collect_en: bool = False
+    enabled: bool = True
+    include_in_run: bool = False
+    tags: list[str] = Field(default_factory=list)
+    note: str = ""
+    careers_url: str | None = None
+    runnable: bool = True
+    collector_id: str = ""
+    integration: str = "ats_board"
+    ats: str | None = None
+    slug: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("company", "note", "collector_id", "integration", "handle", mode="before")
+    @classmethod
+    def _strip_text(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _sync_kind_and_channel(self) -> CompanySource:
+        self.kind = normalize_registry_kind(self.kind, self.channel_type)
+        self.channel_type = "" if self.kind == "company" else self.kind
+        return self
+
+
+class NotebookPage(BaseModel):
+    """Free-writing page. Not a journal, material, or application packet item."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    title: str = ""
+    markdown_body: str = ""
+    sort_order: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    topics: list[str] = Field(default_factory=list)
+
+    @field_validator("title", "markdown_body", mode="before")
+    @classmethod
+    def _strip_optional(cls, v: object) -> object:
+        return v if v is None or not isinstance(v, str) else v

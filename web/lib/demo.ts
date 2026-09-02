@@ -1121,3 +1121,366 @@ export function demoChatReply(): { reply: string; source: "rules" } {
       "Try the **Search**, **Applications**, or **Studio** tabs to see it all.",
   };
 }
+
+type DemoCompanySource = {
+  id: string;
+  company: string;
+  name?: string;
+  kind: "company" | "wechat" | "community" | "other";
+  channel_type?: string;
+  handle?: string;
+  collect_cn: boolean;
+  collect_en: boolean;
+  enabled: boolean;
+  include_in_run: boolean;
+  tags: string[];
+  note: string;
+  careers_url: string;
+  runnable: boolean;
+};
+
+type DemoVerticalChannel = {
+  id: string;
+  name: string;
+  company?: string;
+  kind: "wechat" | "community" | "other";
+  channel_type: string;
+  handle: string;
+  enabled: boolean;
+  include_in_run?: boolean;
+  tags: string[];
+  note: string;
+};
+
+type DemoNotebookPage = {
+  id: string;
+  title: string;
+  markdown_body: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  topics: string[];
+};
+
+let demoCompanySources: DemoCompanySource[] = [
+  {
+    id: "dimagi",
+    company: "Dimagi",
+    kind: "company",
+    collect_cn: false,
+    collect_en: true,
+    enabled: true,
+    include_in_run: false,
+    tags: ["health"],
+    note: "CommCare / global health software",
+    careers_url: "https://job-boards.greenhouse.io/dimagi",
+    runnable: true,
+  },
+  {
+    id: "tencent",
+    company: "Tencent",
+    kind: "company",
+    collect_cn: true,
+    collect_en: false,
+    enabled: true,
+    include_in_run: false,
+    tags: ["tech"],
+    note: "CN careers board",
+    careers_url: "",
+    runnable: true,
+  },
+  {
+    id: "research-circle",
+    company: "Research Circle",
+    name: "Research Circle",
+    kind: "wechat",
+    channel_type: "wechat",
+    handle: "research_jobs",
+    collect_cn: false,
+    collect_en: false,
+    enabled: true,
+    include_in_run: false,
+    tags: ["research"],
+    note: "WeChat job posts — directory only. Auto Collect does not scrape this.",
+    careers_url: "",
+    runnable: false,
+  },
+  {
+    id: "civic-discord",
+    company: "Civic Discord",
+    name: "Civic Discord",
+    kind: "community",
+    channel_type: "community",
+    handle: "https://discord.gg/example",
+    collect_cn: false,
+    collect_en: false,
+    enabled: true,
+    include_in_run: false,
+    tags: ["civic"],
+    note: "Community referrals",
+    careers_url: "",
+    runnable: false,
+  },
+];
+
+let demoNotebookPages: DemoNotebookPage[] = [
+  {
+    id: "nb-1",
+    title: "Interview stories",
+    markdown_body: "Keep a bank of #research stories. Not a template.",
+    sort_order: 0,
+    created_at: "2026-09-01T10:00:00Z",
+    updated_at: "2026-09-02T12:00:00Z",
+    topics: ["research"],
+  },
+];
+
+function demoTopicsFrom(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const match of text.matchAll(/(?<![#\w])#([^\s#]{1,40})/g)) {
+    const topic = match[1]?.trim().replace(/[.,;:!?]+$/, "");
+    if (!topic || seen.has(topic.toLowerCase())) continue;
+    seen.add(topic.toLowerCase());
+    out.push(topic);
+  }
+  return out;
+}
+
+export function listDemoCompanySources(
+  tag?: string,
+  kind?: string,
+): { sources: DemoCompanySource[]; tags: string[] } {
+  const tags = [...new Set(demoCompanySources.flatMap((row) => row.tags))];
+  const wanted = tag?.trim().toLowerCase() ?? "";
+  const wantedKind = kind?.trim().toLowerCase() ?? "";
+  const sources = demoCompanySources.filter((row) => {
+    if (wanted && !row.tags.some((item) => item.toLowerCase() === wanted)) return false;
+    if (wantedKind === "vertical" && row.kind === "company") return false;
+    if (wantedKind && wantedKind !== "vertical" && row.kind !== wantedKind) return false;
+    return true;
+  });
+  return { sources: sources.map((row) => ({ ...row, name: row.company })), tags };
+}
+
+export function createDemoCompanySource(body: {
+  company: string;
+  kind?: string;
+  handle?: string;
+  collect_cn?: boolean;
+  collect_en?: boolean;
+  enabled?: boolean;
+  include_in_run?: boolean;
+  tags?: string[];
+  note?: string;
+  careers_url?: string;
+}): DemoCompanySource {
+  const kind = (
+    body.kind === "wechat" || body.kind === "community" || body.kind === "other" ? body.kind : "company"
+  ) as DemoCompanySource["kind"];
+  const id = body.company.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `company-${Date.now()}`;
+  const vertical = kind !== "company";
+  const row: DemoCompanySource = {
+    id,
+    company: body.company.trim(),
+    name: body.company.trim(),
+    kind,
+    channel_type: vertical ? kind : "",
+    handle: body.handle ?? "",
+    collect_cn: vertical ? false : Boolean(body.collect_cn),
+    collect_en: vertical ? false : body.collect_en !== false || Boolean(body.collect_cn) ? Boolean(body.collect_en) : true,
+    enabled: body.enabled !== false,
+    include_in_run: Boolean(body.include_in_run),
+    tags: body.tags ?? [],
+    note: body.note ?? "",
+    careers_url: vertical ? "" : (body.careers_url ?? ""),
+    runnable: vertical ? false : Boolean(body.careers_url?.trim()),
+  };
+  if (!vertical && !row.collect_cn && !row.collect_en) row.collect_en = true;
+  demoCompanySources = [...demoCompanySources, row];
+  return { ...row };
+}
+
+export function patchDemoCompanySource(
+  id: string,
+  body: Partial<{
+    company: string;
+    kind: string;
+    handle: string;
+    collect_cn: boolean;
+    collect_en: boolean;
+    enabled: boolean;
+    include_in_run: boolean;
+    tags: string[];
+    note: string;
+    careers_url: string;
+  }>,
+): DemoCompanySource | null {
+  const current = demoCompanySources.find((row) => row.id === id);
+  if (!current) return null;
+  const next: DemoCompanySource = { ...current };
+  if (body.company !== undefined) {
+    next.company = body.company;
+    next.name = body.company;
+  }
+  if (body.kind === "wechat" || body.kind === "community" || body.kind === "other" || body.kind === "company") {
+    next.kind = body.kind;
+    next.channel_type = body.kind === "company" ? "" : body.kind;
+    if (body.kind !== "company") {
+      next.collect_cn = false;
+      next.collect_en = false;
+      next.runnable = false;
+    }
+  }
+  if (body.handle !== undefined) next.handle = body.handle;
+  if (body.collect_cn !== undefined && next.kind === "company") next.collect_cn = body.collect_cn;
+  if (body.collect_en !== undefined && next.kind === "company") next.collect_en = body.collect_en;
+  if (body.enabled !== undefined) next.enabled = body.enabled;
+  if (body.include_in_run !== undefined) next.include_in_run = body.include_in_run;
+  if (body.tags !== undefined) next.tags = body.tags;
+  if (body.note !== undefined) next.note = body.note;
+  if (body.careers_url !== undefined && next.kind === "company") {
+    next.careers_url = body.careers_url;
+    next.runnable = Boolean(body.careers_url.trim());
+  }
+  demoCompanySources = demoCompanySources.map((row) => (row.id === id ? next : row));
+  return { ...next };
+}
+
+function asDemoVertical(row: DemoCompanySource): DemoVerticalChannel {
+  const kind = row.kind === "company" ? "other" : row.kind;
+  return {
+    id: row.id,
+    name: row.company,
+    company: row.company,
+    kind,
+    channel_type: kind,
+    handle: row.handle ?? "",
+    enabled: row.enabled,
+    include_in_run: row.include_in_run,
+    tags: row.tags,
+    note: row.note,
+  };
+}
+
+export function listDemoVerticalChannels(opts?: {
+  tag?: string;
+  channel_type?: string;
+}): { channels: DemoVerticalChannel[]; tags: string[] } {
+  const listed = listDemoCompanySources(opts?.tag, opts?.channel_type || "vertical");
+  return { channels: listed.sources.map(asDemoVertical), tags: listed.tags };
+}
+
+export function createDemoVerticalChannel(body: {
+  name: string;
+  channel_type?: string;
+  handle?: string;
+  enabled?: boolean;
+  include_in_run?: boolean;
+  tags?: string[];
+  note?: string;
+}): DemoVerticalChannel {
+  const created = createDemoCompanySource({
+    company: body.name,
+    kind: body.channel_type ?? "other",
+    handle: body.handle,
+    enabled: body.enabled,
+    include_in_run: body.include_in_run,
+    tags: body.tags,
+    note: body.note,
+  });
+  return asDemoVertical(created);
+}
+
+export function patchDemoVerticalChannel(
+  id: string,
+  body: Partial<{
+    name: string;
+    channel_type: string;
+    handle: string;
+    enabled: boolean;
+    include_in_run: boolean;
+    tags: string[];
+    note: string;
+  }>,
+): DemoVerticalChannel | null {
+  const updated = patchDemoCompanySource(id, {
+    company: body.name,
+    kind: body.channel_type,
+    handle: body.handle,
+    enabled: body.enabled,
+    include_in_run: body.include_in_run,
+    tags: body.tags,
+    note: body.note,
+  });
+  return updated ? asDemoVertical(updated) : null;
+}
+
+export function listDemoNotebookPages(opts?: {
+  q?: string;
+  topic?: string;
+  sort?: "updated" | "title";
+}): { pages: DemoNotebookPage[]; topics: string[] } {
+  let pages = [...demoNotebookPages];
+  const needle = opts?.q?.trim().toLowerCase() ?? "";
+  if (needle) {
+    pages = pages.filter(
+      (page) =>
+        page.title.toLowerCase().includes(needle) || page.markdown_body.toLowerCase().includes(needle),
+    );
+  }
+  const topic = opts?.topic?.trim().replace(/^#/, "").toLowerCase() ?? "";
+  if (topic) {
+    pages = pages.filter((page) => page.topics.some((item) => item.toLowerCase() === topic));
+  }
+  if (opts?.sort === "title") {
+    pages.sort((a, b) => a.title.localeCompare(b.title));
+  } else {
+    pages.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  }
+  const topics = [...new Set(demoNotebookPages.flatMap((page) => page.topics))];
+  return { pages, topics };
+}
+
+export function createDemoNotebookPage(body?: {
+  title?: string;
+  markdown_body?: string;
+}): DemoNotebookPage {
+  const now = new Date().toISOString();
+  const title = body?.title?.trim() || "Untitled";
+  const markdown_body = body?.markdown_body ?? "";
+  const page: DemoNotebookPage = {
+    id: `nb-${Date.now()}`,
+    title,
+    markdown_body,
+    sort_order: 0,
+    created_at: now,
+    updated_at: now,
+    topics: demoTopicsFrom(`${title}\n${markdown_body}`),
+  };
+  demoNotebookPages = [page, ...demoNotebookPages];
+  return { ...page };
+}
+
+export function patchDemoNotebookPage(
+  id: string,
+  body: { title?: string; markdown_body?: string; sort_order?: number },
+): DemoNotebookPage | null {
+  const current = demoNotebookPages.find((page) => page.id === id);
+  if (!current) return null;
+  const next = {
+    ...current,
+    ...body,
+    title: body.title?.trim() || current.title,
+    updated_at: new Date().toISOString(),
+  };
+  next.topics = demoTopicsFrom(`${next.title}\n${next.markdown_body}`);
+  demoNotebookPages = demoNotebookPages.map((page) => (page.id === id ? next : page));
+  return { ...next };
+}
+
+export function deleteDemoNotebookPage(id: string): boolean {
+  const before = demoNotebookPages.length;
+  demoNotebookPages = demoNotebookPages.filter((page) => page.id !== id);
+  return demoNotebookPages.length < before;
+}

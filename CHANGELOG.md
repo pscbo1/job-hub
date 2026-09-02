@@ -16,7 +16,8 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ### Added
 
-- **Sealed Part 1 holistic model (2026-09-01).** Nav is Collect Jobs · Discover · Tasks · Applications. Reference is an independent boolean (coexists with Save and Application). Under Study / user-facing To Do removed. Application Closed is history; close_reason optional. Start Application from any normal Discover job. Tasks membership is next_step / deadline / unfinished task / draft. Auto-archive excluded jobs only (default OFF, 14 days).
+- Company Sources (`/company-sources`, Collect → Manage sources): one page with Companies | Vertical channels tabs. UI fields are name, type (vertical), enabled, this-run, tags, note, plus CN/EN on companies. Adapter/config paths stay backend-only. Same `source_registry`; `kind` is `company`, `wechat`, `community`, or `other`. YAML seeds companies once. Auto Collect still runs only enabled + this-run company adapters.
+- Notebook (`/notebook`, More menu): free-writing pages with title, markdown, search, and typed `#topic` hashtags. Not Materials and not added to packets.
 - Job checklist tasks (`job_tasks`), DDL / open-task chips, To Do-first sort, and `job-sentinel archive --force|--dry-run` (ported from unmerged Slice 1 PR #1 onto the sealed model).
 - **Materials + Application lanes (Part 2/3).** Independent Materials library (files and Knowledge templates/answers) binds versions onto applications. Mark submitted freezes a server-side snapshot. Optional lightweight communication notes.
 
