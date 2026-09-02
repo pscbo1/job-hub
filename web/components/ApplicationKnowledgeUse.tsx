@@ -22,6 +22,7 @@ import {
   latestVersion,
   searchKnowledgeItems,
 } from "@/lib/materialsUi";
+import { externalUrl } from "@/lib/utils";
 
 export function ApplicationKnowledgeUse({
   app,
@@ -42,7 +43,7 @@ export function ApplicationKnowledgeUse({
   const [presets, setPresets] = useState<MaterialUsePreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
-  const [copyState, setCopyState] = useState<"idle" | "Copied" | "Copy failed">("idle");
+  const [copyState, setCopyState] = useState<"idle" | "Copied" | "Copy failed" | "No text to copy">("idle");
   const [bindMsg, setBindMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -90,10 +91,15 @@ export function ApplicationKnowledgeUse({
     ? knowledgeBindDecision({ kind: selected.kind, items, materialId: selected.id })
     : "copy_only";
 
-  async function copy() {
-    if (!preview) return;
+  async function copy(text?: string) {
+    const value = (text ?? preview).trim();
+    if (!value) {
+      setCopyState("No text to copy");
+      window.setTimeout(() => setCopyState("idle"), 1500);
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(preview);
+      await navigator.clipboard.writeText(value);
       setCopyState(copyFeedback(true));
     } catch {
       setCopyState(copyFeedback(false));
@@ -177,11 +183,28 @@ export function ApplicationKnowledgeUse({
                 <span className="ml-2 text-xs text-muted">{row.version_label || formatKind(row.kind)}</span>
                 <span className="mt-1 block truncate text-xs text-muted">{row.preview_text}</span>
               </button>
-              <div className="mt-1 flex items-center gap-2 px-3">
-                <button type="button" className="text-xs font-medium text-ink underline" onClick={() => {
-                  setSelectedId(row.material_id); setSelectedVersionId(row.material_version_id); void navigator.clipboard.writeText(row.copy_text || row.preview_text);
-                  setCopyState("Copied");
-                }}>Copy</button>
+              <div className="mt-1 flex flex-wrap items-center gap-2 px-3">
+                {row.url ? (
+                  <a
+                    href={externalUrl(row.url)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-7 items-center rounded-md border border-line px-2 text-xs font-medium text-ink"
+                  >
+                    Open
+                  </a>
+                ) : null}
+                <button
+                  type="button"
+                  className="h-7 rounded-md border border-line px-2 text-xs font-medium text-ink"
+                  onClick={() => {
+                    setSelectedId(row.material_id);
+                    setSelectedVersionId(row.material_version_id);
+                    void copy(row.copy_text || row.preview_text);
+                  }}
+                >
+                  Copy
+                </button>
                 {row.is_pinned ? <span className="text-[11px] text-muted">Pinned</span> : null}
               </div>
             </li>
@@ -195,11 +218,20 @@ export function ApplicationKnowledgeUse({
             {preview || "No text on this version."}
           </pre>
           <div className="flex flex-wrap items-center gap-2">
+            {selectedItem?.url ? (
+              <a
+                href={externalUrl(selectedItem.url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink"
+              >
+                Open
+              </a>
+            ) : null}
             <button
               type="button"
-              disabled={!preview}
               onClick={() => void copy()}
-              className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink disabled:opacity-50"
+              className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink"
             >
               {copyState === "idle" ? "Copy" : copyState}
             </button>

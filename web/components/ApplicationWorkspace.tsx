@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { ApplicationKnowledgeUse } from "@/components/ApplicationKnowledgeUse";
+import { SourceActionLink } from "@/components/SourceActionLink";
 import {
   addCommNote,
   changePacketVersion,
@@ -26,7 +27,22 @@ import {
   type PacketSnapshotItem,
   type SubmissionMaterialHistoryEntry,
 } from "@/lib/api";
-import { latestVersion, snapshotItemLabel } from "@/lib/materialsUi";
+import {
+  ASSIST_BTN_SECONDARY,
+  ASSIST_COPY,
+  assistPacketReadiness,
+  assistSelectedCount,
+  packetWorkbenchPath,
+} from "@/lib/applicationUi";
+import {
+  formatKind,
+  humanMaterialTitle,
+  humanVersionLabel,
+  latestVersion,
+  partitionMaterials,
+  partitionPacketItems,
+  snapshotItemLabel,
+} from "@/lib/materialsUi";
 import { isStaleGeneration } from "@/lib/recordDraft";
 import { formatDateTimeInAppTz } from "@/lib/timezone";
 import { externalUrl } from "@/lib/utils";
@@ -156,12 +172,19 @@ export function NotesPanel({
   );
 }
 
+const ROW_BTN =
+  "inline-flex h-8 items-center rounded-lg border border-line bg-surface px-3 text-xs font-medium text-ink hover:border-ink/30";
+
 export function MaterialsArea({
   app,
   onChanged,
+  onSubmitRequest,
+  standalone = false,
 }: {
   app: Application;
   onChanged: () => void;
+  onSubmitRequest?: () => void;
+  standalone?: boolean;
 }) {
   const [items, setItems] = useState<PacketItem[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -176,6 +199,7 @@ export function MaterialsArea({
   const submitted = (app.submissions?.length ?? 0) > 0;
   const subs = [...(app.submissions ?? [])].reverse();
   const latest = subs[0] ?? null;
+  const lanes = items ? partitionPacketItems(items) : { files: [], knowledge: [] };
 
   useEffect(() => {
     setMaterialsView(submitted ? "history" : "prepare");
@@ -221,82 +245,123 @@ export function MaterialsArea({
     <div className="space-y-4">
       <header className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-3">
         <div>
-          <h2 className="text-base font-semibold text-ink">Application packet</h2>
+          <h2 className="text-base font-semibold text-ink">{ASSIST_COPY.heading}</h2>
           <p className="mt-1 text-xs text-muted">
             {submitted
               ? `${subs.length} submission${subs.length === 1 ? "" : "s"}`
-              : `${items?.length ?? 0} material${items?.length === 1 ? "" : "s"} selected`}
+              : items === null
+                ? ASSIST_COPY.loading
+                : assistPacketReadiness(items.length)}
           </p>
         </div>
-        <div className="flex rounded-lg border border-line bg-bg p-0.5" role="tablist" aria-label="Application packet views">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={materialsView === "prepare"}
-            onClick={() => setMaterialsView("prepare")}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "prepare" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
-          >
-            Prepare
-          </button>
-          {submitted && (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={materialsView === "history"}
-              onClick={() => setMaterialsView("history")}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "history" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
-            >
-              Submission history
+        <div className="flex flex-wrap items-center gap-2">
+          {canEdit && items !== null && materialsView === "prepare" && (
+            <button type="button" onClick={() => setPicker(true)} className={ASSIST_BTN_SECONDARY}>
+              {ASSIST_COPY.choose}
             </button>
+          )}
+          {standalone ? (
+            <a href={`/applications?id=${encodeURIComponent(app.id)}`} className={ASSIST_BTN_SECONDARY}>
+              {ASSIST_COPY.backOverview}
+            </a>
+          ) : (
+            <a
+              href={packetWorkbenchPath(app.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={ASSIST_BTN_SECONDARY}
+            >
+              {ASSIST_COPY.openWindow}
+            </a>
+          )}
+          {submitted && (
+            <div className="flex rounded-lg border border-line bg-bg p-0.5" role="tablist" aria-label="Packet views">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={materialsView === "prepare"}
+                onClick={() => setMaterialsView("prepare")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "prepare" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
+              >
+                {ASSIST_COPY.packet}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={materialsView === "history"}
+                onClick={() => setMaterialsView("history")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "history" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
+              >
+                {ASSIST_COPY.history}
+              </button>
+            </div>
           )}
         </div>
       </header>
 
       {materialsView === "prepare" ? (
-        <section className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-ink">Selected materials</h3>
-            {canEdit && items !== null && (
-              <button type="button" onClick={() => setPicker(true)} className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink">
-                Choose materials
-              </button>
-            )}
-          </div>
+        <section className="space-y-4">
           {failed ? (
             <div className="rounded-lg border border-line bg-bg p-3 text-sm text-muted">
-              Could not load materials.
+              {ASSIST_COPY.loadFailed}
               <button type="button" className="ml-2 text-ink underline" onClick={() => setRetry((n) => n + 1)}>
-                Retry
+                {ASSIST_COPY.retry}
               </button>
             </div>
           ) : items === null ? (
-            <p className="text-sm text-muted">Loading materials…</p>
-          ) : items.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-line p-4 text-sm text-muted">
-              No materials selected.
-              {canEdit && <button type="button" onClick={() => setPicker(true)} className="ml-2 text-ink underline">Choose one</button>}
-            </div>
+            <p className="text-sm text-muted">{ASSIST_COPY.loading}</p>
           ) : (
-            <ul className="space-y-2">
-              {items.map((item) => (
-                <CurrentMaterialRow key={item.binding.id} app={app} item={item} canEdit={canEdit} onRefresh={refresh} />
-              ))}
-            </ul>
+            <div className="space-y-5">
+              <PacketLane
+                heading={ASSIST_COPY.filesSection}
+                hint={ASSIST_COPY.filesHint}
+                empty={ASSIST_COPY.emptyFiles}
+                items={lanes.files}
+                lane="files"
+                app={app}
+                canEdit={canEdit}
+                onRefresh={refresh}
+              />
+              <PacketLane
+                heading={ASSIST_COPY.knowledgeSection}
+                hint={ASSIST_COPY.knowledgeHint}
+                empty={ASSIST_COPY.emptyKnowledge}
+                items={lanes.knowledge}
+                lane="knowledge"
+                app={app}
+                canEdit={canEdit}
+                onRefresh={refresh}
+              />
+            </div>
           )}
 
           <div className="border-t border-line pt-3">
             <button
               type="button"
               onClick={() => setShowLibrary((value) => !value)}
-              className="text-sm font-medium text-ink"
+              className="text-sm font-medium text-ink underline"
               aria-expanded={showLibrary}
             >
-              {showLibrary ? "Hide templates & answers" : "Find a template or answer"}
+              {showLibrary ? ASSIST_COPY.hideAnswers : ASSIST_COPY.answers}
             </button>
             {showLibrary && (
               <div className="mt-3">
                 <ApplicationKnowledgeUse app={app} items={failed ? null : items} canEdit={canEdit} onBound={() => void refresh(true)} />
               </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
+            <SourceActionLink
+              variant="primary"
+              apply_url={app.apply_url}
+              url={app.url}
+              job_url={app.job_url}
+            />
+            {onSubmitRequest && (
+              <button type="button" onClick={onSubmitRequest} className={ASSIST_BTN_SECONDARY}>
+                {ASSIST_COPY.markSubmitted}
+              </button>
             )}
           </div>
         </section>
@@ -364,26 +429,78 @@ export function MaterialsArea({
   );
 }
 
+function PacketLane({
+  heading,
+  hint,
+  empty,
+  items,
+  lane,
+  app,
+  canEdit,
+  onRefresh,
+}: {
+  heading: string;
+  hint: string;
+  empty: string;
+  items: PacketItem[];
+  lane: "files" | "knowledge";
+  app: Application;
+  canEdit: boolean;
+  onRefresh: (notify?: boolean) => Promise<void>;
+}) {
+  return (
+    <section className="space-y-2">
+      <div>
+        <h4 className="text-sm font-semibold text-ink">{heading}</h4>
+        <p className="text-xs text-muted">{hint}</p>
+      </div>
+      {items.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-line px-3 py-2 text-sm text-muted">{empty}</p>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((item) => (
+            <CurrentMaterialRow
+              key={item.binding.id}
+              app={app}
+              item={item}
+              lane={lane}
+              canEdit={canEdit}
+              onRefresh={onRefresh}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function CurrentMaterialRow({
   app,
   item,
+  lane,
   canEdit,
   onRefresh,
 }: {
   app: Application;
   item: PacketItem;
+  lane: "files" | "knowledge";
   canEdit: boolean;
   onRefresh: (notify?: boolean) => Promise<void>;
 }) {
   const [more, setMore] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const version = item.version;
-  const copyTarget = version?.text?.trim() || version?.url?.trim() || "";
+  const title = humanMaterialTitle(item.material, version);
+  const versionLabel = humanVersionLabel(version);
+  const kindLabel = formatKind(item.material?.kind ?? "other");
+  const fileUrl = version?.file_ref ? materialVersionFileUrl(version.id) : "";
+  const link = (version?.url ?? "").trim();
+  const text = (version?.text ?? "").trim();
 
-  async function copyMaterial() {
-    if (!copyTarget) return;
+  async function copyValue(value: string) {
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText(copyTarget);
+      await navigator.clipboard.writeText(value);
       setCopyState("copied");
     } catch {
       setCopyState("failed");
@@ -391,41 +508,40 @@ function CurrentMaterialRow({
     window.setTimeout(() => setCopyState("idle"), 1800);
   }
 
+  const copyLabel =
+    copyState === "copied" ? ASSIST_COPY.copied : copyState === "failed" ? ASSIST_COPY.copyFailed : null;
+
   return (
     <li className="rounded-lg border border-line px-3 py-2 text-sm">
-      <div className="font-medium text-ink">{item.material?.title ?? "Material"}</div>
+      <div className="font-medium text-ink">{title}</div>
       <div className="text-xs text-muted">
-        {item.material?.kind ?? "other"}
-        {" · "}
-        {version?.display_label ?? `v${version?.version_number ?? 1}`}
-        {version?.original_filename ? ` · ${version.original_filename}` : ""}
-        {version?.url ? ` · ${version.url}` : ""}
+        {[kindLabel, versionLabel && versionLabel !== title ? versionLabel : ""].filter(Boolean).join(" · ")}
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {version?.url && (
-          <a href={externalUrl(version.url)} target="_blank" rel="noopener noreferrer" className="text-xs text-brand">
-            Preview
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {lane === "files" && fileUrl ? (
+          <a href={fileUrl} download={version?.original_filename || undefined} className={ROW_BTN}>
+            {ASSIST_COPY.download}
           </a>
-        )}
-        {version?.file_ref && (
-          <a href={materialVersionFileUrl(version.id)} download={version.original_filename || undefined} className="text-xs text-brand">
-            Download
-          </a>
-        )}
-        {copyTarget && (
-          <button type="button" onClick={() => void copyMaterial()} className="text-xs text-brand">
-            {copyState === "copied"
-              ? "Copied"
-              : copyState === "failed"
-                ? "Copy failed"
-                : version?.url && !version?.text
-                  ? "Copy link"
-                  : "Copy text"}
+        ) : null}
+        {link ? (
+          <button type="button" onClick={() => void copyValue(link)} className={ROW_BTN}>
+            {copyLabel ?? ASSIST_COPY.copyLink}
           </button>
-        )}
+        ) : null}
+        {lane === "knowledge" && text ? (
+          <button type="button" onClick={() => void copyValue(text)} className={ROW_BTN}>
+            {copyLabel ?? ASSIST_COPY.copy}
+          </button>
+        ) : null}
+        {lane === "files" && !fileUrl && !link ? (
+          <span className="text-xs text-muted">{ASSIST_COPY.noCopy}</span>
+        ) : null}
+        {lane === "knowledge" && !text && !link ? (
+          <span className="text-xs text-muted">{ASSIST_COPY.noCopy}</span>
+        ) : null}
         {canEdit && item.material && (
           <label className="flex items-center gap-1 text-xs text-muted">
-            Change version
+            {ASSIST_COPY.changeVersion}
             <VersionSelect
               material={item.material}
               currentId={item.binding.material_version_id}
@@ -441,13 +557,13 @@ function CurrentMaterialRow({
             open={more}
             onToggle={(e) => setMore((e.target as HTMLDetailsElement).open)}
           >
-            <summary className="cursor-pointer">More</summary>
+            <summary className="cursor-pointer">{ASSIST_COPY.more}</summary>
             <button
               type="button"
               onClick={() => void removePacketBinding(app.id, item.binding.id).then(() => onRefresh(true))}
               className="mt-1 block text-left hover:text-red-600"
             >
-              Remove
+              {ASSIST_COPY.remove}
             </button>
           </details>
         )}
@@ -471,7 +587,7 @@ function SnapshotRow({
   const hasFile = Boolean(item.snapshot_file_ref || item.file_ref);
   return (
     <div>
-      <span className="text-ink">{label || "当次材料未记录"}</span>
+      <span className="text-ink">{label || "No materials recorded"}</span>
       {item.url ? (
         <>
           {" · "}
@@ -484,11 +600,11 @@ function SnapshotRow({
         <>
           {" · "}
           <a href={submissionSnapshotFileUrl(appId, submissionId, index)} className="text-brand">
-            Download
+            {ASSIST_COPY.download}
           </a>
         </>
       ) : !item.url ? (
-        <span> · 当次材料未记录</span>
+        <span> · No materials recorded</span>
       ) : null}
     </div>
   );
@@ -589,7 +705,7 @@ function VersionSelect({
     >
       {options.map((v) => (
         <option key={v.id} value={v.id}>
-          {v.display_label ?? `v${v.version_number}`}
+          {humanVersionLabel(v) || `Version ${v.version_number}`}
         </option>
       ))}
     </select>
@@ -625,20 +741,67 @@ function PacketPicker({
 
   const visible = library.filter((m) => {
     if (m.archived_at) return false;
-    if (m.kind === "message_template") return false;
     const q = query.trim().toLowerCase();
     if (!q) return true;
-    return [m.title, m.purpose.join(" "), m.kind].join(" ").toLowerCase().includes(q);
+    return [m.title, m.purpose.join(" "), m.kind, formatKind(m.kind)].join(" ").toLowerCase().includes(q);
   });
+  const lanes = partitionMaterials(visible);
 
   function latest(m: Material): string | null {
     return latestVersion(m)?.id ?? null;
   }
 
+  function toggle(m: Material, checked: boolean) {
+    setChosen((prev) => {
+      const copy = { ...prev };
+      if (checked) {
+        const pick = latest(m);
+        if (pick) copy[m.id] = pick;
+      } else {
+        delete copy[m.id];
+      }
+      return copy;
+    });
+  }
+
+  function renderRows(rows: Material[]) {
+    return rows.map((m) => {
+      const versionId = chosen[m.id] ?? "";
+      const options = m.versions.filter((v) => !v.archived_at);
+      const title = humanMaterialTitle(m, latestVersion(m));
+      return (
+        <li key={m.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-surface">
+          <input
+            type="checkbox"
+            checked={Boolean(versionId)}
+            onChange={(e) => toggle(m, e.target.checked)}
+          />
+          <span className="flex-1">
+            {title}
+            <span className="ml-1 text-xs text-muted">{formatKind(m.kind)}</span>
+          </span>
+          {options.length > 0 && (
+            <select
+              value={versionId || options[0].id}
+              onChange={(e) => setChosen((prev) => ({ ...prev, [m.id]: e.target.value }))}
+              className="h-7 rounded border border-line bg-surface text-xs"
+            >
+              {options.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {humanVersionLabel(v) || `Version ${v.version_number}`}
+                </option>
+              ))}
+            </select>
+          )}
+        </li>
+      );
+    });
+  }
+
   return (
     <div className="rounded-xl border border-line bg-bg p-3">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Attach materials</h3>
+        <h3 className="text-sm font-semibold">{ASSIST_COPY.pickerTitle}</h3>
         <span className="text-xs text-muted">
           {app.employer} · {app.title}
         </span>
@@ -646,57 +809,36 @@ function PacketPicker({
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search materials…"
-        className="mb-2 h-9 w-full rounded-lg border border-line bg-surface px-2 text-sm"
+        placeholder={ASSIST_COPY.search}
+        className="mb-3 h-9 w-full rounded-lg border border-line bg-surface px-2 text-sm"
       />
-      <ul className="max-h-64 space-y-1 overflow-auto">
-        {visible.map((m) => {
-          const versionId = chosen[m.id] ?? "";
-          const options = m.versions.filter((v) => !v.archived_at);
-          return (
-            <li key={m.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-surface">
-              <input
-                type="checkbox"
-                checked={Boolean(versionId)}
-                onChange={(e) => {
-                  setChosen((prev) => {
-                    const copy = { ...prev };
-                    if (e.target.checked) {
-                      const pick = latest(m);
-                      if (pick) copy[m.id] = pick;
-                    } else {
-                      delete copy[m.id];
-                    }
-                    return copy;
-                  });
-                }}
-              />
-              <span className="flex-1">
-                {m.title}
-                <span className="ml-1 text-xs text-muted">{m.kind}</span>
-              </span>
-              {options.length > 0 && (
-                <select
-                  value={versionId || options[0].id}
-                  onChange={(e) => setChosen((prev) => ({ ...prev, [m.id]: e.target.value }))}
-                  className="h-7 rounded border border-line bg-surface text-xs"
-                >
-                  {options.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.display_label ?? `v${v.version_number}`}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+      <div className="max-h-72 space-y-4 overflow-auto">
+        <section>
+          <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+            {ASSIST_COPY.filesSection}
+          </h4>
+          {lanes.files.length === 0 ? (
+            <p className="px-2 py-1 text-xs text-muted">{ASSIST_COPY.emptyFiles}</p>
+          ) : (
+            <ul className="space-y-1">{renderRows(lanes.files)}</ul>
+          )}
+        </section>
+        <section>
+          <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+            {ASSIST_COPY.knowledgeSection}
+          </h4>
+          {lanes.knowledge.length === 0 ? (
+            <p className="px-2 py-1 text-xs text-muted">{ASSIST_COPY.emptyKnowledge}</p>
+          ) : (
+            <ul className="space-y-1">{renderRows(lanes.knowledge)}</ul>
+          )}
+        </section>
+      </div>
       <div className="mt-2 flex flex-wrap gap-2">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="New material name"
+          placeholder={ASSIST_COPY.newName}
           className="h-9 rounded-lg border border-line px-2 text-sm"
         />
         <input
@@ -729,20 +871,20 @@ function PacketPicker({
           }}
           className="h-9 rounded-lg border border-line px-3 text-xs"
         >
-          Add material
+          {ASSIST_COPY.addMaterial}
         </button>
       </div>
       <div className="mt-3 flex items-center gap-2">
-        <span className="text-xs text-muted">{Object.keys(chosen).length} selected</span>
+        <span className="text-xs text-muted">{assistSelectedCount(Object.keys(chosen).length)}</span>
         <button
           type="button"
           onClick={() => void onSave(Object.values(chosen))}
           className="h-8 rounded-lg bg-ink px-3 text-xs text-white"
         >
-          Attach selected
+          {ASSIST_COPY.attach}
         </button>
         <button type="button" onClick={onClose} className="h-8 text-xs text-muted">
-          Cancel
+          {ASSIST_COPY.cancel}
         </button>
       </div>
     </div>

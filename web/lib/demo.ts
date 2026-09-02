@@ -488,14 +488,14 @@ function version(
 }
 
 export const demoMaterials: Material[] = [
-  material("mat-en-resume", "英文简历", "resume", ["research"], [
-    version("ver-en-2", "mat-en-resume", 2, "研究岗版", "en-resume-v2.pdf", ["研究岗"]),
+  material("mat-en-resume", "English resume", "resume", ["research"], [
+    version("ver-en-2", "mat-en-resume", 2, "Research track", "en-resume-v2.pdf", ["research"]),
     version("ver-en-1", "mat-en-resume", 1, "", "en-resume-v1.pdf", []),
   ]),
-  material("mat-cn-resume", "中文简历", "resume", ["校招"], [
+  material("mat-cn-resume", "Chinese resume", "resume", ["campus"], [
     version("ver-cn-1", "mat-cn-resume", 1, "", "cn-resume.pdf", []),
   ]),
-  material("mat-portfolio", "作品集", "portfolio", ["backend"], [
+  material("mat-portfolio", "Portfolio", "portfolio", ["backend"], [
     version("ver-port-1", "mat-portfolio", 1, "", "", [], "https://example.com/portfolio"),
   ]),
   material("mat-template", "Boss greeting", "message_template", ["outreach"], [
@@ -515,7 +515,7 @@ export const demoMaterials: Material[] = [
 
 const demoPacketIds: Record<string, string[]> = {
   [demoApplications[0].id]: ["ver-en-2", "ver-port-1"],
-  [demoApplications[2].id]: ["ver-en-1"],
+  [demoApplications[2].id]: ["ver-en-1", "ver-ans-1", "ver-tpl-1"],
 };
 
 const demoPresets: MaterialUsePreset[] = [
@@ -780,7 +780,7 @@ export function createDemoSubmissionMaterialRevision(
 }
 
 demoApplications[0].current_material_count = 2;
-demoApplications[2].current_material_count = 1;
+demoApplications[2].current_material_count = 3;
 
 {
   const first = demoApplications[0];

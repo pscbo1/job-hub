@@ -4,10 +4,18 @@ import {
   APPLICATION_ROW_MORE_LABEL,
   APPLICATION_VIEW_OPTIONS_GROUPS,
   APPLICATION_VIEW_OPTIONS_LABEL,
+  ASSIST_BTN_PRIMARY,
+  ASSIST_BTN_SECONDARY,
+  ASSIST_COPY,
+  ASSIST_NO_APPLY_URL,
+  DEFAULT_APPLICATION_TAB,
   applicationRowMoreLabel,
+  assistPacketReadiness,
   latestSubmissionLine,
   nextStepLabel,
   parseApplicationTab,
+  tabQueryValue,
+  packetWorkbenchPath,
 } from "@/lib/applicationUi";
 import { DIRTY_SWITCH_LABELS, recordSwitchDecision } from "@/lib/recordDraft";
 import { sourceAction } from "@/lib/sourceAction";
@@ -45,11 +53,40 @@ describe("sourceAction", () => {
 });
 
 describe("application drawer helpers", () => {
-  it("maps packet deep links to the Materials tab", () => {
+  it("maps packet deep links to the Materials tab and defaults to Overview", () => {
     expect(parseApplicationTab("packet")).toBe("materials");
     expect(parseApplicationTab("materials")).toBe("materials");
     expect(parseApplicationTab("notes")).toBe("notes");
+    expect(parseApplicationTab("overview")).toBe("overview");
     expect(parseApplicationTab(null)).toBe("overview");
+    expect(DEFAULT_APPLICATION_TAB).toBe("overview");
+    expect(tabQueryValue("materials")).toBe("packet");
+    expect(tabQueryValue("overview")).toBe(null);
+  });
+
+  it("keeps assist action-row buttons on one size and weight pair", () => {
+    expect(ASSIST_BTN_PRIMARY).toMatch(/h-10/);
+    expect(ASSIST_BTN_SECONDARY).toMatch(/h-10/);
+    expect(ASSIST_BTN_PRIMARY).toMatch(/bg-ink/);
+    expect(ASSIST_BTN_SECONDARY).toMatch(/border-line/);
+    expect(ASSIST_BTN_PRIMARY).toMatch(/rounded-lg/);
+    expect(ASSIST_BTN_SECONDARY).toMatch(/rounded-lg/);
+  });
+
+  it("keeps packet readiness from blocking the apply action", () => {
+    expect(assistPacketReadiness(0)).toBe("Nothing selected yet.");
+    expect(assistPacketReadiness(2)).toBe("2 selected");
+    expect(ASSIST_NO_APPLY_URL).toBe("No apply URL stored");
+    expect(packetWorkbenchPath("app-1")).toBe("/applications/app-1/packet");
+    expect(ASSIST_COPY.choose).toBe("Select materials");
+    expect(ASSIST_COPY.openApply).toBe("Open apply page");
+    expect(ASSIST_COPY.openWindow).toBe("Open in new window");
+    expect(ASSIST_COPY.copyLink).toBe("Copy link");
+    expect(ASSIST_COPY.filesSection).toBe("Files");
+    expect(ASSIST_COPY.knowledgeSection).toBe("Templates & answers");
+    expect(ASSIST_COPY.attach).toBe("Save");
+    expect(ASSIST_COPY.emptyFiles).toBe("No files yet.");
+    expect(ASSIST_COPY.emptyKnowledge).toBe("No templates yet.");
   });
 
   it("shows an em dash when next step is empty", () => {

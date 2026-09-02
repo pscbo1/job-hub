@@ -9,6 +9,9 @@ import { SourceActionLink } from "@/components/SourceActionLink";
 import { addCommNote, patchHubJob, updateApplication, type Application } from "@/lib/api";
 import {
   type ApplicationDrawerTab,
+  ASSIST_BTN_SECONDARY,
+  ASSIST_COPY,
+  packetWorkbenchPath,
   latestSubmissionLine,
   nextStepLabel,
 } from "@/lib/applicationUi";
@@ -25,7 +28,6 @@ import {
 import { tagsEqual } from "@/lib/applicationTags";
 import { dateInputValue, isDateOverdue } from "@/lib/jobPipeline";
 import { DIRTY_SWITCH_LABELS } from "@/lib/recordDraft";
-import { sourceAction } from "@/lib/sourceAction";
 import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 
@@ -259,10 +261,6 @@ export function ApplicationDrawer({
 
   const saveBusy = saving || saveLock.current;
 
-  const source = shown
-    ? sourceAction({ apply_url: shown.apply_url, url: shown.url, job_url: shown.job_url })
-    : null;
-
   return (
     <div className="fixed inset-0 z-50">
       <button type="button" className="absolute inset-0 bg-ink/30" aria-label="Close drawer" onClick={requestClose} />
@@ -380,16 +378,20 @@ export function ApplicationDrawer({
                 </button>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-3">
-                <SourceActionLink apply_url={shown.apply_url} url={shown.url} job_url={shown.job_url} />
-                {shown.stage === "draft" && (
-                  <button
-                    type="button"
-                    onClick={() => onSubmitRequest(shown.id)}
-                    className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink"
-                  >
-                    Mark submitted
-                  </button>
-                )}
+                <SourceActionLink
+                  variant="primary"
+                  apply_url={shown.apply_url}
+                  url={shown.url}
+                  job_url={shown.job_url}
+                />
+                <a
+                  href={packetWorkbenchPath(shown.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={ASSIST_BTN_SECONDARY}
+                >
+                  {ASSIST_COPY.openWindow}
+                </a>
                 {onToggleIdleExempt && (
                   <details className="text-xs text-muted">
                     <summary className="cursor-pointer hover:text-ink">More</summary>
@@ -428,7 +430,7 @@ export function ApplicationDrawer({
                         : "border-transparent text-muted hover:text-ink",
                     )}
                   >
-                      {item.label}{item.id === "materials" && shown.current_material_count != null ? ` (${shown.current_material_count})` : ""}
+                      {item.label}
                   </button>
                 ))}
               </div>
@@ -446,14 +448,21 @@ export function ApplicationDrawer({
                   ddlDraft={ddlDraft}
                   onNextChange={setNextDraft}
                   onDdlChange={setDdlDraft}
-                  sourceMissing={source?.kind === "missing"}
                   onOpenMaterials={() => {
                     setTab("materials");
                     onTabChange("materials");
                   }}
+                  onSubmitRequest={() => onSubmitRequest(shown.id)}
                 />
               )}
-              {tab === "materials" && <MaterialsArea key={shown.id} app={shown} onChanged={onChanged} />}
+              {tab === "materials" && (
+                <MaterialsArea
+                  key={shown.id}
+                  app={shown}
+                  onChanged={onChanged}
+                  onSubmitRequest={shown.stage === "draft" ? () => onSubmitRequest(shown.id) : undefined}
+                />
+              )}
               {tab === "notes" && (
                 <NotesPanel
                   key={`${shown.id}:${notesTick}`}
@@ -483,8 +492,8 @@ function OverviewTab({
   ddlDraft,
   onNextChange,
   onDdlChange,
-  sourceMissing,
   onOpenMaterials,
+  onSubmitRequest,
 }: {
   app: Application;
   contactDraft: string;
@@ -496,8 +505,8 @@ function OverviewTab({
   ddlDraft: string;
   onNextChange: (value: string) => void;
   onDdlChange: (value: string) => void;
-  sourceMissing: boolean;
   onOpenMaterials: () => void;
+  onSubmitRequest: () => void;
 }) {
   const jd = (app.job_description ?? "").trim();
   const comment = (app.job_comment ?? "").trim();
@@ -507,23 +516,29 @@ function OverviewTab({
   return (
     <div className="space-y-5">
       {app.stage === "draft" && (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand/30 bg-brand/5 p-4">
+        <section className="space-y-3 rounded-lg border border-brand/30 bg-brand/5 p-4">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Next action</p>
-            <p className="mt-1 text-base font-semibold text-ink">Prepare materials</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Next step</p>
+            <p className="mt-1 text-base font-semibold text-ink">{ASSIST_COPY.heading}</p>
           </div>
-          <button type="button" onClick={onOpenMaterials} className="h-10 rounded-lg bg-ink px-4 text-sm font-medium text-white shadow-sm">Open Materials</button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenMaterials}
+              className={ASSIST_BTN_SECONDARY}
+            >
+              {ASSIST_COPY.choose}
+            </button>
+            <button
+              type="button"
+              onClick={onSubmitRequest}
+              className={ASSIST_BTN_SECONDARY}
+            >
+              {ASSIST_COPY.markSubmitted}
+            </button>
+          </div>
         </section>
       )}
-      <section className="rounded-lg border border-line bg-bg p-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Source</h3>
-        <div className="mt-1">
-          <SourceActionLink apply_url={app.apply_url} url={app.url} job_url={app.job_url} />
-          {sourceMissing && (
-            <p className="mt-1 text-xs text-muted">No apply or source URL is stored for this job.</p>
-          )}
-        </div>
-      </section>
       <section className="rounded-lg border border-line bg-bg p-3">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Next step</h3>

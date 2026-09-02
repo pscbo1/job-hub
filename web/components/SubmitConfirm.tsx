@@ -106,6 +106,9 @@ export function SubmitConfirm({
           {app.employer ? ` · ${app.employer}` : ""}
         </p>
         <p className="text-xs text-muted">{timeLabel}</p>
+        <p className="mt-3 text-xs text-muted">
+          This records the application here. It does not submit to the employer site.
+        </p>
         <p className="mt-3 text-xs font-medium uppercase tracking-wide text-muted">
           Linked materials to snapshot
         </p>

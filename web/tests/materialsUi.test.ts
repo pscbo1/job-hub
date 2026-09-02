@@ -10,7 +10,10 @@ import {
   knowledgePreviewText,
   latestVersion,
   materialCountLabel,
+  humanMaterialTitle,
+  humanVersionLabel,
   MATERIAL_LANE_COPY,
+  partitionPacketItems,
   searchKnowledgeItems,
 } from "@/lib/materialsUi";
 import type { Application, Material, PacketItem } from "@/lib/api";
@@ -57,6 +60,47 @@ describe("materials list copy", () => {
     expect(MATERIAL_LANE_COPY.knowledge.search).toBe("Search templates and answers");
     expect(MATERIAL_LANE_COPY.knowledge.empty).toBe("No templates or answers in this tab.");
     expect(MATERIAL_LANE_COPY.knowledge.description).toMatch(/Reusable messages/);
+  });
+
+  it("uses human titles instead of numeric display labels", () => {
+    expect(humanMaterialTitle({ title: "English resume" })).toBe("English resume");
+    expect(humanMaterialTitle({ title: "22 · 33" }, { original_filename: "resume.pdf" })).toBe(
+      "resume",
+    );
+    expect(humanMaterialTitle({ title: "v22", kind: "resume" })).toBe("Resume");
+    expect(humanVersionLabel({ display_label: "v22 · 33", version_number: 2 })).toBe("Version 2");
+    expect(humanVersionLabel({ version_label: "research track" })).toBe("research track");
+  });
+
+  it("splits one packet into file and template lanes", () => {
+    const resume: PacketItem = {
+      binding: {
+        id: "b-file",
+        application_id: "a",
+        material_id: "m-resume",
+        material_version_id: "v-resume",
+        sort_order: 0,
+        created_at: "",
+      },
+      material: { id: "m-resume", title: "Resume", kind: "resume" } as Material,
+      version: { id: "v-resume" } as Material["versions"][0],
+    };
+    const answer: PacketItem = {
+      binding: {
+        id: "b-ans",
+        application_id: "a",
+        material_id: "mat-answer",
+        material_version_id: "ver-ans-1",
+        sort_order: 1,
+        created_at: "",
+      },
+      material: { id: "mat-answer", title: "Why this role", kind: "application_answer" } as Material,
+      version: { id: "ver-ans-1" } as Material["versions"][0],
+    };
+    expect(partitionPacketItems([resume, answer])).toEqual({
+      files: [resume],
+      knowledge: [answer],
+    });
   });
 
   it("formats applied date as month day", () => {
