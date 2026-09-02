@@ -222,6 +222,7 @@ export interface HubJob {
   favorite?: boolean;
   reference?: boolean;
   comment?: string;
+  contact?: string;
   next_step?: string;
   deadline?: string | null;
   follow_up_at?: string | null;
@@ -832,7 +833,11 @@ function demoJobById(jobId: string): HubJob | undefined {
 }
 
 function withDemoCommNotes(job: HubJob): HubJob {
-  return { ...job, comm_notes: demo.listDemoCommNotesForJob(job.id) };
+  return {
+    ...job,
+    comm_notes: demo.listDemoCommNotesForJob(job.id),
+    contact: demo.leftoverDemoJobContact(job.id) || job.contact || "",
+  };
 }
 
 export async function listJobCommNotes(jobId: string): Promise<ApplicationCommNote[]> {
@@ -841,6 +846,11 @@ export async function listJobCommNotes(jobId: string): Promise<ApplicationCommNo
     `/api/jobs/${encodeURIComponent(jobId)}/comm-notes`,
     [],
   );
+}
+
+export function leftoverJobContact(jobId: string, initial = ""): string {
+  if (demo.DEMO) return demo.leftoverDemoJobContact(jobId) || initial;
+  return initial;
 }
 
 export async function listJobTasks(jobId: string): Promise<JobTask[]> {
@@ -1452,6 +1462,8 @@ export interface Application {
   applied_date: string;
   deadline: string;
   notes: string;
+  /** Optional free-text contact. Empty is allowed. Not required to mark submitted. */
+  contact?: string;
   close_reason?: CloseReason | null;
   close_note?: string;
   stale_applied?: boolean;
@@ -1496,6 +1508,7 @@ export interface ApplicationCreateBody {
 export interface ApplicationPatch {
   stage?: ApplicationStage;
   notes?: string;
+  contact?: string;
   applied_date?: string;
   deadline?: string;
   salary?: string;

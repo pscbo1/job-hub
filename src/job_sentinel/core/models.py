@@ -305,6 +305,10 @@ class Job(BaseModel):
         description="Independent keep-aside. Can coexist with Save and Application.",
     )
     comment: str = Field(default="")
+    contact: str = Field(
+        default="",
+        description="Leftover Application contact after Cancel Draft. Never merged with comment.",
+    )
     next_step: str = Field(default="")
     deadline: datetime | None = Field(default=None)
     follow_up_at: datetime | None = Field(default=None)
@@ -512,6 +516,10 @@ class Application(BaseModel):
     applied_date: str = Field(default="")
     deadline: str = Field(default="")
     notes: str = Field(default="")
+    contact: str = Field(
+        default="",
+        description="Optional free-text contact (name, email, WeChat, or a link). Not required.",
+    )
     close_reason: CloseReason | None = Field(default=None)
     close_note: str = Field(default="")
     posting_id: str | None = Field(default=None)

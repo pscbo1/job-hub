@@ -310,6 +310,7 @@ function app(
     applied_date: opts.applied_date ?? "",
     deadline: "",
     notes: opts.notes ?? "",
+    contact: opts.contact ?? "",
     next_step: opts.next_step ?? "",
     job_deadline: opts.job_deadline ?? "",
     job_description: opts.job_description ?? "",
@@ -634,6 +635,9 @@ export function removeDemoPacketBinding(appId: string, bindingId: string): void 
 const demoCommNotes: Record<string, import("@/lib/api").ApplicationCommNote[]> = {};
 const demoJobCommNotes: import("@/lib/api").ApplicationCommNote[] = [];
 const DEMO_JOB_COMM_KEY = "job-hub.demo.jobCommNotes";
+const DEMO_JOB_CONTACT_KEY = "job-hub.demo.jobContact";
+const demoJobContact: Record<string, string> = {};
+let demoJobContactHydrated = false;
 
 function hydrateDemoJobCommNotes(): void {
   if (typeof window === "undefined" || demoJobCommNotes.length > 0) return;
@@ -650,6 +654,36 @@ function hydrateDemoJobCommNotes(): void {
 function persistDemoJobCommNotes(): void {
   if (typeof window === "undefined") return;
   sessionStorage.setItem(DEMO_JOB_COMM_KEY, JSON.stringify(demoJobCommNotes));
+}
+
+function hydrateDemoJobContact(): void {
+  if (demoJobContactHydrated || typeof window === "undefined") return;
+  demoJobContactHydrated = true;
+  try {
+    const raw = sessionStorage.getItem(DEMO_JOB_CONTACT_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [jobId, text] of Object.entries(parsed)) {
+        if (typeof text === "string" && text.trim()) demoJobContact[jobId] = text;
+      }
+    }
+  } catch {
+    /* ignore bad demo cache */
+  }
+}
+
+function persistDemoJobContact(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(DEMO_JOB_CONTACT_KEY, JSON.stringify(demoJobContact));
+}
+
+export function leftoverDemoJobContact(jobId: string): string {
+  hydrateDemoJobContact();
+  const stored = (demoJobContact[jobId] ?? "").trim();
+  if (stored) return stored;
+  const job = demoHubJobs.find((row) => row.id === jobId);
+  return (job?.contact ?? "").trim();
 }
 const demoIdempotency: Record<string, string> = {};
 
@@ -771,6 +805,14 @@ export function abandonDemoApplication(id: string): boolean {
       demoJobCommNotes.push({ ...note, job_id: note.job_id ?? app.job_id });
     }
     persistDemoJobCommNotes();
+    const contact = (app.contact ?? "").trim();
+    if (contact) {
+      hydrateDemoJobContact();
+      demoJobContact[app.job_id] = contact;
+      persistDemoJobContact();
+      const job = demoHubJobs.find((row) => row.id === app.job_id);
+      if (job) job.contact = contact;
+    }
   }
   delete demoCommNotes[id];
   delete demoPacketIds[id];

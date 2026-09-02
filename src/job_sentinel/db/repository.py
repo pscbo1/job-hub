@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -261,6 +261,7 @@ class JobRepository:
                 favorite INTEGER NOT NULL DEFAULT 0,
                 reference INTEGER NOT NULL DEFAULT 0,
                 comment TEXT NOT NULL DEFAULT '',
+                contact TEXT NOT NULL DEFAULT '',
                 next_step TEXT NOT NULL DEFAULT '',
                 deadline TEXT,
                 follow_up_at TEXT,
@@ -342,6 +343,8 @@ class JobRepository:
             alters.append("ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
         if "comment" not in names:
             alters.append("ALTER TABLE jobs ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+        if "contact" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
         if "next_step" not in names:
             alters.append("ALTER TABLE jobs ADD COLUMN next_step TEXT NOT NULL DEFAULT ''")
         if "deadline" not in names:
@@ -407,6 +410,8 @@ class JobRepository:
             self._db.execute(
                 "ALTER TABLE applications ADD COLUMN exclude_from_idle INTEGER NOT NULL DEFAULT 0"
             )
+        if "contact" not in app_names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
         self._db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS applications_job_id_active
@@ -900,6 +905,9 @@ class JobRepository:
             self._ensure_job_tasks_table()
         if from_version < 12:
             self._ensure_part3_tables()
+        if from_version < 13:
+            self._ensure_prd02_job_columns()
+            self._ensure_prd02_application_columns()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -967,7 +975,7 @@ class JobRepository:
 
         Dedup: (1) ``(source, source_job_id)`` (2) non-empty ``canonical_url``.
         Fingerprint is never used to merge. Ingest fields only on update —
-        human tracking (engagement, favorite, dismiss, archive, comment, next
+        human tracking (engagement, favorite, dismiss, archive, comment, contact, next
         step) and ``discovered_at`` / ``match_score`` are preserved.
         """
         source_job_id = job.source_job_id.strip() or source_job_id_from_canonical_url(
@@ -1695,6 +1703,17 @@ class JobRepository:
             [job_id, application_id],
         )
 
+    def keep_application_contact_on_job(self, job_id: str, contact: str) -> None:
+        """Copy leftover Application contact onto Job. Never writes Job.comment."""
+        text = (contact or "").strip()
+        if not job_id or not text:
+            return
+        try:
+            self._table(_JOBS_TABLE).get(job_id)
+        except sqlite_utils.db.NotFoundError:
+            return
+        self._table(_JOBS_TABLE).update(job_id, {"contact": text, "updated_at": _now_iso()})
+
     def create_comm_note(self, note: ApplicationCommNote) -> ApplicationCommNote:
         job_id = note.job_id
         if not job_id and note.application_id:
@@ -2161,6 +2180,7 @@ def _app_to_row(app: Application) -> dict[str, Any]:
         "applied_date": app.applied_date,
         "deadline": app.deadline,
         "notes": app.notes,
+        "contact": app.contact or "",
         "close_reason": app.close_reason.value if app.close_reason else None,
         "close_note": app.close_note,
         "posting_id": app.posting_id,
@@ -2191,6 +2211,7 @@ def _app_from_row(row: dict[str, Any]) -> Application:
         applied_date=row.get("applied_date", ""),
         deadline=row.get("deadline", ""),
         notes=row.get("notes", ""),
+        contact=row.get("contact") or "",
         close_reason=reason,
         close_note=row.get("close_note") or "",
         posting_id=row.get("posting_id") or None,
@@ -2406,6 +2427,7 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "favorite": 1 if job.favorite else 0,
         "reference": 1 if job.reference else 0,
         "comment": job.comment,
+        "contact": job.contact or "",
         "next_step": job.next_step,
         "deadline": _optional_iso(job.deadline),
         "follow_up_at": _optional_iso(job.follow_up_at),
@@ -2454,6 +2476,7 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         favorite=bool(int(row.get("favorite") or 0)),
         reference=bool(int(row.get("reference") or 0)) or engagement == JobEngagement.REFERENCE,
         comment=row.get("comment") or "",
+        contact=row.get("contact") or "",
         next_step=row.get("next_step") or "",
         deadline=_parse_optional_dt(row.get("deadline")),
         follow_up_at=_parse_optional_dt(row.get("follow_up_at")),

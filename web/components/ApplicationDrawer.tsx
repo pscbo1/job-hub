@@ -60,6 +60,7 @@ export function ApplicationDrawer({
   const [pending, setPending] = useState<Application | null>(null);
   const [tab, setTab] = useState<ApplicationDrawerTab>(requestedTab);
   const [notesDraft, setNotesDraft] = useState(requestedApp?.notes ?? "");
+  const [contactDraft, setContactDraft] = useState(requestedApp?.contact ?? "");
   const [nextDraft, setNextDraft] = useState(requestedApp?.next_step ?? "");
   const [ddlDraft, setDdlDraft] = useState(dateInputValue(requestedApp?.job_deadline));
   const [commDraft, setCommDraft] = useState("");
@@ -72,6 +73,7 @@ export function ApplicationDrawer({
   const saveLock = useRef(false);
   const baselineRef = useRef({
     notes: requestedApp?.notes ?? "",
+    contact: requestedApp?.contact ?? "",
     nextStep: requestedApp?.next_step ?? "",
     deadline: dateInputValue(requestedApp?.job_deadline),
   });
@@ -79,6 +81,7 @@ export function ApplicationDrawer({
   function resetBaseline(app: Application) {
     baselineRef.current = {
       notes: app.notes,
+      contact: app.contact ?? "",
       nextStep: app.next_step ?? "",
       deadline: dateInputValue(app.job_deadline),
     };
@@ -86,6 +89,7 @@ export function ApplicationDrawer({
 
   function syncDrafts(app: Application) {
     setNotesDraft(app.notes);
+    setContactDraft(app.contact ?? "");
     setNextDraft(app.next_step ?? "");
     setDdlDraft(dateInputValue(app.job_deadline));
     setCommDraft("");
@@ -96,6 +100,7 @@ export function ApplicationDrawer({
   const isDirty =
     shown != null &&
     (notesDraft !== shown.notes ||
+      contactDraft !== (shown.contact ?? "") ||
       nextDraft !== (shown.next_step ?? "") ||
       ddlDraft !== dateInputValue(shown.job_deadline) ||
       commDraft.trim() !== "");
@@ -140,6 +145,7 @@ export function ApplicationDrawer({
     const snapshot = shown;
     const currentDrafts = {
       notes: notesDraft,
+      contact: contactDraft,
       nextStep: nextDraft,
       deadline: ddlDraft,
       commDraft,
@@ -153,6 +159,7 @@ export function ApplicationDrawer({
             appId,
             jobId: snapshot.job_id,
             shownNotes: baselineRef.current.notes,
+            shownContact: baselineRef.current.contact,
             shownNextStep: baselineRef.current.nextStep,
             shownDeadline: baselineRef.current.deadline,
             drafts: currentDrafts,
@@ -169,6 +176,7 @@ export function ApplicationDrawer({
     const nextShown = applyDrawerSynced(shownIdRef.current, appId, snapshot, result.synced);
     if (nextShown) setShown(nextShown);
     if (result.synced.notes !== undefined) baselineRef.current.notes = result.synced.notes;
+    if (result.synced.contact !== undefined) baselineRef.current.contact = result.synced.contact;
     if (result.synced.nextStep !== undefined) baselineRef.current.nextStep = result.synced.nextStep;
     if (result.synced.deadline !== undefined) baselineRef.current.deadline = result.synced.deadline;
     const nextDrafts = draftsAfterSave(currentDrafts, result.synced);
@@ -405,6 +413,8 @@ export function ApplicationDrawer({
               {tab === "overview" && (
                 <OverviewTab
                   app={shown}
+                  contactDraft={contactDraft}
+                  onContactChange={setContactDraft}
                   nextDraft={nextDraft}
                   ddlDraft={ddlDraft}
                   onNextChange={setNextDraft}
@@ -437,6 +447,8 @@ export function ApplicationDrawer({
 
 function OverviewTab({
   app,
+  contactDraft,
+  onContactChange,
   nextDraft,
   ddlDraft,
   onNextChange,
@@ -445,6 +457,8 @@ function OverviewTab({
   onOpenMaterials,
 }: {
   app: Application;
+  contactDraft: string;
+  onContactChange: (value: string) => void;
   nextDraft: string;
   ddlDraft: string;
   onNextChange: (value: string) => void;
@@ -467,6 +481,19 @@ function OverviewTab({
             <p className="mt-1 text-xs text-muted">No apply or source URL is stored for this job.</p>
           )}
         </div>
+      </section>
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Contact</h3>
+        <textarea
+          value={contactDraft}
+          onChange={(e) => onContactChange(e.target.value)}
+          placeholder="Name, email, WeChat, or a link"
+          rows={3}
+          className="mt-2 w-full select-text resize-y rounded-lg border border-line bg-bg px-3 py-2 text-sm text-ink"
+        />
+        <p className="mt-1 text-xs text-muted">
+          Optional. Select the text to copy. Not required to mark submitted.
+        </p>
       </section>
       <section>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Next step</h3>

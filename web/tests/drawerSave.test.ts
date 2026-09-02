@@ -17,6 +17,7 @@ import {
 
 const drafts: DrawerDrafts = {
   notes: "edited notes",
+  contact: "",
   nextStep: "Prep OA",
   deadline: "2026-09-10",
   commDraft: " emailed recruiter ",
@@ -27,6 +28,7 @@ function input(overrides: Partial<DrawerSaveInput> = {}): DrawerSaveInput {
     appId: "app-a",
     jobId: "job-a",
     shownNotes: "old notes",
+    shownContact: "",
     shownNextStep: "",
     shownDeadline: "",
     drafts: { ...drafts },
@@ -132,6 +134,37 @@ describe("saveDrawerRecord success and partial retry", () => {
     expect(retryClient.patchHubJob).toHaveBeenCalledOnce();
     expect(retryClient.addCommNote).toHaveBeenCalledOnce();
     expect(retryClient.addCommNote).toHaveBeenCalledWith("app-a", "emailed recruiter");
+  });
+
+  it("patches contact through the application update API and keeps it on failure", async () => {
+    const contactDrafts: DrawerDrafts = { ...drafts, notes: "old notes", contact: "Ada / wechat: ada" };
+    const api = client({ updateApplication: vi.fn(httpFail) });
+    const result = await saveDrawerRecord(
+      input({ shownNotes: "old notes", shownContact: "", drafts: contactDrafts }),
+      api,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.failedStep).toBe("contact");
+    expect(api.updateApplication).toHaveBeenCalledWith("app-a", { contact: "Ada / wechat: ada" });
+    expect(draftsAfterSave(contactDrafts, result.synced).contact).toBe("Ada / wechat: ada");
+    expect(canCompleteLeave(result.ok, false)).toBe(false);
+  });
+
+  it("saves contact and reloads the synced value", async () => {
+    const contactDrafts: DrawerDrafts = { ...drafts, notes: "old notes", contact: "Ada / wechat: ada" };
+    const result = await saveDrawerRecord(
+      input({ shownNotes: "old notes", shownContact: "", drafts: contactDrafts }),
+      client(),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.synced.contact).toBe("Ada / wechat: ada");
+    const record = applyDrawerSynced(
+      "app-a",
+      "app-a",
+      { id: "app-a", notes: "old notes", contact: "" },
+      result.synced,
+    );
+    expect(record?.contact).toBe("Ada / wechat: ada");
   });
 });
 

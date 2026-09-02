@@ -348,6 +348,7 @@ class ApplicationCreateRequest(BaseModel):
 class ApplicationPatchRequest(BaseModel):
     stage: ApplicationStage | None = Field(default=None)
     notes: str | None = Field(default=None)
+    contact: str | None = Field(default=None)
     applied_date: str | None = Field(default=None)
     deadline: str | None = Field(default=None)
     salary: str | None = Field(default=None)

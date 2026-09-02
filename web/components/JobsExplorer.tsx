@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { JobActions } from "@/components/JobActions";
 import { JobCommNotes } from "@/components/JobCommNotes";
+import { JobContact } from "@/components/JobContact";
 import {
   JobPoolActionMenu,
   JobPoolUndoToast,
@@ -516,6 +517,7 @@ export function JobsExplorer({
                       onChange={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
                     />
                   </div>
+                  <JobContact jobId={row.id} contact={row.contact} />
                   <JobCommNotes jobId={row.id} notes={row.comm_notes} />
                   {(j.description ||
                     (showSponsorToggle &&

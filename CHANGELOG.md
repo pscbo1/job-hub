@@ -32,6 +32,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Application Overview can **Add task** onto the same `job_tasks` row Tasks uses (auto-linked Job + Application). Completing a task does not Mark submitted or change stage.
 - Application Materials can search/preview/copy Templates & Answers in place. Application answers may bind or replace a linked version; message templates stay copy-only.
 - Cancel Draft keeps communication notes on the Job (`job_id`). Discover/Tasks show a folded read-only list with the original occurred-at (`created_at`). Materials library stays.
+- Optional Application **Contact** free text (Overview). Empty is allowed and is not required to mark submitted. Cancel Draft copies leftover text onto the Job for lookup; it is never written to `Job.comment`.
 
 ### Fixed
 

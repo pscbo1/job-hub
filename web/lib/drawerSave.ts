@@ -1,15 +1,17 @@
 /** Orchestrate application-drawer saves so failures keep drafts and never switch. */
 
-export type DrawerSaveStep = "notes" | "next_step" | "comm_note";
+export type DrawerSaveStep = "notes" | "contact" | "next_step" | "comm_note";
 
 export const DRAWER_SAVE_STEP_LABELS: Record<DrawerSaveStep, string> = {
   notes: "application notes",
+  contact: "contact",
   next_step: "next step",
   comm_note: "communication note",
 };
 
 export type DrawerDrafts = {
   notes: string;
+  contact: string;
   nextStep: string;
   deadline: string;
   commDraft: string;
@@ -19,6 +21,7 @@ export type DrawerSaveInput = {
   appId: string;
   jobId: string | null | undefined;
   shownNotes: string;
+  shownContact: string;
   shownNextStep: string;
   shownDeadline: string;
   drafts: DrawerDrafts;
@@ -26,6 +29,7 @@ export type DrawerSaveInput = {
 
 export type DrawerSaveSynced = {
   notes?: string;
+  contact?: string;
   nextStep?: string;
   deadline?: string;
   commCleared?: boolean;
@@ -36,7 +40,10 @@ export type DrawerSaveResult =
   | { ok: false; failedStep: DrawerSaveStep; synced: DrawerSaveSynced };
 
 export type DrawerSaveClient = {
-  updateApplication: (id: string, patch: { notes: string }) => Promise<unknown | null>;
+  updateApplication: (
+    id: string,
+    patch: { notes?: string; contact?: string },
+  ) => Promise<unknown | null>;
   patchHubJob: (
     jobId: string,
     body: { next_step: string; deadline: string | null },
@@ -68,6 +75,7 @@ export function applyDrawerSynced<T extends { id: string }>(
   return {
     ...record,
     ...(synced.notes !== undefined ? { notes: synced.notes } : {}),
+    ...(synced.contact !== undefined ? { contact: synced.contact } : {}),
     ...(synced.nextStep !== undefined ? { next_step: synced.nextStep } : {}),
     ...(synced.deadline !== undefined
       ? { job_deadline: synced.deadline.trim() ? synced.deadline : "" }
@@ -78,6 +86,7 @@ export function applyDrawerSynced<T extends { id: string }>(
 export function draftsAfterSave(drafts: DrawerDrafts, synced: DrawerSaveSynced): DrawerDrafts {
   return {
     notes: drafts.notes,
+    contact: drafts.contact,
     nextStep: drafts.nextStep,
     deadline: drafts.deadline,
     commDraft: synced.commCleared ? "" : drafts.commDraft,
@@ -106,6 +115,15 @@ export async function saveDrawerRecord(
     if (cancelled()) return { ok: false, failedStep: "notes", synced };
     if (result == null) return { ok: false, failedStep: "notes", synced };
     synced.notes = drafts.notes;
+  }
+
+  if (drafts.contact !== input.shownContact) {
+    const result = await callStep(() =>
+      client.updateApplication(input.appId, { contact: drafts.contact }),
+    );
+    if (cancelled()) return { ok: false, failedStep: "contact", synced };
+    if (result == null) return { ok: false, failedStep: "contact", synced };
+    synced.contact = drafts.contact;
   }
 
   const nextDirty =

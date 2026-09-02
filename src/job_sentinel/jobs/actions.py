@@ -362,6 +362,7 @@ def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
     repo.clear_application_bindings(app.id)
     if app.job_id:
         repo.attach_comm_notes_to_job(app.id, app.job_id)
+        repo.keep_application_contact_on_job(app.job_id, app.contact)
     repo.soft_delete_application(app.id)
     job: Job | None = None
     if app.job_id:
