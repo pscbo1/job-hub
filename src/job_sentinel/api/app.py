@@ -148,6 +148,7 @@ class JobTaskCreateRequest(BaseModel):
     notes: str | None = None
     source_url: str | None = None
     application_id: str | None = None
+    reminders: list[date] | None = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -176,6 +177,7 @@ class JobTaskPatchRequest(BaseModel):
     sort_order: int | None = None
     notes: str | None = None
     source_url: str | None = None
+    reminders: list[date] | None = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -793,6 +795,19 @@ def create_app(
             jobs = [j for j in jobs if job_in_market_view(j, view_id, registry)]
         return jobs
 
+    @app.get("/api/jobs/{job_id}", response_model=Job)
+    def get_one_hub_job(job_id: str) -> Job:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            job = repo.get_hub_job(job_id)
+        finally:
+            repo.close()
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return job
+
     @app.patch("/api/jobs/{job_id}", response_model=Job)
     def patch_hub_job(job_id: str, req: HubJobStatusRequest) -> Job:
         """Update Job tracking: Save, Reference, comment, next step, deadline."""
@@ -904,6 +919,7 @@ def create_app(
     @app.post("/api/jobs/{job_id}/tasks", response_model=JobTask)
     def create_hub_job_task(job_id: str, req: JobTaskCreateRequest) -> JobTask:
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import ReminderPlanError
 
         repo = JobRepository(db_path)
         try:
@@ -914,7 +930,10 @@ def create_app(
                 notes=req.notes,
                 source_url=req.source_url,
                 application_id=req.application_id,
+                reminder_dates=req.reminders,
             )
+        except ReminderPlanError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except ValueError as exc:
             detail = str(exc)
             status = 404 if detail == "Application not found" else 400
@@ -928,10 +947,22 @@ def create_app(
     @app.patch("/api/jobs/{job_id}/tasks/{task_id}", response_model=JobTask)
     def patch_hub_job_task(job_id: str, task_id: str, req: JobTaskPatchRequest) -> JobTask:
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import ReminderPlanError
 
+        payload = req.model_dump(exclude_unset=True)
+        reminder_dates = payload.pop("reminders", None)
+        reminders_set = "reminders" in req.model_fields_set
         repo = JobRepository(db_path)
         try:
-            task = repo.update_job_task(job_id, task_id, req.model_dump(exclude_unset=True))
+            task = repo.update_job_task(
+                job_id,
+                task_id,
+                payload,
+                reminder_dates=reminder_dates,
+                reminders_set=reminders_set,
+            )
+        except ReminderPlanError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
             repo.close()
         if task is None:
@@ -950,6 +981,52 @@ def create_app(
         if not deleted:
             raise HTTPException(status_code=404, detail="Task not found")
         return {"ok": True}
+
+    @app.post("/api/reminders/sync")
+    def sync_in_app_reminders_route() -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import sync_in_app_reminders
+
+        repo = JobRepository(db_path)
+        try:
+            result = sync_in_app_reminders(repo)
+        finally:
+            repo.close()
+        return result.model_dump(mode="json")
+
+    @app.get("/api/reminders")
+    def list_in_app_reminders(
+        view: str = "unread",
+        market: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import list_reminder_inbox
+
+        key = view.strip().lower() or "unread"
+        if key not in {"unread", "all"}:
+            raise HTTPException(status_code=422, detail="view must be unread or all")
+        repo = JobRepository(db_path)
+        try:
+            inbox = list_reminder_inbox(repo, view=key, market=market, limit=limit, offset=offset)
+        finally:
+            repo.close()
+        return inbox.model_dump(mode="json")
+
+    @app.patch("/api/reminders/{reminder_id}/read")
+    def mark_in_app_reminder_read(reminder_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import mark_reminder_read
+
+        repo = JobRepository(db_path)
+        try:
+            row = mark_reminder_read(repo, reminder_id)
+        finally:
+            repo.close()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        return row.model_dump(mode="json")
 
     @app.post("/api/jobs/{job_id}/start-application")
     def start_application_hub_job(job_id: str) -> dict[str, Any]:

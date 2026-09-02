@@ -50,6 +50,8 @@ from job_sentinel.core.models import (
     Material,
     MaterialVersion,
     PacketSnapshot,
+    TaskReminder,
+    TaskReminderKind,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
 )
@@ -61,7 +63,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -69,6 +71,7 @@ _DOC_TABLE = "generated_documents"
 _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
 _JOB_TASKS_TABLE = "job_tasks"
+_TASK_REMINDERS_TABLE = "task_reminders"
 _SPONSOR_EMPLOYERS = "sponsor_employers"
 _SPONSOR_SYNC = "sponsor_registry_sync"
 _SUBMISSIONS_TABLE = "application_submissions"
@@ -189,6 +192,7 @@ class JobRepository:
         self._ensure_v0_tables()
         self._ensure_prd02_tables()
         self._ensure_job_tasks_table()
+        self._ensure_task_reminders_table()
         self._ensure_manual_application_requests_table()
 
     def _ensure_applications_table(self) -> None:
@@ -897,6 +901,55 @@ class JobRepository:
         tasks.create_index(["due_at"], if_not_exists=True)
         tasks.create_index(["application_id"], if_not_exists=True)
 
+    def _ensure_task_reminders_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_reminders (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                reminder_on TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('advance', 'due')),
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                in_app_triggered_at TEXT,
+                in_app_skipped_at TEXT,
+                read_at TEXT,
+                UNIQUE (task_id, due_date, reminder_on)
+            )
+            """
+        )
+        reminders = self._table(_TASK_REMINDERS_TABLE)
+        reminders.create_index(["task_id"], if_not_exists=True)
+        reminders.create_index(["due_date"], if_not_exists=True)
+        reminders.create_index(["in_app_triggered_at"], if_not_exists=True)
+
+    def _backfill_due_reminder_nodes(self) -> None:
+        """Existing dated tasks get an On-due node only; no bulk advance dates."""
+        now = _now_iso()
+        rows = list(
+            self._db.execute(
+                """
+                SELECT id, due_at FROM job_tasks
+                WHERE due_at IS NOT NULL AND TRIM(due_at) != ''
+                """
+            )
+        )
+        for row in rows:
+            task_id = str(row[0])
+            due = str(row[1])[:10]
+            reminder_id = uuid.uuid4().hex
+            self._db.execute(
+                """
+                INSERT INTO task_reminders (
+                    id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                    in_app_triggered_at, in_app_skipped_at, read_at
+                ) VALUES (?, ?, ?, ?, 'due', 1, ?, NULL, NULL, NULL)
+                ON CONFLICT(task_id, due_date, reminder_on) DO NOTHING
+                """,
+                [reminder_id, task_id, due, due, now],
+            )
+
     def _get_meta(self, key: str) -> str | None:
         rows = list(self._table(_META_TABLE).rows_where("key = ?", [key]))
         return rows[0]["value"] if rows else None
@@ -947,6 +1000,9 @@ class JobRepository:
         if from_version < 15:
             self._ensure_prd02_job_columns()
             self._ensure_manual_application_requests_table()
+        if from_version < 16:
+            self._ensure_task_reminders_table()
+            self._backfill_due_reminder_nodes()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1302,7 +1358,7 @@ class JobRepository:
             [job_id],
             order_by="sort_order ASC, created_at ASC",
         )
-        return [_job_task_from_row(dict(r)) for r in rows]
+        return self._attach_task_reminders([_job_task_from_row(dict(r)) for r in rows])
 
     def list_job_tasks_for_jobs(self, job_ids: Sequence[str]) -> dict[str, list[JobTask]]:
         grouped: dict[str, list[JobTask]] = {jid: [] for jid in job_ids}
@@ -1315,8 +1371,8 @@ class JobRepository:
             list(ids),
             order_by="sort_order ASC, created_at ASC",
         )
-        for row in rows:
-            task = _job_task_from_row(dict(row))
+        tasks = self._attach_task_reminders([_job_task_from_row(dict(row)) for row in rows])
+        for task in tasks:
             grouped.setdefault(task.job_id, []).append(task)
         return grouped
 
@@ -1330,6 +1386,8 @@ class JobRepository:
         notes: str | None = None,
         source_url: str | None = None,
         application_id: str | None = None,
+        reminder_dates: list[date] | None = None,
+        now: datetime | None = None,
     ) -> JobTask | None:
         if self.get_hub_job(job_id) is None:
             return None
@@ -1353,21 +1411,49 @@ class JobRepository:
             source_url=source_url,
             application_id=app_id,
         )
-        self._table(_JOB_TASKS_TABLE).insert(_job_task_to_row(task))
-        self.touch_hub_job_activity(job_id)
-        return task
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._insert_transaction_row(_JOB_TASKS_TABLE, _job_task_to_row(task))
+            self._apply_reminder_plan_tx(
+                task,
+                reminder_dates=reminder_dates,
+                reminders_set=reminder_dates is not None,
+                previous_due=None,
+                now=now,
+            )
+            conn.execute(
+                "UPDATE jobs SET last_activity_at = ? WHERE id = ?",
+                [_now_iso(), job_id],
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return self.get_job_task(task.id)
 
     def get_job_task(self, task_id: str) -> JobTask | None:
         try:
             row = self._table(_JOB_TASKS_TABLE).get(task_id)
-            return _job_task_from_row(dict(row))
         except sqlite_utils.db.NotFoundError:
             return None
+        attached = self._attach_task_reminders([_job_task_from_row(dict(row))])
+        return attached[0] if attached else None
 
-    def update_job_task(self, job_id: str, task_id: str, fields: dict[str, Any]) -> JobTask | None:
+    def update_job_task(
+        self,
+        job_id: str,
+        task_id: str,
+        fields: dict[str, Any],
+        *,
+        reminder_dates: list[date] | None = None,
+        reminders_set: bool = False,
+        now: datetime | None = None,
+    ) -> JobTask | None:
         task = self.get_job_task(task_id)
         if task is None or task.job_id != job_id:
             return None
+        previous_due = task.due_at
         payload: dict[str, Any] = {}
         if "title" in fields and fields["title"] is not None:
             payload["title"] = str(fields["title"]).strip()
@@ -1383,9 +1469,34 @@ class JobRepository:
         if "source_url" in fields:
             url = fields["source_url"]
             payload["source_url"] = str(url).strip() if url else None
-        if payload:
-            self._table(_JOB_TASKS_TABLE).update(task_id, payload)
-            self.touch_hub_job_activity(job_id)
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if payload:
+                assignments = ", ".join(f"{key} = ?" for key in payload)
+                conn.execute(
+                    f"UPDATE job_tasks SET {assignments} WHERE id = ?",  # noqa: S608
+                    [*payload.values(), task_id],
+                )
+            if "due_at" in fields:
+                raw_due = payload.get("due_at")
+                task.due_at = date.fromisoformat(str(raw_due)[:10]) if raw_due else None
+            self._apply_reminder_plan_tx(
+                task,
+                reminder_dates=reminder_dates,
+                reminders_set=reminders_set,
+                previous_due=previous_due,
+                now=now,
+            )
+            if payload or reminders_set:
+                conn.execute(
+                    "UPDATE jobs SET last_activity_at = ? WHERE id = ?",
+                    [_now_iso(), job_id],
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         return self.get_job_task(task_id)
 
     def delete_job_task(self, job_id: str, task_id: str) -> bool:
@@ -1395,6 +1506,256 @@ class JobRepository:
         self._table(_JOB_TASKS_TABLE).delete(task_id)
         self.touch_hub_job_activity(job_id)
         return True
+
+    def _attach_task_reminders(self, tasks: list[JobTask]) -> list[JobTask]:
+        ids = [task.id for task in tasks]
+        grouped = self.list_reminders_for_tasks(ids)
+        for task in tasks:
+            due = task.due_at.isoformat() if task.due_at is not None else ""
+            rows = [
+                row
+                for row in grouped.get(task.id, [])
+                if row.enabled and (not due or row.due_date.isoformat() == due)
+            ]
+            rows.sort(key=lambda row: (row.reminder_on, row.id))
+            task.reminders = rows
+        return tasks
+
+    def list_reminders_for_tasks(self, task_ids: Sequence[str]) -> dict[str, list[TaskReminder]]:
+        grouped: dict[str, list[TaskReminder]] = {tid: [] for tid in task_ids}
+        ids = [tid for tid in task_ids if tid]
+        if not ids:
+            return grouped
+        placeholders = ",".join("?" * len(ids))
+        rows = self._db.execute(
+            f"""
+            SELECT id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                   in_app_triggered_at, in_app_skipped_at, read_at
+            FROM task_reminders
+            WHERE task_id IN ({placeholders})
+            ORDER BY reminder_on ASC, id ASC
+            """,  # noqa: S608
+            list(ids),
+        ).fetchall()
+        for raw in rows:
+            reminder = _task_reminder_from_sql(raw)
+            grouped.setdefault(reminder.task_id, []).append(reminder)
+        return grouped
+
+    def list_reminders_for_task_due(self, task_id: str, due: date) -> list[TaskReminder]:
+        rows = self._db.execute(
+            """
+            SELECT id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                   in_app_triggered_at, in_app_skipped_at, read_at
+            FROM task_reminders
+            WHERE task_id = ? AND due_date = ?
+            ORDER BY reminder_on ASC, id ASC
+            """,
+            [task_id, due.isoformat()],
+        ).fetchall()
+        return [_task_reminder_from_sql(raw) for raw in rows]
+
+    def get_task_reminder(self, reminder_id: str) -> TaskReminder | None:
+        row = self._db.execute(
+            """
+            SELECT id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                   in_app_triggered_at, in_app_skipped_at, read_at
+            FROM task_reminders
+            WHERE id = ?
+            """,
+            [reminder_id],
+        ).fetchone()
+        return _task_reminder_from_sql(row) if row is not None else None
+
+    def list_open_dated_tasks_for_reminders(self) -> list[tuple[JobTask, Job]]:
+        rows = self._db.execute(
+            """
+            SELECT t.id, t.job_id, t.title, t.due_at, t.done, t.sort_order, t.created_at,
+                   t.application_id, t.notes, t.source_url, j.id
+            FROM job_tasks t
+            JOIN jobs j ON j.id = t.job_id
+            WHERE COALESCE(t.done, 0) = 0
+              AND t.due_at IS NOT NULL AND TRIM(t.due_at) != ''
+              AND (j.dismissed_at IS NULL OR j.dismissed_at = '')
+              AND (j.archived_at IS NULL OR j.archived_at = '')
+              AND (j.filter_state IS NULL OR j.filter_state = '' OR j.filter_state = 'included')
+            """
+        ).fetchall()
+        out: list[tuple[JobTask, Job]] = []
+        for raw in rows:
+            task = self.get_job_task(str(raw[0]))
+            job = self.get_hub_job(str(raw[1]))
+            if task is None or job is None:
+                continue
+            out.append((task, job))
+        return out
+
+    def list_triggered_reminder_rows(self, *, market: str | None = None) -> list[dict[str, Any]]:
+        sql = """
+            SELECT r.id, r.task_id, r.due_date, r.reminder_on, r.kind, r.read_at,
+                   r.in_app_triggered_at, t.title AS task_title, t.job_id,
+                   j.title AS job_title, j.company, j.market
+            FROM task_reminders r
+            JOIN job_tasks t ON t.id = r.task_id
+            JOIN jobs j ON j.id = t.job_id
+            WHERE r.enabled = 1
+              AND r.in_app_triggered_at IS NOT NULL
+              AND r.in_app_skipped_at IS NULL
+              AND COALESCE(t.done, 0) = 0
+              AND t.due_at IS NOT NULL AND t.due_at = r.due_date
+              AND (j.dismissed_at IS NULL OR j.dismissed_at = '')
+              AND (j.archived_at IS NULL OR j.archived_at = '')
+              AND (j.filter_state IS NULL OR j.filter_state = '' OR j.filter_state = 'included')
+        """
+        params: list[str] = []
+        key = (market or "").strip().lower()
+        if key in {"cn", "en"}:
+            sql += " AND lower(COALESCE(j.market, '')) = ?"
+            params.append(key)
+        rows = self._db.execute(sql, params).fetchall()
+        names = [
+            "id",
+            "task_id",
+            "due_date",
+            "reminder_on",
+            "kind",
+            "read_at",
+            "in_app_triggered_at",
+            "task_title",
+            "job_id",
+            "job_title",
+            "company",
+            "market",
+        ]
+        return [dict(zip(names, row, strict=True)) for row in rows]
+
+    def trigger_task_reminder(self, reminder_id: str, at: datetime) -> bool:
+        cur = self._db.execute(
+            """
+            UPDATE task_reminders
+            SET in_app_triggered_at = ?
+            WHERE id = ?
+              AND in_app_triggered_at IS NULL
+              AND in_app_skipped_at IS NULL
+            """,
+            [at.isoformat(), reminder_id],
+        )
+        return cur.rowcount > 0
+
+    def skip_task_reminder(self, reminder_id: str, at: datetime) -> bool:
+        cur = self._db.execute(
+            """
+            UPDATE task_reminders
+            SET in_app_skipped_at = ?
+            WHERE id = ?
+              AND in_app_triggered_at IS NULL
+              AND in_app_skipped_at IS NULL
+            """,
+            [at.isoformat(), reminder_id],
+        )
+        return cur.rowcount > 0
+
+    def mark_task_reminder_read(self, reminder_id: str, at: datetime) -> TaskReminder | None:
+        row = self.get_task_reminder(reminder_id)
+        if row is None:
+            return None
+        if row.read_at is None:
+            self._db.execute(
+                """
+                UPDATE task_reminders
+                SET read_at = ?
+                WHERE id = ? AND read_at IS NULL
+                """,
+                [at.isoformat(), reminder_id],
+            )
+        return self.get_task_reminder(reminder_id)
+
+    def _apply_reminder_plan_tx(
+        self,
+        task: JobTask,
+        *,
+        reminder_dates: list[date] | None,
+        reminders_set: bool,
+        previous_due: date | None,
+        now: datetime | None,
+    ) -> None:
+        from job_sentinel.jobs.reminders import normalize_reminder_plan, today_in_app_tz
+
+        moment = now or datetime.now(tz=UTC)
+        today = today_in_app_tz(now=moment)
+        conn = self._db.conn
+        if task.due_at is None:
+            conn.execute("UPDATE task_reminders SET enabled = 0 WHERE task_id = ?", [task.id])
+            return
+        existing_rows = self.list_reminders_for_task_due(task.id, task.due_at)
+        existing = {row.reminder_on for row in existing_rows if row.enabled}
+        requested = reminder_dates if reminders_set else None
+        plan = normalize_reminder_plan(task.due_at, requested, today=today, existing=existing)
+        if plan is None:
+            self._upsert_reminder_row_tx(
+                task.id, task.due_at, task.due_at, TaskReminderKind.DUE, moment
+            )
+            if previous_due is not None and previous_due != task.due_at:
+                old_rows = self.list_reminders_for_task_due(task.id, previous_due)
+                for row in old_rows:
+                    if not row.enabled or row.kind != TaskReminderKind.ADVANCE:
+                        continue
+                    if today <= row.reminder_on < task.due_at:
+                        self._upsert_reminder_row_tx(
+                            task.id,
+                            task.due_at,
+                            row.reminder_on,
+                            TaskReminderKind.ADVANCE,
+                            moment,
+                        )
+            return
+        keep: list[str] = []
+        for day, kind in plan:
+            self._upsert_reminder_row_tx(task.id, task.due_at, day, kind, moment)
+            keep.append(day.isoformat())
+        if keep:
+            placeholders = ",".join("?" * len(keep))
+            conn.execute(
+                f"""
+                UPDATE task_reminders
+                SET enabled = 0
+                WHERE task_id = ? AND due_date = ? AND reminder_on NOT IN ({placeholders})
+                """,  # noqa: S608
+                [task.id, task.due_at.isoformat(), *keep],
+            )
+        else:
+            conn.execute(
+                "UPDATE task_reminders SET enabled = 0 WHERE task_id = ? AND due_date = ?",
+                [task.id, task.due_at.isoformat()],
+            )
+
+    def _upsert_reminder_row_tx(
+        self,
+        task_id: str,
+        due: date,
+        reminder_on: date,
+        kind: TaskReminderKind,
+        moment: datetime,
+    ) -> None:
+        self._db.conn.execute(
+            """
+            INSERT INTO task_reminders (
+                id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                in_app_triggered_at, in_app_skipped_at, read_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL)
+            ON CONFLICT(task_id, due_date, reminder_on) DO UPDATE SET
+                enabled = 1,
+                kind = excluded.kind
+            """,
+            [
+                uuid.uuid4().hex,
+                task_id,
+                due.isoformat(),
+                reminder_on.isoformat(),
+                kind.value,
+                moment.isoformat(),
+            ],
+        )
 
     def touch_hub_job_activity(self, job_id: str) -> None:
         if self.get_hub_job(job_id) is None:
@@ -2514,6 +2875,29 @@ def _job_task_from_row(row: dict[str, Any]) -> JobTask:
         application_id=_blank_to_none(row.get("application_id")),
         notes=_blank_to_none(row.get("notes")),
         source_url=_blank_to_none(row.get("source_url")),
+    )
+
+
+def _parse_dt_optional(value: object) -> datetime | None:
+    if value is None or value == "":
+        return None
+    return _parse_dt(str(value))
+
+
+def _task_reminder_from_sql(row: Any) -> TaskReminder:
+    kind_raw = str(row[4] or "advance")
+    kind = TaskReminderKind.DUE if kind_raw == "due" else TaskReminderKind.ADVANCE
+    return TaskReminder(
+        id=str(row[0]),
+        task_id=str(row[1]),
+        due_date=date.fromisoformat(str(row[2])[:10]),
+        reminder_on=date.fromisoformat(str(row[3])[:10]),
+        kind=kind,
+        enabled=bool(int(row[5] or 0)),
+        created_at=_parse_dt(str(row[6] or "")),
+        in_app_triggered_at=_parse_dt_optional(row[7]),
+        in_app_skipped_at=_parse_dt_optional(row[8]),
+        read_at=_parse_dt_optional(row[9]),
     )
 
 

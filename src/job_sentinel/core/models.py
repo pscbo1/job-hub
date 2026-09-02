@@ -84,6 +84,30 @@ CLOSE_REASON_LABELS_ZH: dict[CloseReason, str] = {
 }
 
 
+class TaskReminderKind(StrEnum):
+    """In-app reminder node on a due-dated job_task. Not email or Job DDL."""
+
+    ADVANCE = "advance"
+    DUE = "due"
+
+
+class TaskReminder(BaseModel):
+    """One calendar-date reminder for a task + due-date cycle."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    task_id: str = Field(..., min_length=1)
+    due_date: date
+    reminder_on: date
+    kind: TaskReminderKind = TaskReminderKind.ADVANCE
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    in_app_triggered_at: datetime | None = None
+    in_app_skipped_at: datetime | None = None
+    read_at: datetime | None = None
+
+    model_config = {"frozen": False}
+
+
 class JobTask(BaseModel):
     """Checklist item on a Job (OA, interview prep). Not an Application stage.
 
@@ -101,6 +125,7 @@ class JobTask(BaseModel):
     application_id: str | None = Field(default=None)
     notes: str | None = Field(default=None)
     source_url: str | None = Field(default=None)
+    reminders: list[TaskReminder] = Field(default_factory=list)
 
     @field_validator("title", mode="before")
     @classmethod
