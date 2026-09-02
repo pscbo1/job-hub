@@ -304,6 +304,14 @@ def get_collect_source(
     return None
 
 
+def _is_manual_vertical(source_id: str, repo: JobRepository | None) -> bool:
+    """Hand-added WeChat/community/other rows stay listed; they do not scrape."""
+    if repo is None:
+        return False
+    row = repo.get_company_source(source_id)
+    return row is not None and row.kind != "company"
+
+
 def resolve_collect_sources(
     source_ids: list[str],
     *,
@@ -322,6 +330,8 @@ def resolve_collect_sources(
             continue
         spec = get_collect_source(key, repo=repo)
         if spec is None or not spec.enabled or not spec.runnable:
+            if _is_manual_vertical(key, repo):
+                continue
             unknown.append(raw)
             continue
         seen.add(key)

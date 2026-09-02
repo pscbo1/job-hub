@@ -1125,7 +1125,10 @@ export function demoChatReply(): { reply: string; source: "rules" } {
 type DemoCompanySource = {
   id: string;
   company: string;
-  kind: "company";
+  name?: string;
+  kind: "company" | "wechat" | "community" | "other";
+  channel_type?: string;
+  handle?: string;
   collect_cn: boolean;
   collect_en: boolean;
   enabled: boolean;
@@ -1139,10 +1142,12 @@ type DemoCompanySource = {
 type DemoVerticalChannel = {
   id: string;
   name: string;
-  kind: "vertical";
+  company?: string;
+  kind: "wechat" | "community" | "other";
   channel_type: string;
   handle: string;
   enabled: boolean;
+  include_in_run?: boolean;
   tags: string[];
   note: string;
 };
@@ -1184,28 +1189,37 @@ let demoCompanySources: DemoCompanySource[] = [
     careers_url: "",
     runnable: true,
   },
-];
-
-let demoVerticalChannels: DemoVerticalChannel[] = [
   {
     id: "research-circle",
+    company: "Research Circle",
     name: "Research Circle",
-    kind: "vertical",
+    kind: "wechat",
     channel_type: "wechat",
     handle: "research_jobs",
+    collect_cn: false,
+    collect_en: false,
     enabled: true,
+    include_in_run: false,
     tags: ["research"],
     note: "WeChat job posts — directory only. Auto Collect does not scrape this.",
+    careers_url: "",
+    runnable: false,
   },
   {
     id: "civic-discord",
+    company: "Civic Discord",
     name: "Civic Discord",
-    kind: "vertical",
+    kind: "community",
     channel_type: "community",
     handle: "https://discord.gg/example",
+    collect_cn: false,
+    collect_en: false,
     enabled: true,
+    include_in_run: false,
     tags: ["civic"],
     note: "Community referrals",
+    careers_url: "",
+    runnable: false,
   },
 ];
 
@@ -1233,17 +1247,26 @@ function demoTopicsFrom(text: string): string[] {
   return out;
 }
 
-export function listDemoCompanySources(tag?: string): { sources: DemoCompanySource[]; tags: string[] } {
+export function listDemoCompanySources(
+  tag?: string,
+  kind?: string,
+): { sources: DemoCompanySource[]; tags: string[] } {
   const tags = [...new Set(demoCompanySources.flatMap((row) => row.tags))];
   const wanted = tag?.trim().toLowerCase() ?? "";
-  const sources = wanted
-    ? demoCompanySources.filter((row) => row.tags.some((item) => item.toLowerCase() === wanted))
-    : demoCompanySources;
-  return { sources: sources.map((row) => ({ ...row })), tags };
+  const wantedKind = kind?.trim().toLowerCase() ?? "";
+  const sources = demoCompanySources.filter((row) => {
+    if (wanted && !row.tags.some((item) => item.toLowerCase() === wanted)) return false;
+    if (wantedKind === "vertical" && row.kind === "company") return false;
+    if (wantedKind && wantedKind !== "vertical" && row.kind !== wantedKind) return false;
+    return true;
+  });
+  return { sources: sources.map((row) => ({ ...row, name: row.company })), tags };
 }
 
 export function createDemoCompanySource(body: {
   company: string;
+  kind?: string;
+  handle?: string;
   collect_cn?: boolean;
   collect_en?: boolean;
   enabled?: boolean;
@@ -1252,21 +1275,28 @@ export function createDemoCompanySource(body: {
   note?: string;
   careers_url?: string;
 }): DemoCompanySource {
+  const kind = (
+    body.kind === "wechat" || body.kind === "community" || body.kind === "other" ? body.kind : "company"
+  ) as DemoCompanySource["kind"];
   const id = body.company.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `company-${Date.now()}`;
+  const vertical = kind !== "company";
   const row: DemoCompanySource = {
     id,
     company: body.company.trim(),
-    kind: "company",
-    collect_cn: Boolean(body.collect_cn),
-    collect_en: body.collect_en !== false || Boolean(body.collect_cn) ? Boolean(body.collect_en) : true,
+    name: body.company.trim(),
+    kind,
+    channel_type: vertical ? kind : "",
+    handle: body.handle ?? "",
+    collect_cn: vertical ? false : Boolean(body.collect_cn),
+    collect_en: vertical ? false : body.collect_en !== false || Boolean(body.collect_cn) ? Boolean(body.collect_en) : true,
     enabled: body.enabled !== false,
     include_in_run: Boolean(body.include_in_run),
     tags: body.tags ?? [],
     note: body.note ?? "",
-    careers_url: body.careers_url ?? "",
-    runnable: Boolean(body.careers_url?.trim()),
+    careers_url: vertical ? "" : (body.careers_url ?? ""),
+    runnable: vertical ? false : Boolean(body.careers_url?.trim()),
   };
-  if (!row.collect_cn && !row.collect_en) row.collect_en = true;
+  if (!vertical && !row.collect_cn && !row.collect_en) row.collect_en = true;
   demoCompanySources = [...demoCompanySources, row];
   return { ...row };
 }
@@ -1275,6 +1305,8 @@ export function patchDemoCompanySource(
   id: string,
   body: Partial<{
     company: string;
+    kind: string;
+    handle: string;
     collect_cn: boolean;
     collect_en: boolean;
     enabled: boolean;
@@ -1286,24 +1318,57 @@ export function patchDemoCompanySource(
 ): DemoCompanySource | null {
   const current = demoCompanySources.find((row) => row.id === id);
   if (!current) return null;
-  const next = { ...current, ...body };
+  const next: DemoCompanySource = { ...current };
+  if (body.company !== undefined) {
+    next.company = body.company;
+    next.name = body.company;
+  }
+  if (body.kind === "wechat" || body.kind === "community" || body.kind === "other" || body.kind === "company") {
+    next.kind = body.kind;
+    next.channel_type = body.kind === "company" ? "" : body.kind;
+    if (body.kind !== "company") {
+      next.collect_cn = false;
+      next.collect_en = false;
+      next.runnable = false;
+    }
+  }
+  if (body.handle !== undefined) next.handle = body.handle;
+  if (body.collect_cn !== undefined && next.kind === "company") next.collect_cn = body.collect_cn;
+  if (body.collect_en !== undefined && next.kind === "company") next.collect_en = body.collect_en;
+  if (body.enabled !== undefined) next.enabled = body.enabled;
+  if (body.include_in_run !== undefined) next.include_in_run = body.include_in_run;
+  if (body.tags !== undefined) next.tags = body.tags;
+  if (body.note !== undefined) next.note = body.note;
+  if (body.careers_url !== undefined && next.kind === "company") {
+    next.careers_url = body.careers_url;
+    next.runnable = Boolean(body.careers_url.trim());
+  }
   demoCompanySources = demoCompanySources.map((row) => (row.id === id ? next : row));
   return { ...next };
+}
+
+function asDemoVertical(row: DemoCompanySource): DemoVerticalChannel {
+  const kind = row.kind === "company" ? "other" : row.kind;
+  return {
+    id: row.id,
+    name: row.company,
+    company: row.company,
+    kind,
+    channel_type: kind,
+    handle: row.handle ?? "",
+    enabled: row.enabled,
+    include_in_run: row.include_in_run,
+    tags: row.tags,
+    note: row.note,
+  };
 }
 
 export function listDemoVerticalChannels(opts?: {
   tag?: string;
   channel_type?: string;
 }): { channels: DemoVerticalChannel[]; tags: string[] } {
-  const tags = [...new Set(demoVerticalChannels.flatMap((row) => row.tags))];
-  const wantedTag = opts?.tag?.trim().toLowerCase() ?? "";
-  const wantedType = opts?.channel_type?.trim().toLowerCase() ?? "";
-  const channels = demoVerticalChannels.filter((row) => {
-    if (wantedType && row.channel_type.toLowerCase() !== wantedType) return false;
-    if (wantedTag && !row.tags.some((item) => item.toLowerCase() === wantedTag)) return false;
-    return true;
-  });
-  return { channels: channels.map((row) => ({ ...row })), tags };
+  const listed = listDemoCompanySources(opts?.tag, opts?.channel_type || "vertical");
+  return { channels: listed.sources.map(asDemoVertical), tags: listed.tags };
 }
 
 export function createDemoVerticalChannel(body: {
@@ -1311,22 +1376,20 @@ export function createDemoVerticalChannel(body: {
   channel_type?: string;
   handle?: string;
   enabled?: boolean;
+  include_in_run?: boolean;
   tags?: string[];
   note?: string;
 }): DemoVerticalChannel {
-  const id = body.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `channel-${Date.now()}`;
-  const row: DemoVerticalChannel = {
-    id,
-    name: body.name.trim(),
-    kind: "vertical",
-    channel_type: body.channel_type ?? "other",
-    handle: body.handle ?? "",
-    enabled: body.enabled !== false,
-    tags: body.tags ?? [],
-    note: body.note ?? "",
-  };
-  demoVerticalChannels = [...demoVerticalChannels, row];
-  return { ...row };
+  const created = createDemoCompanySource({
+    company: body.name,
+    kind: body.channel_type ?? "other",
+    handle: body.handle,
+    enabled: body.enabled,
+    include_in_run: body.include_in_run,
+    tags: body.tags,
+    note: body.note,
+  });
+  return asDemoVertical(created);
 }
 
 export function patchDemoVerticalChannel(
@@ -1336,15 +1399,21 @@ export function patchDemoVerticalChannel(
     channel_type: string;
     handle: string;
     enabled: boolean;
+    include_in_run: boolean;
     tags: string[];
     note: string;
   }>,
 ): DemoVerticalChannel | null {
-  const current = demoVerticalChannels.find((row) => row.id === id);
-  if (!current) return null;
-  const next = { ...current, ...body };
-  demoVerticalChannels = demoVerticalChannels.map((row) => (row.id === id ? next : row));
-  return { ...next };
+  const updated = patchDemoCompanySource(id, {
+    company: body.name,
+    kind: body.channel_type,
+    handle: body.handle,
+    enabled: body.enabled,
+    include_in_run: body.include_in_run,
+    tags: body.tags,
+    note: body.note,
+  });
+  return updated ? asDemoVertical(updated) : null;
 }
 
 export function listDemoNotebookPages(opts?: {

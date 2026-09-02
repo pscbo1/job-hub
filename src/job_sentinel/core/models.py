@@ -899,12 +899,29 @@ class ScrapeResult(BaseModel):
         )
 
 
+REGISTRY_KINDS = ("company", "wechat", "community", "other")
+VERTICAL_KINDS = ("wechat", "community", "other")
+RegistryKind = Literal["company", "wechat", "community", "other"]
+
+
+def normalize_registry_kind(kind: object, channel_type: object = "") -> RegistryKind:
+    raw = str(kind or "company").strip().lower()
+    if raw in REGISTRY_KINDS:
+        return raw  # type: ignore[return-value]
+    if raw == "vertical":
+        typed = str(channel_type or "").strip().lower()
+        if typed in VERTICAL_KINDS:
+            return typed  # type: ignore[return-value]
+        return "other"
+    return "company"
+
+
 class CompanySource(BaseModel):
-    """One ``source_registry`` row. ``kind`` is company or vertical — never mixed in UI."""
+    """One ``source_registry`` row. ``kind`` is company, wechat, community, or other."""
 
     id: str
     company: str
-    kind: Literal["company", "vertical"] = "company"
+    kind: RegistryKind = "company"
     channel_type: str = ""
     handle: str = ""
     collect_cn: bool = False
@@ -926,6 +943,12 @@ class CompanySource(BaseModel):
     @classmethod
     def _strip_text(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _sync_kind_and_channel(self) -> CompanySource:
+        self.kind = normalize_registry_kind(self.kind, self.channel_type)
+        self.channel_type = "" if self.kind == "company" else self.kind
+        return self
 
 
 class NotebookPage(BaseModel):

@@ -59,6 +59,7 @@ from job_sentinel.core.models import (
     TaskReminder,
     TaskReminderKind,
     compute_job_fingerprint,
+    normalize_registry_kind,
     source_job_id_from_canonical_url,
 )
 from job_sentinel.sponsorship.models import SponsorshipInfo
@@ -70,7 +71,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -783,6 +784,31 @@ class JobRepository:
             self._db.execute(
                 "ALTER TABLE source_registry ADD COLUMN handle TEXT NOT NULL DEFAULT ''"
             )
+        self._normalize_source_registry_kinds()
+
+    def _normalize_source_registry_kinds(self) -> None:
+        """Map legacy kind=vertical onto wechat/community/other."""
+        self._db.execute(
+            """
+            UPDATE source_registry
+            SET kind = CASE
+                WHEN kind IN ('company', 'wechat', 'community', 'other') THEN kind
+                WHEN kind = 'vertical' AND lower(channel_type) IN ('wechat', 'community', 'other')
+                    THEN lower(channel_type)
+                WHEN kind = 'vertical' THEN 'other'
+                ELSE 'company'
+            END
+            """
+        )
+        self._db.execute(
+            """
+            UPDATE source_registry
+            SET channel_type = CASE
+                WHEN kind = 'company' THEN ''
+                ELSE kind
+            END
+            """
+        )
 
     def _ensure_notebook_pages_table(self) -> None:
         self._db.execute(
@@ -1186,6 +1212,8 @@ class JobRepository:
             self._ensure_source_registry_table()
             self._ensure_notebook_pages_table()
         if from_version < 22:
+            self._ensure_source_registry_table()
+        if from_version < 23:
             self._ensure_source_registry_table()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
@@ -3189,7 +3217,7 @@ def _company_source_from_row(row: dict[str, Any]) -> CompanySource:
     return CompanySource(
         id=str(row["id"]),
         company=str(row.get("company") or ""),
-        kind="vertical" if str(row.get("kind") or "company") == "vertical" else "company",
+        kind=normalize_registry_kind(row.get("kind"), row.get("channel_type")),
         channel_type=str(row.get("channel_type") or ""),
         handle=str(row.get("handle") or ""),
         collect_cn=_as_bool(row.get("collect_cn")),

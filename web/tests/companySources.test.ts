@@ -1,15 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  COMPANY_SOURCES_COPY,
   MANAGE_SOURCES_COPY,
-  VERTICAL_CHANNELS_COPY,
-  companySourceTags,
-  filterCompanySources,
-  filterVerticalChannels,
-  isCompanySourceRow,
+  filterManagedSources,
+  isCompanyKind,
+  sourceKindOf,
   type CompanySourceRow,
-  type VerticalChannelRow,
 } from "@/lib/companySources";
 
 function row(partial: Partial<CompanySourceRow>): CompanySourceRow {
@@ -27,54 +23,31 @@ function row(partial: Partial<CompanySourceRow>): CompanySourceRow {
   };
 }
 
-function channel(partial: Partial<VerticalChannelRow>): VerticalChannelRow {
-  return {
-    id: "v",
-    name: "Research Circle",
-    channel_type: "wechat",
-    handle: "",
-    enabled: true,
-    tags: [],
-    note: "",
-    kind: "vertical",
-    ...partial,
-  };
-}
-
-describe("manage sources classes", () => {
-  it("keeps companies and vertical channels as separate classes", () => {
-    expect(MANAGE_SOURCES_COPY.companiesTab).toBe("Companies");
-    expect(MANAGE_SOURCES_COPY.verticalsTab).toBe("Vertical channels");
-    expect(COMPANY_SOURCES_COPY.title).toBe("Companies");
-    expect(VERTICAL_CHANNELS_COPY.subtitle.toLowerCase()).toMatch(/does not scrape/);
-    expect(isCompanySourceRow({ kind: "vertical" })).toBe(false);
-    expect(isCompanySourceRow({ kind: "company" })).toBe(true);
+describe("manage sources one table", () => {
+  it("keeps companies and verticals on the same list with a type field", () => {
+    expect(MANAGE_SOURCES_COPY.title).toBe("Manage sources");
+    expect(MANAGE_SOURCES_COPY.subtitle.toLowerCase()).toMatch(/one table/);
+    expect(sourceKindOf({ kind: "wechat" })).toBe("wechat");
+    expect(sourceKindOf({ kind: "vertical", channel_type: "community" })).toBe("community");
+    expect(isCompanyKind({ kind: "wechat" })).toBe(false);
+    expect(isCompanyKind({ kind: "company" })).toBe(true);
   });
-});
 
-describe("company source filters", () => {
-  it("filters companies by tag and never treats a vertical as a company row", () => {
+  it("filters the shared list by type and tag", () => {
     const rows = [
       row({ id: "a", tags: ["research"] }),
       row({ id: "b", company: "Beta", tags: ["civic"] }),
-      row({ id: "impactpool", company: "Impactpool", kind: "vertical", tags: ["research"] }),
+      row({ id: "w", company: "Research Circle", kind: "wechat", tags: ["research"] }),
+      row({ id: "c", company: "Discord", kind: "community", tags: ["civic"] }),
     ];
-    expect(filterCompanySources(rows, "research").map((item) => item.id)).toEqual(["a"]);
-    expect(companySourceTags(rows)).toEqual(["research", "civic"]);
-  });
-});
-
-describe("vertical channel filters", () => {
-  it("filters the vertical class by type and tag", () => {
-    const rows = [
-      channel({ id: "w", channel_type: "wechat", tags: ["research"] }),
-      channel({ id: "c", name: "Discord", channel_type: "community", tags: ["civic"] }),
-      channel({ id: "o", name: "Other", channel_type: "other", tags: ["research"] }),
-    ];
-    expect(filterVerticalChannels(rows, { type: "wechat" }).map((item) => item.id)).toEqual(["w"]);
-    expect(filterVerticalChannels(rows, { tag: "research" }).map((item) => item.id)).toEqual([
+    expect(filterManagedSources(rows, { type: "wechat" }).map((item) => item.id)).toEqual(["w"]);
+    expect(filterManagedSources(rows, { type: "company" }).map((item) => item.id)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(filterManagedSources(rows, { tag: "research" }).map((item) => item.id)).toEqual([
+      "a",
       "w",
-      "o",
     ]);
   });
 });

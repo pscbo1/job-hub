@@ -260,7 +260,10 @@ class CollectJobsRequest(BaseModel):
 
 
 class CompanySourceCreateRequest(BaseModel):
-    company: str
+    company: str = ""
+    name: str = ""
+    kind: str = "company"
+    handle: str = ""
     collect_cn: bool = False
     collect_en: bool = False
     enabled: bool = True
@@ -269,7 +272,7 @@ class CompanySourceCreateRequest(BaseModel):
     note: str = ""
     careers_url: str = ""
 
-    @field_validator("company", "note", "careers_url", mode="before")
+    @field_validator("company", "name", "kind", "handle", "note", "careers_url", mode="before")
     @classmethod
     def _strip_company_text(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v
@@ -277,6 +280,9 @@ class CompanySourceCreateRequest(BaseModel):
 
 class CompanySourcePatchRequest(BaseModel):
     company: str | None = None
+    name: str | None = None
+    kind: str | None = None
+    handle: str | None = None
     collect_cn: bool | None = None
     collect_en: bool | None = None
     enabled: bool | None = None
@@ -285,7 +291,7 @@ class CompanySourcePatchRequest(BaseModel):
     note: str | None = None
     careers_url: str | None = None
 
-    @field_validator("company", "note", "careers_url", mode="before")
+    @field_validator("company", "name", "kind", "handle", "note", "careers_url", mode="before")
     @classmethod
     def _strip_optional_text(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v
@@ -296,6 +302,7 @@ class VerticalChannelCreateRequest(BaseModel):
     channel_type: str = "other"
     handle: str = ""
     enabled: bool = True
+    include_in_run: bool = False
     tags: list[str] = Field(default_factory=list)
     note: str = ""
 
@@ -310,6 +317,7 @@ class VerticalChannelPatchRequest(BaseModel):
     channel_type: str | None = None
     handle: str | None = None
     enabled: bool | None = None
+    include_in_run: bool | None = None
     tags: list[str] | None = None
     note: str | None = None
 
@@ -1516,6 +1524,7 @@ def create_app(
         payload["careers_url"] = payload.get("careers_url") or ""
         payload["name"] = payload.get("company") or ""
         payload["kind"] = payload.get("kind") or "company"
+        payload["type"] = payload.get("kind") or "company"
         payload["channel_type"] = payload.get("channel_type") or ""
         payload["handle"] = payload.get("handle") or ""
         return payload
@@ -1525,8 +1534,8 @@ def create_app(
         return HTTPException(status_code=status, detail=str(exc))
 
     @app.get("/api/company-sources")
-    def list_company_sources(tag: str | None = None) -> dict[str, Any]:
-        """Company career table. Not jobs. Disabled rows stay off Collect."""
+    def list_company_sources(tag: str | None = None, kind: str | None = None) -> dict[str, Any]:
+        """Manage sources table: companies and vertical channels. Not jobs."""
         from job_sentinel.db.repository import JobRepository
         from job_sentinel.ingestion.source_registry import (
             list_company_sources as list_rows,
@@ -1537,7 +1546,7 @@ def create_app(
         try:
             all_rows = list_rows(repo)
             tags = unique_company_tags(all_rows)
-            rows = list_rows(repo, tag=tag) if tag and tag.strip() else all_rows
+            rows = list_rows(repo, tag=tag, kind=kind)
         finally:
             repo.close()
         return {"sources": [_company_source_payload(row) for row in rows], "tags": tags}
@@ -1554,7 +1563,9 @@ def create_app(
         try:
             row = create_company_source(
                 repo,
-                company=req.company,
+                company=req.company or req.name,
+                kind=req.kind,
+                handle=req.handle,
                 collect_cn=req.collect_cn,
                 collect_en=req.collect_en,
                 enabled=req.enabled,
@@ -1623,6 +1634,7 @@ def create_app(
                 channel_type=req.channel_type,
                 handle=req.handle,
                 enabled=req.enabled,
+                include_in_run=req.include_in_run,
                 tags=req.tags,
                 note=req.note,
             )

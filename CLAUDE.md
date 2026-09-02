@@ -90,8 +90,8 @@ scripts/           check_licenses.py (CI); diagnose_*.py are untracked one-off d
   - `profile` CRUD + import-resume, `profile/summary`
   - `jobs` + `jobs/{id}/status`, `stats`
   - `collect/sources` (GET), `collect/jobs` (POST — mcp-jobs → ingest)
-  - `company-sources` (GET/POST list, PATCH `/{id}` — company class; YAML seeds once)
-  - `vertical-channels` (GET/POST list, PATCH `/{id}` — vertical class; not Auto Collect)
+  - `company-sources` (GET/POST list, PATCH `/{id}` — companies + verticals; `kind` query)
+  - `vertical-channels` (alias onto the same `source_registry` rows)
   - `notebook/pages` (GET/POST list, GET/PATCH/DELETE `/{id}` — free-writing pages)
   - `ingest/jobs` (POST)
   - `ops/{status,login,session/check,scrape,watcher/start,watcher/stop}`

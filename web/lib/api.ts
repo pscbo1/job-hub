@@ -2880,8 +2880,11 @@ export async function getInterviewQuestions(
 export interface CompanySource {
   id: string;
   company: string;
-  kind?: "company" | "vertical";
+  kind?: "company" | "wechat" | "community" | "other" | "vertical";
+  type?: string;
   name?: string;
+  channel_type?: string;
+  handle?: string;
   collect_cn: boolean;
   collect_en: boolean;
   enabled: boolean;
@@ -2896,6 +2899,9 @@ export interface CompanySource {
 
 export interface CompanySourceWrite {
   company: string;
+  name?: string;
+  kind?: string;
+  handle?: string;
   collect_cn?: boolean;
   collect_en?: boolean;
   enabled?: boolean;
@@ -2909,7 +2915,7 @@ export interface CompanySourceWrite {
 export interface VerticalChannel {
   id: string;
   name: string;
-  kind?: "vertical";
+  kind?: "wechat" | "community" | "other" | "vertical";
   channel_type: string;
   handle: string;
   enabled: boolean;
@@ -2937,9 +2943,12 @@ export interface NotebookPage {
   topics: string[];
 }
 
-export function getCompanySources(tag?: string): Promise<{ sources: CompanySource[]; tags: string[] }> {
-  if (demo.DEMO) return Promise.resolve(demo.listDemoCompanySources(tag));
-  const q = tag ? `?tag=${encodeURIComponent(tag)}` : "";
+export function getCompanySources(tag?: string, kind?: string): Promise<{ sources: CompanySource[]; tags: string[] }> {
+  if (demo.DEMO) return Promise.resolve(demo.listDemoCompanySources(tag, kind));
+  const params = new URLSearchParams();
+  if (tag) params.set("tag", tag);
+  if (kind) params.set("kind", kind);
+  const q = params.toString() ? `?${params.toString()}` : "";
   return getJSON<{ sources: CompanySource[]; tags: string[] }>(`/api/company-sources${q}`, {
     sources: [],
     tags: [],

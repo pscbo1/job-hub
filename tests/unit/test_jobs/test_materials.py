@@ -25,7 +25,7 @@ def _service(tmp_path: Path) -> tuple[JobRepository, MaterialsService]:
 
 
 def test_schema_version_is_current() -> None:
-    assert SCHEMA_VERSION == 22
+    assert SCHEMA_VERSION == 23
 
 
 def test_binding_unique_per_material(tmp_path: Path) -> None:

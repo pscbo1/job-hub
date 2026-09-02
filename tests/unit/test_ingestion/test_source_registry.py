@@ -11,9 +11,7 @@ from job_sentinel.db.repository import JobRepository
 from job_sentinel.ingestion.collect_sources import list_collect_sources, resolve_collect_sources
 from job_sentinel.ingestion.source_registry import (
     create_company_source,
-    create_vertical_channel,
     list_company_sources,
-    list_vertical_channels,
     seed_source_registry,
     update_company_source,
 )
@@ -118,80 +116,87 @@ def test_company_sources_api_and_collect_catalog(tmp_path: Path) -> None:
     assert "zhaopin" not in collect_ids
 
 
-def test_vertical_channels_stay_out_of_company_and_collect(tmp_path: Path) -> None:
+def test_verticals_share_registry_table_and_skip_collect(tmp_path: Path) -> None:
     repo = JobRepository(tmp_path / "jobs.db")
     try:
         seed_source_registry(repo)
         registry_ids = {row.id for row in repo.list_source_registry()}
         assert "impactpool" not in registry_ids
-        assert "zhaopin" not in registry_ids
-        wechat = create_vertical_channel(
+        wechat = create_company_source(
             repo,
-            name="Research Circle",
-            channel_type="wechat",
+            company="Research Circle",
+            kind="wechat",
             handle="research_jobs",
             tags=["research"],
             note="Directory only",
+            include_in_run=True,
+            enabled=True,
         )
-        create_vertical_channel(
-            repo,
-            name="Civic Discord",
-            channel_type="community",
-            tags=["civic"],
-        )
-        company_ids = {row.id for row in list_company_sources(repo)}
-        assert wechat.id not in company_ids
-        assert all(row.kind == "company" for row in list_company_sources(repo))
-        wechat_only = list_vertical_channels(repo, channel_type="wechat")
+        assert wechat.kind == "wechat"
+        stored = repo.get_company_source(wechat.id)
+        assert stored is not None
+        assert stored.kind == "wechat"
+        listed = list_company_sources(repo)
+        assert wechat.id in {row.id for row in listed}
+        assert {row.kind for row in listed} >= {"company", "wechat"}
+        wechat_only = list_company_sources(repo, kind="wechat")
         assert [row.id for row in wechat_only] == [wechat.id]
-        tagged = list_vertical_channels(repo, tag="research")
-        assert [row.id for row in tagged] == [wechat.id]
+        tagged = list_company_sources(repo, tag="research")
+        assert wechat.id in {row.id for row in tagged}
         collect_ids = {spec.id for spec in list_collect_sources(repo=repo, enabled_only=False)}
         assert wechat.id not in collect_ids
         assert "impactpool" in collect_ids
+        resolved = resolve_collect_sources(["dimagi", wechat.id], repo=repo)
+        assert {spec.id for spec in resolved} == {"dimagi"}
     finally:
         repo.close()
 
     client = TestClient(create_app(profile_path=tmp_path / "p.yaml", db_path=tmp_path / "api.db"))
     created = client.post(
-        "/api/vertical-channels",
+        "/api/company-sources",
         json={
-            "name": "Research Circle",
-            "channel_type": "wechat",
+            "company": "Research Circle",
+            "kind": "wechat",
             "handle": "research_jobs",
             "tags": ["research"],
             "note": "Directory only",
             "enabled": True,
+            "include_in_run": True,
         },
     )
     assert created.status_code == 200
-    channel_id = created.json()["id"]
-    assert created.json()["name"] == "Research Circle"
-    assert created.json()["kind"] == "vertical"
-    companies = client.get("/api/company-sources")
-    assert companies.status_code == 200
-    company_ids = {row["id"] for row in companies.json()["sources"]}
-    assert channel_id not in company_ids
-    assert all(row.get("kind") != "vertical" for row in companies.json()["sources"])
-    listed = client.get("/api/vertical-channels")
-    assert channel_id in {row["id"] for row in listed.json()["channels"]}
-    wechat = client.get("/api/vertical-channels", params={"channel_type": "wechat"})
-    assert {row["id"] for row in wechat.json()["channels"]} == {channel_id}
-    tagged = client.get("/api/vertical-channels", params={"tag": "research"})
-    assert channel_id in {row["id"] for row in tagged.json()["channels"]}
+    body = created.json()
+    assert body["kind"] == "wechat"
+    assert body["type"] == "wechat"
+    assert body["name"] == "Research Circle"
+    channel_id = body["id"]
+    listed = client.get("/api/company-sources")
+    ids = {row["id"] for row in listed.json()["sources"]}
+    assert "dimagi" in ids
+    assert channel_id in ids
+    wechat = client.get("/api/company-sources", params={"kind": "wechat"})
+    assert {row["id"] for row in wechat.json()["sources"]} == {channel_id}
+    assert all(row["kind"] == "wechat" for row in wechat.json()["sources"])
+    patched = client.patch(
+        f"/api/company-sources/{channel_id}",
+        json={"include_in_run": False, "note": "Still listed"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["kind"] == "wechat"
+    assert patched.json()["include_in_run"] is False
     collect = client.get("/api/collect/sources")
     collect_ids = {row["id"] for row in collect.json()["sources"]}
     assert channel_id not in collect_ids
     assert "impactpool" in collect_ids
-    blocked = client.patch(
-        f"/api/company-sources/{channel_id}",
-        json={"enabled": False},
-    )
-    assert blocked.status_code == 404
-    missing = client.post("/api/vertical-channels", json={"name": "   "})
+    missing = client.post("/api/company-sources", json={"company": "   ", "kind": "wechat"})
     assert missing.status_code == 400
-    bad_type = client.post(
-        "/api/vertical-channels",
-        json={"name": "Nope", "channel_type": "telegram"},
-    )
+    bad_type = client.post("/api/company-sources", json={"company": "Nope", "kind": "telegram"})
     assert bad_type.status_code == 400
+    via_alias = client.post(
+        "/api/vertical-channels",
+        json={"name": "Civic Discord", "channel_type": "community", "enabled": True},
+    )
+    assert via_alias.status_code == 200
+    assert via_alias.json()["kind"] == "community"
+    all_ids = {row["id"] for row in client.get("/api/company-sources").json()["sources"]}
+    assert via_alias.json()["id"] in all_ids

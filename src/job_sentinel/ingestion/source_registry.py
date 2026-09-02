@@ -1,8 +1,8 @@
-"""Company and vertical rows in ``source_registry``.
+"""Company and vertical rows in one ``source_registry`` table.
 
-YAML ``company_ats.yaml`` (plus built-in career pages like Tencent) seeds the
-company class once. Vertical channels are a separate class — never mixed into
-the company table or Auto Collect. After seed, new rows are DB-only.
+YAML ``company_ats.yaml`` (plus built-in career pages like Tencent) seeds
+company rows once. After seed, user-added companies and vertical channels
+persist in the same table. Auto Collect uses company adapters only.
 """
 
 from __future__ import annotations
@@ -10,7 +10,11 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from job_sentinel.core.models import CompanySource
+from job_sentinel.core.models import (
+    VERTICAL_KINDS,
+    CompanySource,
+    normalize_registry_kind,
+)
 from job_sentinel.ingestion.ats_board_client import resolve_board
 from job_sentinel.ingestion.collect_sources import (
     CollectSource,
@@ -28,9 +32,7 @@ if TYPE_CHECKING:
 _SEED_META_KEY = "source_registry_seeded"
 _ID_SAFE = re.compile(r"[^a-z0-9]+")
 MAX_COMPANY_TAGS = 20
-VERTICAL_CHANNEL_TYPES = frozenset({"wechat", "community", "other"})
 COMPANY_KIND = "company"
-VERTICAL_KIND = "vertical"
 
 
 class SourceRegistryError(ValueError):
@@ -40,13 +42,17 @@ class SourceRegistryError(ValueError):
         self.status_code = status_code
 
 
+def is_vertical_kind(kind: str) -> bool:
+    return normalize_registry_kind(kind) in VERTICAL_KINDS
+
+
 def seed_source_registry(repo: JobRepository) -> None:
     """Copy YAML + built-in career pages into ``source_registry`` once."""
     if repo.get_meta(_SEED_META_KEY) == "1":
         return
     from job_sentinel.ingestion.collect_sources import builtin_career_page_sources
 
-    existing = {row.id for row in repo.list_company_sources()}
+    existing = {row.id for row in repo.list_source_registry()}
     for spec in (*builtin_career_page_sources(), *load_company_ats_sources()):
         if spec.id in existing:
             continue
@@ -59,9 +65,21 @@ def list_company_sources(
     repo: JobRepository,
     *,
     tag: str | None = None,
+    kind: str | None = None,
 ) -> list[CompanySource]:
+    """Manage-sources list: companies and verticals, optionally filtered."""
     seed_source_registry(repo)
-    rows = [row for row in repo.list_company_sources() if row.kind == COMPANY_KIND]
+    wanted_kind = (kind or "").strip().casefold()
+    if wanted_kind == "vertical":
+        rows = [row for row in repo.list_source_registry() if is_vertical_kind(row.kind)]
+    elif wanted_kind:
+        typed = normalize_registry_kind(wanted_kind)
+        if wanted_kind not in {"company", *VERTICAL_KINDS} and wanted_kind != typed:
+            rows = []
+        else:
+            rows = list(repo.list_source_registry(kind=typed))
+    else:
+        rows = list(repo.list_source_registry())
     wanted = (tag or "").strip()
     if not wanted:
         return rows
@@ -74,10 +92,12 @@ def unique_company_tags(rows: Sequence[CompanySource]) -> list[str]:
 
 
 def list_company_collect_sources(repo: JobRepository) -> list[CollectSource]:
-    """CollectSource rows for career pages currently in the table."""
+    """CollectSource rows for company career pages only."""
     seed_source_registry(repo)
     return [
-        _company_to_collect(row) for row in repo.list_company_sources() if row.kind == COMPANY_KIND
+        _company_to_collect(row)
+        for row in repo.list_source_registry(kind=COMPANY_KIND)
+        if row.kind == COMPANY_KIND
     ]
 
 
@@ -87,16 +107,8 @@ def list_vertical_channels(
     tag: str | None = None,
     channel_type: str | None = None,
 ) -> list[CompanySource]:
-    seed_source_registry(repo)
-    rows = list(repo.list_source_registry(kind=VERTICAL_KIND))
-    wanted_type = (channel_type or "").strip().casefold()
-    if wanted_type:
-        rows = [row for row in rows if row.channel_type.casefold() == wanted_type]
-    wanted_tag = (tag or "").strip()
-    if wanted_tag:
-        key = wanted_tag.casefold()
-        rows = [row for row in rows if any(item.casefold() == key for item in row.tags)]
-    return rows
+    kind = (channel_type or "").strip() or "vertical"
+    return list_company_sources(repo, tag=tag, kind=kind)
 
 
 def create_vertical_channel(
@@ -106,32 +118,20 @@ def create_vertical_channel(
     channel_type: str = "other",
     handle: str = "",
     enabled: bool = True,
+    include_in_run: bool = False,
     tags: Sequence[object] = (),
     note: str = "",
 ) -> CompanySource:
-    seed_source_registry(repo)
-    label = name.strip()
-    if not label:
-        raise SourceRegistryError("Channel name is required")
-    typed = _require_channel_type(channel_type)
-    source_id = _unique_company_id(repo, label, fallback="channel")
-    row = CompanySource(
-        id=source_id,
-        company=label,
-        kind=VERTICAL_KIND,
-        channel_type=typed,
-        handle=handle.strip(),
-        collect_cn=False,
-        collect_en=False,
+    return create_company_source(
+        repo,
+        company=name,
+        kind=channel_type,
+        handle=handle,
         enabled=enabled,
-        include_in_run=False,
-        tags=normalize_application_tags(tags)[:MAX_COMPANY_TAGS],
-        note=note.strip(),
-        runnable=False,
-        collector_id=source_id,
-        integration="ats_board",
+        include_in_run=include_in_run,
+        tags=tags,
+        note=note,
     )
-    return repo.insert_company_source(row)
 
 
 def update_vertical_channel(
@@ -139,42 +139,14 @@ def update_vertical_channel(
     source_id: str,
     **fields: Any,
 ) -> CompanySource:
-    seed_source_registry(repo)
+    if "channel_type" in fields and "kind" not in fields:
+        fields = {**fields, "kind": fields["channel_type"]}
+    if "name" in fields and "company" not in fields:
+        fields = {**fields, "company": fields["name"]}
     current = repo.get_company_source(source_id)
-    if current is None or current.kind != VERTICAL_KIND:
+    if current is None or not is_vertical_kind(current.kind):
         raise SourceRegistryError("Vertical channel not found", status_code=404)
-    updates: dict[str, Any] = {}
-    if "name" in fields and fields["name"] is not None:
-        label = str(fields["name"]).strip()
-        if not label:
-            raise SourceRegistryError("Channel name is required")
-        updates["company"] = label
-    if "company" in fields and fields["company"] is not None:
-        label = str(fields["company"]).strip()
-        if not label:
-            raise SourceRegistryError("Channel name is required")
-        updates["company"] = label
-    if "channel_type" in fields and fields["channel_type"] is not None:
-        updates["channel_type"] = _require_channel_type(str(fields["channel_type"]))
-    if "handle" in fields and fields["handle"] is not None:
-        updates["handle"] = str(fields["handle"]).strip()
-    if "enabled" in fields and fields["enabled"] is not None:
-        updates["enabled"] = bool(fields["enabled"])
-    if "tags" in fields and fields["tags"] is not None:
-        updates["tags"] = normalize_application_tags(fields["tags"])[:MAX_COMPANY_TAGS]
-    if "note" in fields and fields["note"] is not None:
-        updates["note"] = str(fields["note"]).strip()
-    updated = repo.update_company_source(source_id, **updates)
-    if updated is None:
-        raise SourceRegistryError("Vertical channel not found", status_code=404)
-    return updated
-
-
-def _require_channel_type(raw: str) -> str:
-    value = raw.strip().casefold() or "other"
-    if value not in VERTICAL_CHANNEL_TYPES:
-        raise SourceRegistryError("Type must be wechat, community, or other")
-    return value
+    return update_company_source(repo, source_id, **fields)
 
 
 def create_company_source(
@@ -188,13 +160,37 @@ def create_company_source(
     tags: Sequence[object] = (),
     note: str = "",
     careers_url: str = "",
+    kind: str = COMPANY_KIND,
+    handle: str = "",
 ) -> CompanySource:
     seed_source_registry(repo)
     name = company.strip()
     if not name:
-        raise SourceRegistryError("Company name is required")
+        raise SourceRegistryError("Name is required")
+    typed = _require_kind(kind)
+    source_id = _unique_company_id(
+        repo,
+        name,
+        fallback="channel" if typed != COMPANY_KIND else "company",
+    )
+    if typed != COMPANY_KIND:
+        row = CompanySource(
+            id=source_id,
+            company=name,
+            kind=typed,
+            handle=handle.strip(),
+            collect_cn=False,
+            collect_en=False,
+            enabled=enabled,
+            include_in_run=include_in_run,
+            tags=normalize_application_tags(tags)[:MAX_COMPANY_TAGS],
+            note=note.strip(),
+            runnable=False,
+            collector_id=source_id,
+            integration="ats_board",
+        )
+        return repo.insert_company_source(row)
     cn, en = _require_markets(collect_cn, collect_en)
-    source_id = _unique_company_id(repo, name)
     ats, slug, url, runnable, integration = _resolve_optional_board(careers_url)
     row = CompanySource(
         id=source_id,
@@ -223,20 +219,43 @@ def update_company_source(
 ) -> CompanySource:
     seed_source_registry(repo)
     current = repo.get_company_source(source_id)
-    if current is None or current.kind != COMPANY_KIND:
-        raise SourceRegistryError("Company source not found", status_code=404)
+    if current is None:
+        raise SourceRegistryError("Source not found", status_code=404)
     updates: dict[str, Any] = {}
     if "company" in fields and fields["company"] is not None:
         name = str(fields["company"]).strip()
         if not name:
-            raise SourceRegistryError("Company name is required")
+            raise SourceRegistryError("Name is required")
         updates["company"] = name
-    if "collect_cn" in fields or "collect_en" in fields:
+    if "name" in fields and fields["name"] is not None and "company" not in updates:
+        name = str(fields["name"]).strip()
+        if not name:
+            raise SourceRegistryError("Name is required")
+        updates["company"] = name
+    if "kind" in fields and fields["kind"] is not None:
+        updates["kind"] = _require_kind(str(fields["kind"]))
+    if "channel_type" in fields and fields["channel_type"] is not None and "kind" not in updates:
+        updates["kind"] = _require_kind(str(fields["channel_type"]))
+    next_kind = str(updates.get("kind") or current.kind)
+    switching_to_company = next_kind == COMPANY_KIND and is_vertical_kind(current.kind)
+    if switching_to_company and "collect_cn" not in fields and "collect_en" not in fields:
+        updates["collect_cn"] = False
+        updates["collect_en"] = True
+    if next_kind == COMPANY_KIND and ("collect_cn" in fields or "collect_en" in fields):
         cn = bool(fields["collect_cn"]) if "collect_cn" in fields else current.collect_cn
         en = bool(fields["collect_en"]) if "collect_en" in fields else current.collect_en
         cn, en = _require_markets(cn, en)
         updates["collect_cn"] = cn
         updates["collect_en"] = en
+    if next_kind != COMPANY_KIND:
+        updates["collect_cn"] = False
+        updates["collect_en"] = False
+        updates["runnable"] = False
+        updates["channel_type"] = next_kind
+    else:
+        updates["channel_type"] = ""
+    if "handle" in fields and fields["handle"] is not None:
+        updates["handle"] = str(fields["handle"]).strip()
     if "enabled" in fields and fields["enabled"] is not None:
         updates["enabled"] = bool(fields["enabled"])
     if "include_in_run" in fields and fields["include_in_run"] is not None:
@@ -245,10 +264,9 @@ def update_company_source(
         updates["tags"] = normalize_application_tags(fields["tags"])[:MAX_COMPANY_TAGS]
     if "note" in fields and fields["note"] is not None:
         updates["note"] = str(fields["note"]).strip()
-    if "careers_url" in fields and fields["careers_url"] is not None:
+    if next_kind == COMPANY_KIND and "careers_url" in fields and fields["careers_url"] is not None:
         ats, slug, url, runnable, integration = _resolve_optional_board(str(fields["careers_url"]))
         if current.integration == "http_json" and not url:
-            # Keep wired collectors (Tencent) runnable without a public ATS URL.
             updates["careers_url"] = None
         else:
             updates["ats"] = ats
@@ -259,8 +277,17 @@ def update_company_source(
                 updates["integration"] = integration
     updated = repo.update_company_source(source_id, **updates)
     if updated is None:
-        raise SourceRegistryError("Company source not found", status_code=404)
+        raise SourceRegistryError("Source not found", status_code=404)
     return updated
+
+
+def _require_kind(raw: str) -> str:
+    value = raw.strip().casefold() or COMPANY_KIND
+    if value == "vertical":
+        return "other"
+    if value not in {COMPANY_KIND, *VERTICAL_KINDS}:
+        raise SourceRegistryError("Type must be company, wechat, community, or other")
+    return value
 
 
 def _require_markets(collect_cn: bool, collect_en: bool) -> tuple[bool, bool]:
