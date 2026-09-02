@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { latestSubmissionLine, nextStepLabel, parseApplicationTab } from "@/lib/applicationUi";
+import {
+  APPLICATION_ROW_MORE_LABEL,
+  APPLICATION_VIEW_OPTIONS_GROUPS,
+  APPLICATION_VIEW_OPTIONS_LABEL,
+  latestSubmissionLine,
+  nextStepLabel,
+  parseApplicationTab,
+} from "@/lib/applicationUi";
 import { DIRTY_SWITCH_LABELS, recordSwitchDecision } from "@/lib/recordDraft";
 import { sourceAction } from "@/lib/sourceAction";
 import { formatCalendarDate, formatDateTimeInAppTz } from "@/lib/timezone";
@@ -87,5 +94,16 @@ describe("dirty switch labels", () => {
       stay: "Stay",
     });
     expect(recordSwitchDecision("a", "b", true)).toBe("confirm");
+  });
+});
+
+describe("application toolbar and row overflow copy", () => {
+  it("uses View options and More actions instead of repeating More", () => {
+    expect(APPLICATION_VIEW_OPTIONS_LABEL).toBe("View options");
+    expect(APPLICATION_VIEW_OPTIONS_GROUPS).toEqual({
+      views: "Views",
+      cleanup: "Cleanup settings",
+    });
+    expect(APPLICATION_ROW_MORE_LABEL).toBe("More actions");
   });
 });

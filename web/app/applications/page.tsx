@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ApplicationDrawer } from "@/components/ApplicationDrawer";
+import { ApplicationRowActions } from "@/components/ApplicationRowActions";
+import { ApplicationViewOptions } from "@/components/ApplicationViewOptions";
 import { type Column, DataTable } from "@/components/DataTable";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
-import { SourceActionLink } from "@/components/SourceActionLink";
 import { SubmitConfirm } from "@/components/SubmitConfirm";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { PopoverSelect } from "@/components/ui/popover-select";
@@ -100,7 +101,6 @@ export default function ApplicationsPage() {
   const [apiDown, setApiDown] = useState(false);
   const [board, setBoard] = useState<BoardView>("open");
   const [staleOnly, setStaleOnly] = useState(false);
-  const [showMore, setShowMore] = useState(false);
   const [stageFilter, setStageFilter] = useState<ApplicationStage | "all">("all");
   const [sourceFilter, setSourceFilter] = useState("");
   const [query, setQuery] = useState("");
@@ -335,51 +335,14 @@ export default function ApplicationsPage() {
     {
       key: "actions",
       header: "",
-      headerClassName: "w-48",
+      headerClassName: "w-px text-right",
+      className: "text-right",
       render: (a) => (
-        <div className="flex flex-wrap items-center gap-2">
-          {a.stage === "draft" && (
-            <>
-              <SourceActionLink apply_url={a.apply_url} url={a.url} job_url={a.job_url} />
-              <button
-                type="button"
-                onClick={() => setSubmitId(a.id)}
-                className="text-xs font-medium text-ink hover:underline"
-              >
-                Mark submitted
-              </button>
-            </>
-          )}
-          <details className="relative text-xs text-muted">
-            <summary className="cursor-pointer hover:text-ink">More</summary>
-            <div className="absolute right-0 z-20 mt-1 w-48 overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
-              {a.stage !== "draft" && (
-                <div className="px-3 py-2">
-                  <SourceActionLink apply_url={a.apply_url} url={a.url} job_url={a.job_url} />
-                </div>
-              )}
-              {a.stage !== "draft" && a.stage !== "closed" && (
-                <button type="button" onClick={() => setSubmitId(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
-                  Record another submission
-                </button>
-              )}
-              {a.stage === "closed" && (
-                <button type="button" onClick={() => setSubmitId(a.id)} className="block w-full px-3 py-2 text-left hover:bg-bg">
-                  Reopen (mark submitted)
-                </button>
-              )}
-              {!applicationWasSubmitted(a) && (
-                <button
-                  type="button"
-                  onClick={() => onCancelDraft(a.id)}
-                  className="block w-full px-3 py-2 text-left hover:bg-bg hover:text-red-600"
-                >
-                  Cancel draft
-                </button>
-              )}
-            </div>
-          </details>
-        </div>
+        <ApplicationRowActions
+          app={a}
+          onSubmit={(id) => setSubmitId(id)}
+          onCancelDraft={(id) => void onCancelDraft(id)}
+        />
       ),
     },
   ];
@@ -434,13 +397,31 @@ export default function ApplicationsPage() {
           className="w-40"
           options={[{ value: "", label: "All sources" }, ...sources.map((s) => ({ value: s, label: s }))]}
         />
-        <button
-          type="button"
-          onClick={() => setShowMore((v) => !v)}
-          className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-muted"
-        >
-          More ▾
-        </button>
+        <ApplicationViewOptions
+          board={board}
+          staleOnly={staleOnly}
+          idle={idle}
+          idleLabel={idleLabel}
+          onOpen={() => {
+            setBoard("open");
+            setStaleOnly(false);
+            setStageFilter("all");
+          }}
+          onClosed={() => {
+            setBoard("closed");
+            setStaleOnly(false);
+            setStageFilter("all");
+          }}
+          onStale={() => {
+            setBoard("open");
+            setStaleOnly(true);
+            setStageFilter("all");
+          }}
+          onIdleChange={(next) => {
+            setIdle(next);
+            void putIdleCleanupSettings(next).then(() => refresh());
+          }}
+        />
         {staleOnly && selected.length > 0 && (
           <button
             type="button"
@@ -454,98 +435,12 @@ export default function ApplicationsPage() {
         <ExportMenu count={apps.length} />
       </div>
 
-      {showMore && (
-        <div className="mb-4 space-y-3 rounded-xl border border-line bg-surface p-3 text-sm">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setBoard("open");
-                setStaleOnly(false);
-                setStageFilter("all");
-              }}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium",
-                board === "open" && !staleOnly ? "border-ink bg-ink text-white" : "border-line text-muted",
-              )}
-            >
-              Open
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setBoard("closed");
-                setStaleOnly(false);
-                setStageFilter("all");
-              }}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium",
-                board === "closed" ? "border-ink bg-ink text-white" : "border-line text-muted",
-              )}
-            >
-              Closed
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setBoard("open");
-                setStaleOnly(true);
-                setStageFilter("all");
-              }}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium",
-                staleOnly ? "border-amber-700 bg-amber-50 text-amber-900" : "border-line text-muted",
-              )}
-            >
-              {idleLabel}
-            </button>
-          </div>
-          <div className="space-y-2 border-t border-line pt-3">
-            <p className="font-medium">Idle cleanup</p>
-            <label className="flex items-center gap-2 text-muted">
-              <input
-                type="checkbox"
-                checked={idle.enabled}
-                onChange={(e) => {
-                  const next = { ...idle, enabled: e.target.checked };
-                  setIdle(next);
-                  void putIdleCleanupSettings(next).then(() => refresh());
-                }}
-                className="h-4 w-4 rounded border-line"
-              />
-              Include Applied applications with no update
-            </label>
-            <label className="flex items-center gap-2 text-muted">
-              After
-              <input
-                type="number"
-                min={1}
-                max={365}
-                value={idle.idle_days}
-                onChange={(e) => {
-                  const next = {
-                    ...idle,
-                    idle_days: Math.max(1, Math.min(365, Number(e.target.value) || 14)),
-                  };
-                  setIdle(next);
-                  void putIdleCleanupSettings(next).then(() => refresh());
-                }}
-                className="h-9 w-20 rounded-lg border border-line bg-bg px-2 text-sm text-ink"
-              />
-              days. Interview and Offer never appear here. Close selected is manual.
-            </label>
-          </div>
-          {staleOnly && (
-            <p className="text-xs text-muted">
-              Exempt applications stay out of {idleLabel}. Use More in the application drawer to exclude from idle cleanup.
-            </p>
-          )}
-        </div>
-      )}
-
       {(board !== "open" || staleOnly) && (
         <p className="mb-3 text-xs text-muted">
           {board === "closed" ? "Viewing closed history." : `Viewing ${idleLabel}.`}
+          {staleOnly
+            ? ` Exempt applications stay out of ${idleLabel}. Use More in the application drawer to exclude from idle cleanup.`
+            : ""}
           <button
             type="button"
             className="ml-2 underline"

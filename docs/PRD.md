@@ -207,14 +207,14 @@ Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配�
 
 ### 8.3 `/applications`
 
-仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 More 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。
+仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 **View options** 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。
 
-列表保持表格。列：Role/Company（打开详情）、Stage、**Next step**（`Job.next_step`，空为 `—`；仅当 `Job.deadline` 有值时在下方显示 DDL）、Applied、**Materials**（当前 bindings 计数，默认可见：`No materials` / `1 material` / `N materials`，可排序筛选；点击打开详情 Materials tab）、Actions。Draft 行主按钮：已有 apply URL 则 `Open apply page`，否则已有 job/source URL 则 `Open source`，两者都不可用时显示 `Link missing` 并仍提供 Mark submitted；其余动作在 More。不要根据对话/邮箱/平台私信去猜测入口。页面说明只写 tracking applications / next steps，不写状态机教学文案。
+列表保持表格。列：Role/Company（打开详情）、Stage、**Next step**（`Job.next_step`，空为 `—`；仅当 `Job.deadline` 有值时在下方显示 DDL）、Applied、**Materials**（当前 bindings 计数，默认可见：`No materials` / `1 material` / `N materials`，可排序筛选；点击打开详情 Materials tab）、Actions。Draft 行主按钮：已有 apply URL 则 `Open apply page`，否则已有 job/source URL 则 `Open source`，两者都不可用时显示 `Link missing` 并仍提供 Mark submitted；其余动作在行尾 overflow（ellipsis **More actions**）。工具栏 **View options** 收纳 Open / Closed / no-update 与 cleanup settings，不展开整页。不要根据对话/邮箱/平台私信去猜测入口。页面说明只写 tracking applications / next steps，不写状态机教学文案。
 
 详情为右侧抽屉（桌面约 720px，小屏全屏），不在表下展开整表。Tabs：`Overview / Materials / Notes`，默认 Overview。顶栏：Role、Company、Location、Stage、关闭、source action；Draft 另有次级 Mark submitted。
 
 - Overview：source/link → Next Step / DDL（与 Tasks 相同的 Job 字段，PATCH `/api/jobs/{id}`）→ JD 来自 `Job.description`（缺失时写 “full JD not saved” 并给 Open source，不得把 snippet 标成全文）→ Applied 后显示最近一次 submission 摘要。`Job.comment` 为 JD 下可折叠 Research notes。`Application.notes` 只在 Notes tab，禁止与 comment 合并或双写。
-- Materials：Linked materials（add / change version / remove，与今日相同）；Templates & answers 入口仅用于去 Knowledge copy；Submissions 只读冻结快照。Draft 强调当前 Linked materials。Applied+ 优先最近 submission 摘要；当前 bindings 仍可编辑，但标签必须区分 `Linked materials` 与 `Materials used in this submission`。
+- Materials：Linked materials（add / change version / remove，与今日相同）；Templates & answers 入口仅用于去 Templates & Answers copy；Submissions 只读冻结快照。Draft 强调当前 Linked materials。Applied+ 优先最近 submission 摘要；当前 bindings 仍可编辑，但标签必须区分 `Linked materials` 与 `Materials used in this submission`。
 - Notes：`Application.notes` 为主；Communication notes 为可选折叠（现有 `application_comm_notes` 表）。
 
 Deep link：`?id=` 即使不在当前页/筛选也必须打开（含 Closed）；`tab=packet` 映射到 Materials。关闭抽屉不得重置列表筛选、排序、分页或滚动。
@@ -258,7 +258,7 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 
 两条独立车道：Materials 与 Application。Materials 不要求先有 Application。一行一个 Material：name、type、purpose、latest version、updated。Detail 展示版本列表与文件。Add material：name、type、Upload/Link；purpose / notes / version label 可选。Add version：Upload 或 Link，生成不可变版本；material 级字段不变；version purpose/notes 独立。库内新版本不会自动改已有申请 bindings；申请流里 Use version / Change version 才替换当前绑定。上传失败保留输入，重试不得因双击重复版本。
 
-Files / Knowledge 两个 tab（默认 Files）。Knowledge：Message templates 与 Application answers（Answer Bank），轻量编辑器，持久化 `content.md` 版本，Copy；answers 可选 Add to Packet；软归档。无 Send / Log-as-sent / CRM / Need Reply / 主动推送。
+显示标签为 Documents / Templates & Answers（内部 id 仍为 `files` / `knowledge`，默认 Documents）。Templates & Answers：Message templates 与 Application answers（Answer Bank），轻量编辑器，持久化 `content.md` 版本，Copy；answers 可选 Add to Packet；软归档。无 Send / Log-as-sent / CRM / Need Reply / 主动推送。
 
 Application 绑定 version，UNIQUE(application_id, material_id)。同一材料可绑到多个申请、使用不同版本。Draft 可以有材料，Applied 可以没有。Mark Submitted 从服务器 bindings 拍 submission snapshot（复制文件字节）；允许空材料（需确认 Record without materials / `confirm_empty`）。历史展示与下载永远读当次快照，不读最新版本。Cancel Draft 只清 bindings，library 与 submission history 保留。
 

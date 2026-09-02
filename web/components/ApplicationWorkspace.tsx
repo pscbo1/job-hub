@@ -277,10 +277,10 @@ export function MaterialsArea({
           Templates & answers
         </h3>
         <p className="mt-1 text-sm text-muted">
-          Copy from Knowledge. Add to Packet stays on the material itself.
+          Copy from Templates & Answers. Add to Packet stays on the material itself.
         </p>
         <a href="/materials" className="mt-2 inline-block text-sm font-medium text-ink underline">
-          Open Knowledge
+          Open Templates & Answers
         </a>
       </div>
 

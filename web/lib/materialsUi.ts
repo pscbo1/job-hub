@@ -23,6 +23,38 @@ export function snapshotItemLabel(item: PacketSnapshotItem): string {
   return [item.title, version, file].filter(Boolean).join(" · ");
 }
 
+export type MaterialLane = "files" | "knowledge";
+
+/** Display copy only. Lane ids stay `files` / `knowledge`. */
+export const MATERIAL_LANE_COPY: Record<
+  MaterialLane,
+  {
+    tab: string;
+    description: string;
+    add: string;
+    search: string;
+    empty: string;
+    createTitle: string;
+  }
+> = {
+  files: {
+    tab: "Documents",
+    description: "Resumes, cover letters, portfolios, and supporting documents.",
+    add: "Add document",
+    search: "Search documents",
+    empty: "No documents in this tab.",
+    createTitle: "Add document",
+  },
+  knowledge: {
+    tab: "Templates & Answers",
+    description: "Reusable messages and application answers.",
+    add: "Add template or answer",
+    search: "Search templates and answers",
+    empty: "No templates or answers in this tab.",
+    createTitle: "Add template or answer",
+  },
+};
+
 export const FILE_MATERIAL_KINDS = [
   "resume",
   "cover_letter",

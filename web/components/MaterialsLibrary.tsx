@@ -17,16 +17,18 @@ import {
 import {
   FILE_MATERIAL_KINDS,
   KNOWLEDGE_MATERIAL_KINDS,
+  MATERIAL_LANE_COPY,
   formatKind,
   isKnowledgeKind,
   latestVersion,
   versionFileLabel,
+  type MaterialLane,
 } from "@/lib/materialsUi";
 import { DIRTY_SWITCH_LABELS, isStaleGeneration } from "@/lib/recordDraft";
 import { cn } from "@/lib/utils";
 import type { Material, MaterialKind, MaterialVersion } from "@/lib/api";
 
-type Lane = "files" | "knowledge";
+type Lane = MaterialLane;
 type SourceKind = "upload" | "link" | "text";
 
 type CreateDraft = {
@@ -181,7 +183,7 @@ export function MaterialsLibrary({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Materials</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Library files and knowledge stay independent of application stage.
+            Documents and templates stay independent of application stage.
           </p>
         </div>
         <button
@@ -193,30 +195,33 @@ export function MaterialsLibrary({
             setCreateError(null);
           }}
         >
-          Add material
+          {MATERIAL_LANE_COPY[lane].add}
         </button>
       </div>
 
-      <div className="flex gap-1 rounded-lg border border-border p-1">
-        {(["files", "knowledge"] as const).map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={cn(
-              "rounded-md px-3 py-1.5 text-sm capitalize",
-              lane === item ? "bg-foreground text-background" : "text-muted-foreground",
-            )}
-            onClick={() => setLane(item)}
-          >
-            {item}
-          </button>
-        ))}
+      <div>
+        <div className="flex gap-1 rounded-lg border border-border p-1">
+          {(["files", "knowledge"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={cn(
+                "rounded-md px-3 py-1.5 text-sm",
+                lane === item ? "bg-foreground text-background" : "text-muted-foreground",
+              )}
+              onClick={() => setLane(item)}
+            >
+              {MATERIAL_LANE_COPY[item].tab}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">{MATERIAL_LANE_COPY[lane].description}</p>
       </div>
 
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder={lane === "knowledge" ? "Search templates and answers" : "Search files"}
+        placeholder={MATERIAL_LANE_COPY[lane].search}
         className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
       />
 
@@ -272,7 +277,7 @@ export function MaterialsLibrary({
             {visible.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
-                  No materials in this tab.
+                  {MATERIAL_LANE_COPY[lane].empty}
                 </td>
               </tr>
             ) : null}
@@ -324,7 +329,7 @@ function CreateForm({
         onSave();
       }}
     >
-      <h2 className="text-sm font-semibold">Add material</h2>
+      <h2 className="text-sm font-semibold">{MATERIAL_LANE_COPY[lane].createTitle}</h2>
       <label className="block text-sm">
         Name
         <input

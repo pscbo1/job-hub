@@ -27,6 +27,8 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.
 - Applications list shows current material counts. All Mark submitted entry points share one confirm panel; empty materials need explicit confirm on client and server.
 - **Applications Round 1 UX (2026-09-01).** List columns are Role/Company, Stage, Next step (Job.next_step + DDL when set), Applied, visible materials count, Actions. Detail is a right drawer with Overview / Materials / Notes. Mark submitted confirm is a shared modal that previews current bindings only. Source actions use stored apply/source URLs only. Display timestamps default to Asia/Shanghai.
+- Applications toolbar **More** is **View options** (Views / Cleanup settings in a popover). Row overflow is an ellipsis **More actions** control so Draft source + Mark submitted stay on one line.
+- Materials library tabs display **Documents** and **Templates & Answers** (internal ids remain `files` / `knowledge`). Add/search/empty copy follows the active tab.
 
 ### Fixed
 
