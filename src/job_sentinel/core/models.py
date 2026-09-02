@@ -284,6 +284,10 @@ class Job(BaseModel):
     source_job_id: str = Field(default="")
     job_url: str = Field(default="")
     canonical_url: str = Field(default="")
+    source_note: str = Field(
+        default="",
+        description="User-provided source context for manually added opportunities.",
+    )
     title: str = Field(default="")
     company: str = Field(default="")
     location: str = Field(default="")

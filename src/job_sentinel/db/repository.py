@@ -23,8 +23,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlite_utils
 from loguru import logger
@@ -60,7 +61,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -76,10 +77,21 @@ _MATERIALS_TABLE = "materials"
 _MATERIAL_VERSIONS_TABLE = "material_versions"
 _APP_BINDINGS_TABLE = "application_material_bindings"
 _COMM_NOTES_TABLE = "application_comm_notes"
+_MANUAL_APP_REQUESTS_TABLE = "manual_application_requests"
 _DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
 _UNSET: Any = object()
 _APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
 _LEGACY_JOB_STATUSES = frozenset({"applied", "interview", "interviewing", "offer", "closed"})
+
+
+@dataclass(frozen=True)
+class ManualApplicationWriteResult:
+    """Transactional outcome for one manual Add application request."""
+
+    status: Literal["created", "replayed", "cancelled", "duplicate"]
+    job_id: str | None = None
+    application_id: str | None = None
+    duplicate_job_id: str | None = None
 
 
 def _legacy_status_projection(engagement: str | None) -> str | None:
@@ -177,6 +189,7 @@ class JobRepository:
         self._ensure_v0_tables()
         self._ensure_prd02_tables()
         self._ensure_job_tasks_table()
+        self._ensure_manual_application_requests_table()
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -245,6 +258,7 @@ class JobRepository:
                 source_job_id TEXT NOT NULL,
                 job_url TEXT NOT NULL DEFAULT '',
                 canonical_url TEXT NOT NULL DEFAULT '',
+                source_note TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 company TEXT NOT NULL DEFAULT '',
                 location TEXT NOT NULL DEFAULT '',
@@ -363,6 +377,8 @@ class JobRepository:
             alters.append("ALTER TABLE jobs ADD COLUMN last_activity_at TEXT")
         if "reference" not in names:
             alters.append("ALTER TABLE jobs ADD COLUMN reference INTEGER NOT NULL DEFAULT 0")
+        if "source_note" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN source_note TEXT NOT NULL DEFAULT ''")
         for sql in alters:
             self._db.execute(sql)
 
@@ -836,6 +852,22 @@ class JobRepository:
         raw.create_index(["collected_at"], if_not_exists=True)
         raw.create_index(["job_id"], if_not_exists=True)
 
+    def _ensure_manual_application_requests_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manual_application_requests (
+                request_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                application_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('active', 'cancelled')),
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        requests = self._table(_MANUAL_APP_REQUESTS_TABLE)
+        requests.create_index(["job_id"], if_not_exists=True)
+        requests.create_index(["application_id"], if_not_exists=True)
+
     def _ensure_job_tasks_table(self) -> None:
         self._db.execute(
             """
@@ -912,6 +944,9 @@ class JobRepository:
             self._ensure_prd02_application_columns()
         if from_version < 14:
             self._ensure_prd02_application_columns()
+        if from_version < 15:
+            self._ensure_prd02_job_columns()
+            self._ensure_manual_application_requests_table()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1009,20 +1044,22 @@ class JobRepository:
             return stored
 
         now = _now_iso()
+        preserve_manual_identity = existing.source == "manual" and job.source != "manual"
         ingest = {
             "job_url": job.job_url,
             "canonical_url": job.canonical_url,
-            "title": job.title,
-            "company": job.company,
-            "location": job.location,
+            "title": existing.title if preserve_manual_identity else job.title,
+            "company": existing.company if preserve_manual_identity else job.company,
+            "location": existing.location if preserve_manual_identity else job.location,
             "description": job.description,
             "employment_type": job.employment_type,
             "salary": job.salary,
             "published_at": _optional_iso(job.published_at),
             "last_seen_at": now,
             "updated_at": now,
-            "fingerprint": fingerprint,
-            "market": job.market,
+            "fingerprint": existing.fingerprint if preserve_manual_identity else fingerprint,
+            "market": existing.market if preserve_manual_identity else job.market,
+            "source_note": existing.source_note,
         }
         self._table(_JOBS_TABLE).update(existing.id, ingest)
         stored = self.get_hub_job(existing.id)
@@ -1397,6 +1434,100 @@ class JobRepository:
         self._table(_JOBS_RAW_TABLE).insert(_job_raw_to_row(raw))
         logger.debug("Inserted jobs_raw | id={} source={}", raw.id, raw.source)
         return raw
+
+    def create_manual_application_bundle(
+        self,
+        *,
+        request_id: str,
+        raw: JobRaw,
+        job: Job,
+        application: Application,
+        event: ApplicationEvent,
+        create_separately: bool,
+    ) -> ManualApplicationWriteResult:
+        """Atomically store raw → Job → Draft → event → idempotency result."""
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute(
+                """
+                SELECT job_id, application_id, status
+                FROM manual_application_requests
+                WHERE request_id = ?
+                """,
+                [request_id],
+            ).fetchone()
+            if prior is not None:
+                conn.rollback()
+                if str(prior[2]) == "cancelled":
+                    return ManualApplicationWriteResult(status="cancelled")
+                return ManualApplicationWriteResult(
+                    status="replayed",
+                    job_id=str(prior[0]),
+                    application_id=str(prior[1]),
+                )
+
+            if job.canonical_url and not create_separately:
+                duplicate = conn.execute(
+                    """
+                    SELECT id
+                    FROM jobs
+                    WHERE canonical_url = ?
+                    ORDER BY discovered_at ASC
+                    LIMIT 1
+                    """,
+                    [job.canonical_url],
+                ).fetchone()
+                if duplicate is not None:
+                    conn.rollback()
+                    return ManualApplicationWriteResult(
+                        status="duplicate",
+                        duplicate_job_id=str(duplicate[0]),
+                    )
+
+            self._insert_transaction_row(_JOBS_RAW_TABLE, _job_raw_to_row(raw))
+            self._insert_transaction_row(_JOBS_TABLE, _hub_job_to_row(job))
+            self._insert_transaction_row(_APP_TABLE, _app_to_row(application))
+            self._insert_transaction_row(_APP_EVENTS_TABLE, _event_to_row(event))
+            self._insert_transaction_row(
+                _MANUAL_APP_REQUESTS_TABLE,
+                {
+                    "request_id": request_id,
+                    "job_id": job.id,
+                    "application_id": application.id,
+                    "status": "active",
+                    "created_at": event.created_at.isoformat(),
+                },
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return ManualApplicationWriteResult(
+            status="created",
+            job_id=job.id,
+            application_id=application.id,
+        )
+
+    def _insert_transaction_row(self, table: str, row: dict[str, Any]) -> None:
+        columns = list(row)
+        names = ", ".join(columns)
+        placeholders = ", ".join("?" for _ in columns)
+        self._db.conn.execute(
+            f"INSERT INTO {table} ({names}) VALUES ({placeholders})",  # noqa: S608
+            [row[name] for name in columns],
+        )
+
+    def mark_manual_application_request_cancelled(self, application_id: str) -> None:
+        """Seal an abandoned manual request so replay cannot recreate its draft."""
+        self._db.execute(
+            """
+            UPDATE manual_application_requests
+            SET status = 'cancelled'
+            WHERE application_id = ?
+            """,
+            [application_id],
+        )
 
     def get_job_raw(self, raw_id: str) -> JobRaw | None:
         try:
@@ -2433,6 +2564,7 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "source_job_id": job.source_job_id,
         "job_url": job.job_url,
         "canonical_url": job.canonical_url,
+        "source_note": job.source_note,
         "title": job.title,
         "company": job.company,
         "location": job.location,
@@ -2483,6 +2615,7 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         source_job_id=row.get("source_job_id", ""),
         job_url=row.get("job_url", ""),
         canonical_url=row.get("canonical_url", ""),
+        source_note=row.get("source_note", ""),
         title=row.get("title", ""),
         company=row.get("company", ""),
         location=location,

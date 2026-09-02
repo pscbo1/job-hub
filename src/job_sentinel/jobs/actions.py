@@ -6,6 +6,7 @@ Business rules live here, not in route handlers or UI components.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -17,7 +18,9 @@ from job_sentinel.core.models import (
     ApplicationSubmission,
     CloseReason,
     Job,
+    JobRaw,
     PacketSnapshot,
+    compute_job_fingerprint,
 )
 from job_sentinel.ingestion.filters import (
     FILTER_STATE_EXCLUDED,
@@ -38,6 +41,18 @@ PIPELINE_STAGES = frozenset(
         ApplicationStage.CLOSED,
     }
 )
+
+
+@dataclass(frozen=True)
+class ManualApplicationOutcome:
+    """Business outcome for Add application idempotency and duplicate handling."""
+
+    status: str
+    job: Job | None = None
+    application: Application | None = None
+    replayed: bool = False
+    duplicate_job: Job | None = None
+    duplicate_application: Application | None = None
 
 
 class TrackingError(Exception):
@@ -238,6 +253,121 @@ def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Applicatio
     return stored, refreshed
 
 
+def create_manual_application(
+    repo: JobRepository,
+    *,
+    request_id: str,
+    title: str,
+    company: str,
+    job_url: str = "",
+    location: str = "",
+    source_note: str = "",
+    market: str = "cn",
+    create_separately: bool = False,
+) -> ManualApplicationOutcome:
+    """Atomically create a manual raw record, stable Job, and bound Draft."""
+    from job_sentinel.ingestion.normalize import canonicalize_url
+
+    clean_title = title.strip()
+    clean_company = company.strip()
+    clean_url = job_url.strip()
+    clean_location = location.strip()
+    clean_note = source_note.strip()
+    now = _now()
+    canonical = canonicalize_url(clean_url)
+    source_job_id = f"manual:{request_id}"
+    job = Job(
+        source="manual",
+        source_job_id=source_job_id,
+        job_url=clean_url,
+        canonical_url=canonical,
+        source_note=clean_note,
+        title=clean_title,
+        company=clean_company,
+        location=clean_location,
+        discovered_at=now,
+        last_seen_at=now,
+        updated_at=now,
+        last_activity_at=now,
+        fingerprint=compute_job_fingerprint(clean_company, clean_title, clean_location),
+        market=market,
+        filter_state="included",
+    )
+    raw = JobRaw(
+        source="manual",
+        source_job_id=source_job_id,
+        source_url=clean_url,
+        raw_payload={
+            "request_id": request_id,
+            "title": clean_title,
+            "company": clean_company,
+            "job_url": clean_url,
+            "location": clean_location,
+            "source_note": clean_note,
+            "market": market,
+        },
+        collected_at=now,
+        processed_at=now,
+        job_id=job.id,
+        created_at=now,
+    )
+    application = Application(
+        job_id=job.id,
+        title=clean_title,
+        employer=clean_company,
+        location=clean_location,
+        url=clean_url,
+        source="manual",
+        stage=ApplicationStage.DRAFT,
+        created_at=now,
+        updated_at=now,
+    )
+    event = ApplicationEvent(
+        application_id=application.id,
+        kind="created",
+        payload={"stage": ApplicationStage.DRAFT.value},
+        created_at=now,
+    )
+    result = repo.create_manual_application_bundle(
+        request_id=request_id,
+        raw=raw,
+        job=job,
+        application=application,
+        event=event,
+        create_separately=create_separately,
+    )
+    if result.status == "cancelled":
+        return ManualApplicationOutcome(status="cancelled", replayed=True)
+    if result.status == "duplicate":
+        duplicate = (
+            repo.get_hub_job(result.duplicate_job_id) if result.duplicate_job_id is not None else None
+        )
+        duplicate_app = (
+            repo.get_application_for_job(duplicate.id, include_deleted=True)
+            if duplicate is not None
+            else None
+        )
+        return ManualApplicationOutcome(
+            status="duplicate",
+            duplicate_job=duplicate,
+            duplicate_application=duplicate_app,
+        )
+    stored_job = repo.get_hub_job(result.job_id) if result.job_id is not None else None
+    stored_app = (
+        repo.get_application(result.application_id)
+        if result.application_id is not None
+        else None
+    )
+    if stored_job is None or stored_app is None:
+        raise TrackingError("Manual application result is missing", status_code=500)
+    return ManualApplicationOutcome(
+        status=result.status,
+        job=stored_job,
+        application=stored_app,
+        replayed=result.status == "replayed",
+    )
+
+
 def mark_submitted(
     repo: JobRepository,
     application_id: str,
@@ -364,6 +494,7 @@ def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
         repo.attach_comm_notes_to_job(app.id, app.job_id)
         repo.keep_application_contact_on_job(app.job_id, app.contact)
     repo.soft_delete_application(app.id)
+    repo.mark_manual_application_request_cancelled(app.id)
     job: Job | None = None
     if app.job_id:
         job = repo.get_hub_job(app.job_id)

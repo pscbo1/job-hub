@@ -22,6 +22,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -343,6 +344,40 @@ class ApplicationCreateRequest(BaseModel):
     deadline: str = Field(default="")
     notes: str = Field(default="")
     resume_document_id: str | None = Field(default=None)
+
+
+class ManualApplicationCreateRequest(BaseModel):
+    request_id: uuid.UUID
+    title: str = Field(..., min_length=1, max_length=200)
+    company: str = Field(..., min_length=1, max_length=200)
+    job_url: str = Field(default="", max_length=2048)
+    location: str = Field(default="")
+    source_note: str = Field(default="")
+    market: str = Field(default="cn")
+    create_separately: bool = False
+
+    @field_validator("title", "company", "job_url", "location", "source_note", mode="before")
+    @classmethod
+    def _strip_manual_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("job_url")
+    @classmethod
+    def _validate_job_url(cls, value: str) -> str:
+        if not value:
+            return value
+        parts = urlsplit(value)
+        if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+            raise ValueError("Enter a full http(s) link with a host")
+        return value
+
+    @field_validator("market")
+    @classmethod
+    def _validate_manual_market(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"cn", "en"}:
+            raise ValueError("Market must be cn or en")
+        return normalized
 
 
 class ApplicationPatchRequest(BaseModel):
@@ -1316,6 +1351,88 @@ def create_app(
         finally:
             repo.close()
         return app.model_dump(mode="json")
+
+    @app.post("/api/applications/manual")
+    def create_manual_application_route(
+        req: ManualApplicationCreateRequest,
+        request: Request,
+    ) -> JSONResponse:
+        """Create one manual Job + Draft transaction, with replay and URL conflict handling."""
+        if auth_mode != "off" and _bearer_user(request) is None:
+            raise HTTPException(status_code=401, detail="Login required.")
+
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import create_manual_application
+
+        repo = JobRepository(db_path)
+        try:
+            outcome = create_manual_application(
+                repo,
+                request_id=str(req.request_id),
+                title=req.title,
+                company=req.company,
+                job_url=req.job_url,
+                location=req.location,
+                source_note=req.source_note,
+                market=req.market,
+                create_separately=req.create_separately,
+            )
+            if outcome.status == "duplicate":
+                duplicate = outcome.duplicate_job
+                duplicate_app = outcome.duplicate_application
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "duplicate_candidate",
+                        "message": "An opportunity with this link already exists.",
+                        "duplicate_candidate": (
+                            {
+                                "job": {
+                                    "id": duplicate.id,
+                                    "title": duplicate.title,
+                                    "company": duplicate.company,
+                                    "location": duplicate.location,
+                                    "job_url": duplicate.job_url,
+                                    "market": duplicate.market,
+                                },
+                                "application": (
+                                    {
+                                        "id": duplicate_app.id,
+                                        "stage": duplicate_app.stage.value,
+                                        "deleted": duplicate_app.deleted_at is not None,
+                                    }
+                                    if duplicate_app is not None
+                                    else None
+                                ),
+                            }
+                            if duplicate is not None
+                            else None
+                        ),
+                    },
+                )
+            if outcome.status == "cancelled":
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "job": None,
+                        "application": None,
+                        "replayed": True,
+                        "cancelled": True,
+                    },
+                )
+            if outcome.job is None or outcome.application is None:
+                raise HTTPException(status_code=500, detail="Manual application result is missing")
+            return JSONResponse(
+                status_code=200 if outcome.replayed else 201,
+                content={
+                    "job": outcome.job.model_dump(mode="json"),
+                    "application": outcome.application.model_dump(mode="json"),
+                    "replayed": outcome.replayed,
+                    "cancelled": False,
+                },
+            )
+        finally:
+            repo.close()
 
     @app.get("/api/applications/export")
     def export_applications(fmt: str = "csv") -> StreamingResponse:
