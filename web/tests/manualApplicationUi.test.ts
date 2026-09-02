@@ -14,7 +14,7 @@ const DRAFT = {
   source: "manual",
   stage: "draft",
   tags: [],
-} as Application;
+} as unknown as Application;
 
 describe("manual Add application UI rules", () => {
   it("requires trimmed title and company and validates optional URL", () => {

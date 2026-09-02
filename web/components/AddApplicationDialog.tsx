@@ -137,7 +137,7 @@ export function AddApplicationDialog({
     }
   }
 
-  async function useExisting() {
+  async function openExisting() {
     if (!duplicate || busy) return;
     setBusy(true);
     const result = await startApplicationForJob(duplicate.job.id);
@@ -289,7 +289,7 @@ export function AddApplicationDialog({
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => void useExisting()}
+                        onClick={() => void openExisting()}
                         className="h-9 rounded-lg bg-ink px-3 text-sm font-medium text-white disabled:opacity-50"
                       >
                         Use existing
