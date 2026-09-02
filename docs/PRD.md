@@ -223,7 +223,7 @@ Deep link：`?id=` 即使不在当前页/筛选也必须打开（含 Closed）�
 
 显示时区默认 Asia/Shanghai（可复用已有 `NEXT_PUBLIC_APP_TZ` / `NEXT_PUBLIC_TIMEZONE`）。本轮无 Settings 页。
 
-跨记录编辑（DBG-01/02）：notes、communication draft、next step、material notes、Knowledge 编辑器、SubmitConfirm 均按 record id 隔离。脏切换：Save and switch / Discard / Stay。切换申请须 abort 进行中的 fetch，失败显示 Retry 而不是空列表。
+跨记录编辑（DBG-01/02）：notes、communication draft、next step、material notes、Knowledge 编辑器、SubmitConfirm 均按 record id 隔离。脏切换：Save and switch / Discard / Stay。切换申请须 abort 进行中的 fetch，失败显示 Retry 而不是空列表。保存失败时停留在当前记录并保留草稿（含 communication draft），标明失败项并提供 Retry；进行中的保存阻止再次保存、丢弃、切换与关闭。
 
 本轮明确推迟：Knowledge「Use in application」搜索选择器扩容、全局 `border-border` vs `border-line` token 统一、从数据猜测 Open conversation / Copy email、把 materials 列藏到 More、Part3-after P0。
 

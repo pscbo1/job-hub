@@ -10,6 +10,16 @@ import {
   latestSubmissionLine,
   nextStepLabel,
 } from "@/lib/applicationUi";
+import {
+  DRAWER_SAVE_STEP_LABELS,
+  applyDrawerSynced,
+  canCompleteLeave,
+  draftsAfterSave,
+  drawerActionsLocked,
+  saveDrawerRecord,
+  withDrawerSaveLock,
+  type DrawerSaveStep,
+} from "@/lib/drawerSave";
 import { dateInputValue, isDateOverdue } from "@/lib/jobPipeline";
 import { DIRTY_SWITCH_LABELS } from "@/lib/recordDraft";
 import { sourceAction } from "@/lib/sourceAction";
@@ -53,15 +63,33 @@ export function ApplicationDrawer({
   const [ddlDraft, setDdlDraft] = useState(dateInputValue(requestedApp?.job_deadline));
   const [commDraft, setCommDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<DrawerSaveStep | null>(null);
   const [closeArmed, setCloseArmed] = useState(false);
+  const [notesTick, setNotesTick] = useState(0);
   const dirtyRef = useRef(false);
   const shownIdRef = useRef(requestedApp?.id ?? "");
+  const saveLock = useRef(false);
+  const baselineRef = useRef({
+    notes: requestedApp?.notes ?? "",
+    nextStep: requestedApp?.next_step ?? "",
+    deadline: dateInputValue(requestedApp?.job_deadline),
+  });
+
+  function resetBaseline(app: Application) {
+    baselineRef.current = {
+      notes: app.notes,
+      nextStep: app.next_step ?? "",
+      deadline: dateInputValue(app.job_deadline),
+    };
+  }
 
   function syncDrafts(app: Application) {
     setNotesDraft(app.notes);
     setNextDraft(app.next_step ?? "");
     setDdlDraft(dateInputValue(app.job_deadline));
     setCommDraft("");
+    setSaveError(null);
+    resetBaseline(app);
   }
 
   const isDirty =
@@ -75,14 +103,14 @@ export function ApplicationDrawer({
 
   useEffect(() => {
     if (!requestedApp) {
-      if (!dirtyRef.current) {
+      if (!dirtyRef.current && !saveLock.current) {
         setShown(null);
         setPending(null);
       }
       return;
     }
     if (requestedApp.id === shownIdRef.current) {
-      setShown(requestedApp);
+      if (!saveLock.current) setShown(requestedApp);
       return;
     }
     if (!dirtyRef.current) {
@@ -107,30 +135,59 @@ export function ApplicationDrawer({
 
   async function saveShown(): Promise<boolean> {
     if (!shown) return false;
-    setSaving(true);
-    try {
-      await updateApplication(shown.id, { notes: notesDraft });
-      if (shown.job_id) {
-        await patchHubJob(shown.job_id, {
-          next_step: nextDraft,
-          deadline: ddlDraft.trim() ? ddlDraft : null,
-        });
+    const appId = shown.id;
+    const snapshot = shown;
+    const currentDrafts = {
+      notes: notesDraft,
+      nextStep: nextDraft,
+      deadline: ddlDraft,
+      commDraft,
+    };
+    const result = await withDrawerSaveLock(saveLock, async () => {
+      setSaving(true);
+      setSaveError(null);
+      try {
+        return await saveDrawerRecord(
+          {
+            appId,
+            jobId: snapshot.job_id,
+            shownNotes: baselineRef.current.notes,
+            shownNextStep: baselineRef.current.nextStep,
+            shownDeadline: baselineRef.current.deadline,
+            drafts: currentDrafts,
+          },
+          { updateApplication, patchHubJob, addCommNote },
+          { isCancelled: () => shownIdRef.current !== appId },
+        );
+      } finally {
+        if (shownIdRef.current === appId) setSaving(false);
       }
-      if (commDraft.trim()) {
-        await addCommNote(shown.id, commDraft.trim());
-        setCommDraft("");
-      }
-      onChanged();
-      return true;
-    } finally {
-      setSaving(false);
+    });
+    if (result == null || shownIdRef.current !== appId) return false;
+
+    const nextShown = applyDrawerSynced(shownIdRef.current, appId, snapshot, result.synced);
+    if (nextShown) setShown(nextShown);
+    if (result.synced.notes !== undefined) baselineRef.current.notes = result.synced.notes;
+    if (result.synced.nextStep !== undefined) baselineRef.current.nextStep = result.synced.nextStep;
+    if (result.synced.deadline !== undefined) baselineRef.current.deadline = result.synced.deadline;
+    const nextDrafts = draftsAfterSave(currentDrafts, result.synced);
+    if (nextDrafts.commDraft !== currentDrafts.commDraft) setCommDraft(nextDrafts.commDraft);
+
+    if (!result.ok) {
+      setSaveError(result.failedStep);
+      return false;
     }
+    setSaveError(null);
+    if (result.synced.commCleared) setNotesTick((n) => n + 1);
+    onChanged();
+    return true;
   }
 
   async function saveAndSwitch() {
+    if (drawerActionsLocked(saving) || saveLock.current) return;
     const target = pending;
     const ok = await saveShown();
-    if (!ok || !target) return;
+    if (!canCompleteLeave(ok, saveLock.current) || !target) return;
     setShown(target);
     setPending(null);
     setCloseArmed(false);
@@ -139,6 +196,7 @@ export function ApplicationDrawer({
   }
 
   function discardAndSwitch() {
+    if (drawerActionsLocked(saving) || saveLock.current) return;
     const target = pending;
     if (!target) {
       setPending(null);
@@ -159,12 +217,15 @@ export function ApplicationDrawer({
   }
 
   function requestClose() {
+    if (drawerActionsLocked(saving) || saveLock.current) return;
     if (isDirty && shown) {
       setCloseArmed(true);
       return;
     }
     onClose();
   }
+
+  const saveBusy = saving || saveLock.current;
 
   const source = shown
     ? sourceAction({ apply_url: shown.apply_url, url: shown.url, job_url: shown.job_url })
@@ -174,19 +235,39 @@ export function ApplicationDrawer({
     <div className="fixed inset-0 z-50">
       <button type="button" className="absolute inset-0 bg-ink/30" aria-label="Close drawer" onClick={requestClose} />
       <aside className="absolute inset-y-0 right-0 flex w-full max-w-[720px] flex-col border-l border-line bg-surface shadow-xl max-sm:inset-0">
+        {saveError && shown && (
+          <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm">
+            Could not save {DRAWER_SAVE_STEP_LABELS[saveError]}. This application and unsaved drafts were kept.
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={saveBusy}
+                onClick={() => void saveShown()}
+                className="h-8 rounded-lg bg-ink px-3 text-xs text-white disabled:opacity-50"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
         {pending && shown && pending.id !== shown.id && (
           <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm">
             Unsaved changes on this application.
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={saving}
+                disabled={saveBusy}
                 onClick={() => void saveAndSwitch()}
                 className="h-8 rounded-lg bg-ink px-3 text-xs text-white disabled:opacity-50"
               >
                 {DIRTY_SWITCH_LABELS.save}
               </button>
-              <button type="button" onClick={discardAndSwitch} className="h-8 rounded-lg border border-line px-3 text-xs">
+              <button
+                type="button"
+                disabled={saveBusy}
+                onClick={discardAndSwitch}
+                className="h-8 rounded-lg border border-line px-3 text-xs disabled:opacity-50"
+              >
                 {DIRTY_SWITCH_LABELS.discard}
               </button>
               <button type="button" onClick={stay} className="h-8 rounded-lg border border-line px-3 text-xs">
@@ -201,10 +282,11 @@ export function ApplicationDrawer({
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={saving}
+                disabled={saveBusy}
                 onClick={async () => {
+                  if (saveBusy) return;
                   const ok = await saveShown();
-                  if (ok) {
+                  if (canCompleteLeave(ok, saveLock.current)) {
                     setCloseArmed(false);
                     onClose();
                   }
@@ -215,11 +297,13 @@ export function ApplicationDrawer({
               </button>
               <button
                 type="button"
+                disabled={saveBusy}
                 onClick={() => {
+                  if (saveBusy) return;
                   setCloseArmed(false);
                   onClose();
                 }}
-                className="h-8 rounded-lg border border-line px-3 text-xs"
+                className="h-8 rounded-lg border border-line px-3 text-xs disabled:opacity-50"
               >
                 {DIRTY_SWITCH_LABELS.discard}
               </button>
@@ -253,7 +337,12 @@ export function ApplicationDrawer({
                     {[shown.employer, shown.location, shown.stage].filter(Boolean).join(" · ")}
                   </p>
                 </div>
-                <button type="button" onClick={requestClose} className="text-sm text-muted hover:text-ink">
+                <button
+                  type="button"
+                  disabled={saveBusy}
+                  onClick={requestClose}
+                  className="text-sm text-muted hover:text-ink disabled:opacity-50"
+                >
                   Close
                 </button>
               </div>
@@ -325,7 +414,7 @@ export function ApplicationDrawer({
               {tab === "materials" && <MaterialsArea key={shown.id} app={shown} onChanged={onChanged} />}
               {tab === "notes" && (
                 <NotesPanel
-                  key={shown.id}
+                  key={`${shown.id}:${notesTick}`}
                   app={shown}
                   notes={notesDraft}
                   onNotesChange={setNotesDraft}

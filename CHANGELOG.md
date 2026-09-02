@@ -39,6 +39,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Empty-material Mark submitted cannot skip confirm; retries with the same idempotency key create one record.
 - Switching Application notes or Material notes no longer cross-writes the previous record.
 - Application drawer, notes, next step, communication draft, and Mark submitted confirm isolate edit state by record id (Save and switch / Discard / Stay). Packet and comm-note fetches abort on switch and show Retry on failure.
+- Application drawer save failures stay on the current record, keep unsaved drafts (including communication notes), name the failed field, and offer Retry. In-flight saves block duplicate save, discard, switch, and close.
 
 - **Release workflow left the sdist and wheel unattached.** When a release was
   cut by hand before the tag was pushed, `gh release create` failed with
