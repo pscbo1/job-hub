@@ -349,6 +349,7 @@ class ApplicationPatchRequest(BaseModel):
     stage: ApplicationStage | None = Field(default=None)
     notes: str | None = Field(default=None)
     contact: str | None = Field(default=None)
+    tags: list[str] | None = Field(default=None)
     applied_date: str | None = Field(default=None)
     deadline: str | None = Field(default=None)
     salary: str | None = Field(default=None)
@@ -1253,9 +1254,11 @@ def create_app(
         limit: int = 200,
         view: str = "all",
         stale_applied: bool = False,
+        tag: str = "",
     ) -> list[dict[str, Any]]:
         from job_sentinel.db.repository import JobRepository
         from job_sentinel.jobs.membership import OPEN_APPLICATION_STAGES, enrich_application_stale
+        from job_sentinel.jobs.tags import application_matches_tags
 
         view_key = view.strip().lower()
         if view_key not in {"all", "open", "closed"}:
@@ -1272,7 +1275,19 @@ def create_app(
             apps = [a for a in apps if a.stage == ApplicationStage.CLOSED]
         if stale_applied:
             apps = [a for a in apps if a.stale_applied]
+        if tag.strip():
+            apps = [a for a in apps if application_matches_tags(a, [tag])]
         return [a.model_dump(mode="json") for a in apps]
+
+    @app.get("/api/applications/tags")
+    def list_application_tags() -> dict[str, list[str]]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            return {"tags": repo.list_application_tags()}
+        finally:
+            repo.close()
 
     @app.post("/api/applications")
     def create_application(req: ApplicationCreateRequest, request: Request) -> dict[str, Any]:

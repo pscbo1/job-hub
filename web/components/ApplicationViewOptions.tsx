@@ -15,19 +15,25 @@ export function ApplicationViewOptions({
   staleOnly,
   idle,
   idleLabel,
+  availableTags,
+  selectedTags,
   onOpen,
   onClosed,
   onStale,
   onIdleChange,
+  onToggleTag,
 }: {
   board: BoardView;
   staleOnly: boolean;
   idle: IdleCleanupSettings;
   idleLabel: string;
+  availableTags: string[];
+  selectedTags: string[];
   onOpen: () => void;
   onClosed: () => void;
   onStale: () => void;
   onIdleChange: (next: IdleCleanupSettings) => void;
+  onToggleTag: (tag: string) => void;
 }) {
   return (
     <PopoverMenu
@@ -87,6 +93,31 @@ export function ApplicationViewOptions({
               </button>
             </div>
           </div>
+          {availableTags.length > 0 && (
+            <div className="border-t border-line pt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                {APPLICATION_VIEW_OPTIONS_GROUPS.tags}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {availableTags.map((tag) => {
+                  const on = selectedTags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => onToggleTag(tag)}
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs font-medium",
+                        on ? "border-ink bg-ink text-white" : "border-line text-muted",
+                      )}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="space-y-2 border-t border-line pt-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               {APPLICATION_VIEW_OPTIONS_GROUPS.cleanup}

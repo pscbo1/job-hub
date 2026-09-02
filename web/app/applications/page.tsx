@@ -20,10 +20,12 @@ import {
   getApplications,
   getApplicationStats,
   getIdleCleanupSettings,
+  listApplicationTags,
   putIdleCleanupSettings,
   updateApplication,
 } from "@/lib/api";
 import { type ApplicationDrawerTab, nextStepLabel, parseApplicationTab, tabQueryValue } from "@/lib/applicationUi";
+import { applicationMatchesTags, uniqueApplicationTags } from "@/lib/applicationTags";
 import { applicationWasSubmitted } from "@/lib/applicationLifecycle";
 import { isDateOverdue } from "@/lib/jobPipeline";
 import { currentMaterialCount, formatAppliedDate, materialCountLabel } from "@/lib/materialsUi";
@@ -103,6 +105,8 @@ export default function ApplicationsPage() {
   const [staleOnly, setStaleOnly] = useState(false);
   const [stageFilter, setStageFilter] = useState<ApplicationStage | "all">("all");
   const [sourceFilter, setSourceFilter] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [knownTags, setKnownTags] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ApplicationDrawerTab>("overview");
@@ -113,11 +117,15 @@ export default function ApplicationsPage() {
   const [fetching, setFetching] = useState(false);
 
   async function refresh() {
-    const list = await getApplications(undefined, 500, {
-      view: board,
-      staleApplied: board === "open" && staleOnly,
-    });
+    const [list, catalog] = await Promise.all([
+      getApplications(undefined, 500, {
+        view: board,
+        staleApplied: board === "open" && staleOnly,
+      }),
+      listApplicationTags(),
+    ]);
     setApps(list);
+    setKnownTags(catalog);
     setSelected([]);
   }
 
@@ -126,11 +134,13 @@ export default function ApplicationsPage() {
       getApplications(undefined, 500, { view: "open" }),
       getApplicationStats(),
       getIdleCleanupSettings(),
+      listApplicationTags(),
     ])
-      .then(([list, st, settings]) => {
+      .then(([list, st, settings, catalog]) => {
         if (list.length === 0 && Object.keys(st).length === 0) setApiDown(true);
         setApps(list);
         setIdle(settings);
+        setKnownTags(catalog);
       })
       .finally(() => setLoaded(true));
   }, []);
@@ -227,6 +237,7 @@ export default function ApplicationsPage() {
     () => [...new Set(apps.map((a) => a.source).filter(Boolean))].sort(),
     [apps],
   );
+  const availableTags = useMemo(() => uniqueApplicationTags(apps), [apps]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -234,10 +245,11 @@ export default function ApplicationsPage() {
       if (staleOnly && a.exclude_from_idle) return false;
       if (stageFilter !== "all" && a.stage !== stageFilter) return false;
       if (sourceFilter && a.source !== sourceFilter) return false;
+      if (!applicationMatchesTags(a, selectedTags)) return false;
       if (!q) return true;
       return [a.title, a.employer, a.location, a.source, a.notes, a.next_step].join(" ").toLowerCase().includes(q);
     });
-  }, [apps, stageFilter, sourceFilter, query, staleOnly]);
+  }, [apps, stageFilter, sourceFilter, query, staleOnly, selectedTags]);
 
   const requestedApp = apps.find((a) => a.id === activeId) ?? fetchedApp;
   const submitApp =
@@ -402,6 +414,8 @@ export default function ApplicationsPage() {
           staleOnly={staleOnly}
           idle={idle}
           idleLabel={idleLabel}
+          availableTags={availableTags}
+          selectedTags={selectedTags}
           onOpen={() => {
             setBoard("open");
             setStaleOnly(false);
@@ -421,6 +435,11 @@ export default function ApplicationsPage() {
             setIdle(next);
             void putIdleCleanupSettings(next).then(() => refresh());
           }}
+          onToggleTag={(tag) =>
+            setSelectedTags((current) =>
+              current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
+            )
+          }
         />
         {staleOnly && selected.length > 0 && (
           <button
@@ -492,6 +511,7 @@ export default function ApplicationsPage() {
           onToggleIdleExempt={(app) =>
             void updateApplication(app.id, { exclude_from_idle: !app.exclude_from_idle }).then(() => refresh())
           }
+          knownTags={knownTags}
         />
       )}
 

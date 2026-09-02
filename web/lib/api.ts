@@ -8,6 +8,7 @@
  */
 
 import * as demo from "@/lib/demo";
+import { uniqueApplicationTags } from "@/lib/applicationTags";
 import { parseMarketId, sourceInMarket } from "@/lib/markets";
 import type { CommonSearchFilters, SearchPreset } from "@/lib/searchCapabilities";
 import { jobBelongsOnTasks } from "@/lib/taskBoard";
@@ -1464,6 +1465,8 @@ export interface Application {
   notes: string;
   /** Optional free-text contact. Empty is allowed. Not required to mark submitted. */
   contact?: string;
+  /** Optional free-text direction tags. Not shown as a list column. */
+  tags?: string[];
   close_reason?: CloseReason | null;
   close_note?: string;
   stale_applied?: boolean;
@@ -1509,6 +1512,7 @@ export interface ApplicationPatch {
   stage?: ApplicationStage;
   notes?: string;
   contact?: string;
+  tags?: string[];
   applied_date?: string;
   deadline?: string;
   salary?: string;
@@ -1545,7 +1549,7 @@ export interface GeneratedDocument {
 export function getApplications(
   stage?: ApplicationStage,
   limit = 200,
-  query: { view?: "open" | "closed" | "all"; staleApplied?: boolean } = {},
+  query: { view?: "open" | "closed" | "all"; staleApplied?: boolean; tag?: string } = {},
 ): Promise<Application[]> {
   if (demo.DEMO) {
     let rows = demo.demoApplications;
@@ -1558,6 +1562,12 @@ export function getApplications(
     if (query.staleApplied) {
       rows = rows.filter((a) => a.stale_applied && !a.exclude_from_idle && a.stage === "applied");
     }
+    if (query.tag) {
+      const wanted = query.tag;
+      rows = rows.filter((a) =>
+        (a.tags ?? []).some((tag) => tag.toLowerCase() === wanted.toLowerCase()),
+      );
+    }
     return Promise.resolve(rows);
   }
   const params = new URLSearchParams();
@@ -1565,7 +1575,14 @@ export function getApplications(
   params.set("limit", String(limit));
   if (query.view && query.view !== "all") params.set("view", query.view);
   if (query.staleApplied) params.set("stale_applied", "true");
+  if (query.tag) params.set("tag", query.tag);
   return getJSON<Application[]>(`/api/applications?${params}`, []);
+}
+
+export async function listApplicationTags(): Promise<string[]> {
+  if (demo.DEMO) return uniqueApplicationTags(demo.demoApplications);
+  const payload = await getJSON<{ tags: string[] }>("/api/applications/tags", { tags: [] });
+  return payload.tags ?? [];
 }
 
 /** Create a new tracked application (from a posting or manually). */

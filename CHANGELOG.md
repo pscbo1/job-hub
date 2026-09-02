@@ -33,6 +33,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Application Materials can search/preview/copy Templates & Answers in place. Application answers may bind or replace a linked version; message templates stay copy-only.
 - Cancel Draft keeps communication notes on the Job (`job_id`). Discover/Tasks show a folded read-only list with the original occurred-at (`created_at`). Materials library stays.
 - Optional Application **Contact** free text (Overview). Empty is allowed and is not required to mark submitted. Cancel Draft copies leftover text onto the Job for lookup; it is never written to `Job.comment`.
+- Optional Application **Tags** (folded Overview). Free-text multi tags, reuse strings already used on other applications. Filter lives in View options. The list has no Tags column. Cancel Draft drops tags with the application.
 
 ### Fixed
 

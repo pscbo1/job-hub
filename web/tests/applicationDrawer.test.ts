@@ -102,6 +102,7 @@ describe("application toolbar and row overflow copy", () => {
     expect(APPLICATION_VIEW_OPTIONS_LABEL).toBe("View options");
     expect(APPLICATION_VIEW_OPTIONS_GROUPS).toEqual({
       views: "Views",
+      tags: "Tags",
       cleanup: "Cleanup settings",
     });
     expect(APPLICATION_ROW_MORE_LABEL).toBe("More actions");

@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -412,6 +412,8 @@ class JobRepository:
             )
         if "contact" not in app_names:
             self._db.execute("ALTER TABLE applications ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
+        if "tags" not in app_names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
         self._db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS applications_job_id_active
@@ -907,6 +909,8 @@ class JobRepository:
             self._ensure_part3_tables()
         if from_version < 13:
             self._ensure_prd02_job_columns()
+            self._ensure_prd02_application_columns()
+        if from_version < 14:
             self._ensure_prd02_application_columns()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
@@ -1543,6 +1547,12 @@ class JobRepository:
         )
         return [self._application_from_storage(dict(r)) for r in rows]
 
+    def list_application_tags(self) -> list[str]:
+        """Unique tag strings on active applications. Not a controlled vocabulary."""
+        from job_sentinel.jobs.tags import unique_application_tags
+
+        return unique_application_tags(self.list_applications(limit=10_000))
+
     def update_application(self, app_id: str, **fields: Any) -> bool:
         """
         Partially update an Application row.
@@ -1564,6 +1574,10 @@ class JobRepository:
         fields["updated_at"] = _now_iso()
         if "exclude_from_idle" in fields:
             fields["exclude_from_idle"] = 1 if fields["exclude_from_idle"] else 0
+        if "tags" in fields:
+            from job_sentinel.jobs.tags import normalize_application_tags
+
+            fields["tags"] = json.dumps(normalize_application_tags(fields["tags"] or []))
         if "stage" in fields and isinstance(fields["stage"], ApplicationStage):
             fields["stage"] = fields["stage"].value
         if "close_reason" in fields:
@@ -2166,6 +2180,12 @@ def _parse_dt(value: str) -> datetime:
 # ── Application helpers ───────────────────────────────────────────────────────
 
 
+def _parse_app_tags(value: object) -> list[str]:
+    from job_sentinel.jobs.tags import parse_stored_tags
+
+    return parse_stored_tags(value)
+
+
 def _app_to_row(app: Application) -> dict[str, Any]:
     return {
         "id": app.id,
@@ -2181,6 +2201,7 @@ def _app_to_row(app: Application) -> dict[str, Any]:
         "deadline": app.deadline,
         "notes": app.notes,
         "contact": app.contact or "",
+        "tags": json.dumps(_parse_app_tags(app.tags)),
         "close_reason": app.close_reason.value if app.close_reason else None,
         "close_note": app.close_note,
         "posting_id": app.posting_id,
@@ -2212,6 +2233,7 @@ def _app_from_row(row: dict[str, Any]) -> Application:
         deadline=row.get("deadline", ""),
         notes=row.get("notes", ""),
         contact=row.get("contact") or "",
+        tags=_parse_app_tags(row.get("tags")),
         close_reason=reason,
         close_note=row.get("close_note") or "",
         posting_id=row.get("posting_id") or None,

@@ -18,6 +18,7 @@ import {
 const drafts: DrawerDrafts = {
   notes: "edited notes",
   contact: "",
+  tags: [],
   nextStep: "Prep OA",
   deadline: "2026-09-10",
   commDraft: " emailed recruiter ",
@@ -29,6 +30,7 @@ function input(overrides: Partial<DrawerSaveInput> = {}): DrawerSaveInput {
     jobId: "job-a",
     shownNotes: "old notes",
     shownContact: "",
+    shownTags: [],
     shownNextStep: "",
     shownDeadline: "",
     drafts: { ...drafts },
@@ -165,6 +167,36 @@ describe("saveDrawerRecord success and partial retry", () => {
       result.synced,
     );
     expect(record?.contact).toBe("Ada / wechat: ada");
+  });
+
+  it("patches tags through the application update API and keeps them on failure", async () => {
+    const tagDrafts: DrawerDrafts = { ...drafts, notes: "old notes", tags: ["用户研究", "产品"] };
+    const api = client({ updateApplication: vi.fn(httpFail) });
+    const result = await saveDrawerRecord(
+      input({ shownNotes: "old notes", shownTags: [], drafts: tagDrafts }),
+      api,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.failedStep).toBe("tags");
+    expect(api.updateApplication).toHaveBeenCalledWith("app-a", { tags: ["用户研究", "产品"] });
+    expect(draftsAfterSave(tagDrafts, result.synced).tags).toEqual(["用户研究", "产品"]);
+  });
+
+  it("saves tags and reloads the synced value", async () => {
+    const tagDrafts: DrawerDrafts = { ...drafts, notes: "old notes", tags: ["英文岗位"] };
+    const result = await saveDrawerRecord(
+      input({ shownNotes: "old notes", shownTags: [], drafts: tagDrafts }),
+      client(),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.synced.tags).toEqual(["英文岗位"]);
+    const record = applyDrawerSynced(
+      "app-a",
+      "app-a",
+      { id: "app-a", notes: "old notes", tags: [] },
+      result.synced,
+    );
+    expect(record?.tags).toEqual(["英文岗位"]);
   });
 });
 

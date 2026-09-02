@@ -239,6 +239,7 @@ export const demoApplications: Application[] = [
       "Build payments APIs in Python. Experience with distributed systems and Postgres preferred.",
     job_comment: "Referral via intern cohort. Ask about on-call.",
     notes: "Sent résumé v2. Waiting on recruiter ping.",
+    tags: ["英文岗位"],
   }),
   app("ML Engineer", "Hugging Face", "Remote", "himalayas", "interview", {
     applied_date: "2026-06-05",
@@ -250,6 +251,7 @@ export const demoApplications: Application[] = [
       "负责骑手生态相关用户研究，独立设计研究方案并产出可落地的产品建议。",
     job_comment: "Team is research-heavy; ask about mixed methods.",
     notes: "Screening call went well.",
+    tags: ["用户研究"],
   }),
   app("Platform Engineer", "Datadog", "New York, NY", "adzuna", "draft", {
     job_id: "demo-hub-2",
@@ -277,6 +279,7 @@ export const demoApplications: Application[] = [
     apply_url: "",
     next_step: "Decide by Friday",
     notes: "Verbal offer; written pending.",
+    tags: ["产品"],
   }),
   app("Data Engineer", "Snowflake", "Austin, TX", "adzuna", "closed", {
     applied_date: "2026-05-15",
@@ -311,6 +314,7 @@ function app(
     deadline: "",
     notes: opts.notes ?? "",
     contact: opts.contact ?? "",
+    tags: opts.tags ?? [],
     next_step: opts.next_step ?? "",
     job_deadline: opts.job_deadline ?? "",
     job_description: opts.job_description ?? "",

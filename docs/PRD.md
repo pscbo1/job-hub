@@ -209,13 +209,13 @@ Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配�
 
 仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 **View options** 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。
 
-列表保持表格。列：Role/Company（打开详情）、Stage、**Next step**（`Job.next_step`，空为 `—`；仅当 `Job.deadline` 有值时在下方显示 DDL）、Applied、**Materials**（当前 bindings 计数，默认可见：`No materials` / `1 material` / `N materials`，可排序筛选；点击打开详情 Materials tab）、Actions。Draft 行主按钮：已有 apply URL 则 `Open apply page`，否则已有 job/source URL 则 `Open source`，两者都不可用时显示 `Link missing` 并仍提供 Mark submitted；其余动作在行尾 overflow（ellipsis **More actions**）。工具栏 **View options** 收纳 Open / Closed / no-update 与 cleanup settings，不展开整页。不要根据对话/邮箱/平台私信去猜测入口。页面说明只写 tracking applications / next steps，不写状态机教学文案。
+列表保持表格。列：Role/Company（打开详情）、Stage、**Next step**（`Job.next_step`，空为 `—`；仅当 `Job.deadline` 有值时在下方显示 DDL）、Applied、**Materials**（当前 bindings 计数，默认可见：`No materials` / `1 material` / `N materials`，可排序筛选；点击打开详情 Materials tab）、Actions。列表 **不显示 Tags 列**。Draft 行主按钮：已有 apply URL 则 `Open apply page`，否则已有 job/source URL 则 `Open source`，两者都不可用时显示 `Link missing` 并仍提供 Mark submitted；其余动作在行尾 overflow（ellipsis **More actions**）。工具栏 **View options** 收纳 Open / Closed / no-update、可选 **Tag** 筛选（复用已有申请上的字符串），与 cleanup settings，不展开整页。不要根据对话/邮箱/平台私信去猜测入口。页面说明只写 tracking applications / next steps，不写状态机教学文案。
 
 详情为右侧抽屉（桌面约 720px，小屏全屏），不在表下展开整表。Tabs：`Overview / Materials / Notes`，默认 Overview。顶栏：Role、Company、Location、Stage、关闭、source action；Draft 另有次级 Mark submitted。
 
-- Overview：source/link → **Contact**（可选自由文本，PATCH `/api/applications/{id}`；空值允许，不作为 Mark submitted / 改 stage 的前置条件；无结构化 name/email/phone，无 contacts 库）→ Next Step / DDL（与 Tasks 相同的 Job 字段，PATCH `/api/jobs/{id}`）→ **Add task**（创建同一条 `job_tasks` 记录，自动关联当前 Job + Application；完成后停留在申请并给 Open in Tasks。完成 task **不** Mark submitted、不改 stage。无 Job 则不可创建。）→ JD 来自 `Job.description`（缺失时写 “full JD not saved” 并给 Open source，不得把 snippet 标成全文）→ Applied 后显示最近一次 submission 摘要。`Job.comment` 为 JD 下可折叠 Research notes。`Application.notes` 只在 Notes tab，禁止与 comment 合并或双写。
+- Overview：source/link → **Contact**（可选自由文本，PATCH `/api/applications/{id}`；空值允许，不作为 Mark submitted / 改 stage 的前置条件；无结构化 name/email/phone，无 contacts 库）→ Next Step / DDL（与 Tasks 相同的 Job 字段，PATCH `/api/jobs/{id}`）→ **Add task**（创建同一条 `job_tasks` 记录，自动关联当前 Job + Application；完成后停留在申请并给 Open in Tasks。完成 task **不** Mark submitted、不改 stage。无 Job 则不可创建。）→ JD 来自 `Job.description`（缺失时写 “full JD not saved” 并给 Open source，不得把 snippet 标成全文）→ Applied 后显示最近一次 submission 摘要。`Job.comment` 为 JD 下可折叠 Research notes。Overview 折叠 **Tags**：可选自由文本多标签，可复用已有申请上的字符串；无 taxonomy / 颜色 / 管理页；不作为 Mark submitted 或 stage 前置。`Application.notes` 只在 Notes tab，禁止与 comment 合并或双写。
 - Materials：Linked materials（add / change version / remove，与今日相同）；**Templates & answers 可在当前申请内搜索 / 预览 / Copy**（Copy 仅在剪贴板成功后提示）；`application_answer` 可按现有 UNIQUE(application_id, material_id) 规则 bind 或替换 version；message templates 只 Copy，不默认当作 submission materials。不自动建 Draft、不发送、不 log-as-sent。库页仍可从 Open library 进入。Submissions 只读冻结快照。Draft 强调当前 Linked materials。Applied+ 优先最近 submission 摘要；当前 bindings 仍可编辑，但标签必须区分 `Linked materials` 与 `Materials used in this submission`。
-- Notes：`Application.notes` 为主；Communication notes 为可选折叠（`application_comm_notes`，`created_at` 即发生时间）。Cancel Draft 删除未投递 Application，但 **保留 communication notes** 与 **Contact** 文本到 Job（Discover / Tasks 折叠查看）。不写入 `Job.comment` 或 `Application.notes`。
+- Notes：`Application.notes` 为主；Communication notes 为可选折叠（`application_comm_notes`，`created_at` 即发生时间）。Cancel Draft 删除未投递 Application，但 **保留 communication notes** 与 **Contact** 文本到 Job（Discover / Tasks 折叠查看）。Tags 只存在于 Application，随草稿一起消失，不写到 Job。不写入 `Job.comment` 或 `Application.notes`。
 
 Deep link：`?id=` 即使不在当前页/筛选也必须打开（含 Closed）；`tab=packet` 映射到 Materials。关闭抽屉不得重置列表筛选、排序、分页或滚动。
 
@@ -711,7 +711,7 @@ Constraints：
 
 ### 16.8 Application and related
 
-- `applications`：unique `job_id`；stage draft|applied|interview|offer|closed；close_reason 可空；无 rejected；Closed 即历史，无独立 archived 阶段。可选 `contact` 自由文本（无结构化联系人列）。
+- `applications`：unique `job_id`；stage draft|applied|interview|offer|closed；close_reason 可空；无 rejected；Closed 即历史，无独立 archived 阶段。可选 `contact` 自由文本（无结构化联系人列）。可选 `tags` 字符串列表（方向标签，无 taxonomy）。
 - `jobs.contact`：Cancel Draft 后留下的 Contact 文本，供 Job 查找；不写入 `jobs.comment`。
 - `application_submissions`：每次 Mark Submitted / 重投一条。含 `idempotency_key`（空值以外部分唯一）。`packet_snapshot` 冻结当时材料名、版本、URL，以及服务器复制的文件字节（`snapshot_file_ref`）。
 - `application_events`：阶段与关闭历史。
@@ -764,9 +764,10 @@ V0 不创建或不启用：
 
 ### 17.5 Applications, idle cleanup, Materials
 
-- `GET /api/applications?view=open|closed|all&stale_applied=`
+- `GET /api/applications?view=open|closed|all&stale_applied=&tag=`
 - `GET|PUT /api/idle-cleanup-settings` — `enabled`, `idle_days`（默认 14）
-- `PATCH /api/applications/:id` — includes `exclude_from_idle` and optional `contact`
+- `PATCH /api/applications/:id` — includes `exclude_from_idle`, optional `contact`, and optional `tags`
+- `GET /api/applications/tags` — unique tag strings already used on applications
 - `GET|POST /api/materials`；`POST /api/materials/upload`；versions upload/URL/text（`content.md`）
 - `GET|PUT /api/applications/:id/packet`；bindings add/change/remove
 - `POST /api/applications/:id/submit` 冻结当前服务器 bindings；空材料需 `confirm_empty`；`expected_version_ids` 不一致返回 `materials_changed`；`idempotency_key` 幂等

@@ -1,10 +1,13 @@
 /** Orchestrate application-drawer saves so failures keep drafts and never switch. */
 
-export type DrawerSaveStep = "notes" | "contact" | "next_step" | "comm_note";
+import { tagsEqual } from "@/lib/applicationTags";
+
+export type DrawerSaveStep = "notes" | "contact" | "tags" | "next_step" | "comm_note";
 
 export const DRAWER_SAVE_STEP_LABELS: Record<DrawerSaveStep, string> = {
   notes: "application notes",
   contact: "contact",
+  tags: "tags",
   next_step: "next step",
   comm_note: "communication note",
 };
@@ -12,6 +15,7 @@ export const DRAWER_SAVE_STEP_LABELS: Record<DrawerSaveStep, string> = {
 export type DrawerDrafts = {
   notes: string;
   contact: string;
+  tags: string[];
   nextStep: string;
   deadline: string;
   commDraft: string;
@@ -22,6 +26,7 @@ export type DrawerSaveInput = {
   jobId: string | null | undefined;
   shownNotes: string;
   shownContact: string;
+  shownTags: string[];
   shownNextStep: string;
   shownDeadline: string;
   drafts: DrawerDrafts;
@@ -30,6 +35,7 @@ export type DrawerSaveInput = {
 export type DrawerSaveSynced = {
   notes?: string;
   contact?: string;
+  tags?: string[];
   nextStep?: string;
   deadline?: string;
   commCleared?: boolean;
@@ -42,7 +48,7 @@ export type DrawerSaveResult =
 export type DrawerSaveClient = {
   updateApplication: (
     id: string,
-    patch: { notes?: string; contact?: string },
+    patch: { notes?: string; contact?: string; tags?: string[] },
   ) => Promise<unknown | null>;
   patchHubJob: (
     jobId: string,
@@ -76,6 +82,7 @@ export function applyDrawerSynced<T extends { id: string }>(
     ...record,
     ...(synced.notes !== undefined ? { notes: synced.notes } : {}),
     ...(synced.contact !== undefined ? { contact: synced.contact } : {}),
+    ...(synced.tags !== undefined ? { tags: synced.tags } : {}),
     ...(synced.nextStep !== undefined ? { next_step: synced.nextStep } : {}),
     ...(synced.deadline !== undefined
       ? { job_deadline: synced.deadline.trim() ? synced.deadline : "" }
@@ -87,6 +94,7 @@ export function draftsAfterSave(drafts: DrawerDrafts, synced: DrawerSaveSynced):
   return {
     notes: drafts.notes,
     contact: drafts.contact,
+    tags: drafts.tags,
     nextStep: drafts.nextStep,
     deadline: drafts.deadline,
     commDraft: synced.commCleared ? "" : drafts.commDraft,
@@ -124,6 +132,13 @@ export async function saveDrawerRecord(
     if (cancelled()) return { ok: false, failedStep: "contact", synced };
     if (result == null) return { ok: false, failedStep: "contact", synced };
     synced.contact = drafts.contact;
+  }
+
+  if (!tagsEqual(drafts.tags, input.shownTags)) {
+    const result = await callStep(() => client.updateApplication(input.appId, { tags: drafts.tags }));
+    if (cancelled()) return { ok: false, failedStep: "tags", synced };
+    if (result == null) return { ok: false, failedStep: "tags", synced };
+    synced.tags = drafts.tags;
   }
 
   const nextDirty =

@@ -21,8 +21,19 @@ export const APPLICATION_ROW_MORE_LABEL = "More actions";
 export const APPLICATION_VIEW_OPTIONS_LABEL = "View options";
 export const APPLICATION_VIEW_OPTIONS_GROUPS = {
   views: "Views",
+  tags: "Tags",
   cleanup: "Cleanup settings",
 } as const;
+
+export const APPLICATION_LIST_COLUMN_KEYS = [
+  "select",
+  "title",
+  "stage",
+  "next_step",
+  "applied_date",
+  "materials",
+  "actions",
+] as const;
 
 export function nextStepLabel(nextStep?: string | null): string {
   const value = (nextStep ?? "").trim();

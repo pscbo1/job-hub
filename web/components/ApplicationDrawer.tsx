@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { ApplicationAddTask } from "@/components/ApplicationAddTask";
+import { ApplicationTagsEditor } from "@/components/ApplicationTagsEditor";
 import { MaterialsArea, NotesPanel } from "@/components/ApplicationWorkspace";
 import { SourceActionLink } from "@/components/SourceActionLink";
 import { addCommNote, patchHubJob, updateApplication, type Application } from "@/lib/api";
@@ -21,6 +22,7 @@ import {
   withDrawerSaveLock,
   type DrawerSaveStep,
 } from "@/lib/drawerSave";
+import { tagsEqual } from "@/lib/applicationTags";
 import { dateInputValue, isDateOverdue } from "@/lib/jobPipeline";
 import { DIRTY_SWITCH_LABELS } from "@/lib/recordDraft";
 import { sourceAction } from "@/lib/sourceAction";
@@ -44,6 +46,7 @@ export function ApplicationDrawer({
   onChanged,
   onSubmitRequest,
   onToggleIdleExempt,
+  knownTags = [],
 }: {
   requestedApp: Application | null;
   requestedTab: ApplicationDrawerTab;
@@ -55,12 +58,14 @@ export function ApplicationDrawer({
   onChanged: () => void;
   onSubmitRequest: (id: string) => void;
   onToggleIdleExempt?: (app: Application) => void;
+  knownTags?: string[];
 }) {
   const [shown, setShown] = useState<Application | null>(requestedApp);
   const [pending, setPending] = useState<Application | null>(null);
   const [tab, setTab] = useState<ApplicationDrawerTab>(requestedTab);
   const [notesDraft, setNotesDraft] = useState(requestedApp?.notes ?? "");
   const [contactDraft, setContactDraft] = useState(requestedApp?.contact ?? "");
+  const [tagsDraft, setTagsDraft] = useState<string[]>(requestedApp?.tags ?? []);
   const [nextDraft, setNextDraft] = useState(requestedApp?.next_step ?? "");
   const [ddlDraft, setDdlDraft] = useState(dateInputValue(requestedApp?.job_deadline));
   const [commDraft, setCommDraft] = useState("");
@@ -74,6 +79,7 @@ export function ApplicationDrawer({
   const baselineRef = useRef({
     notes: requestedApp?.notes ?? "",
     contact: requestedApp?.contact ?? "",
+    tags: requestedApp?.tags ?? [],
     nextStep: requestedApp?.next_step ?? "",
     deadline: dateInputValue(requestedApp?.job_deadline),
   });
@@ -82,6 +88,7 @@ export function ApplicationDrawer({
     baselineRef.current = {
       notes: app.notes,
       contact: app.contact ?? "",
+      tags: app.tags ?? [],
       nextStep: app.next_step ?? "",
       deadline: dateInputValue(app.job_deadline),
     };
@@ -90,6 +97,7 @@ export function ApplicationDrawer({
   function syncDrafts(app: Application) {
     setNotesDraft(app.notes);
     setContactDraft(app.contact ?? "");
+    setTagsDraft(app.tags ?? []);
     setNextDraft(app.next_step ?? "");
     setDdlDraft(dateInputValue(app.job_deadline));
     setCommDraft("");
@@ -101,6 +109,7 @@ export function ApplicationDrawer({
     shown != null &&
     (notesDraft !== shown.notes ||
       contactDraft !== (shown.contact ?? "") ||
+      !tagsEqual(tagsDraft, shown.tags ?? []) ||
       nextDraft !== (shown.next_step ?? "") ||
       ddlDraft !== dateInputValue(shown.job_deadline) ||
       commDraft.trim() !== "");
@@ -146,6 +155,7 @@ export function ApplicationDrawer({
     const currentDrafts = {
       notes: notesDraft,
       contact: contactDraft,
+      tags: tagsDraft,
       nextStep: nextDraft,
       deadline: ddlDraft,
       commDraft,
@@ -160,6 +170,7 @@ export function ApplicationDrawer({
             jobId: snapshot.job_id,
             shownNotes: baselineRef.current.notes,
             shownContact: baselineRef.current.contact,
+            shownTags: baselineRef.current.tags,
             shownNextStep: baselineRef.current.nextStep,
             shownDeadline: baselineRef.current.deadline,
             drafts: currentDrafts,
@@ -177,6 +188,10 @@ export function ApplicationDrawer({
     if (nextShown) setShown(nextShown);
     if (result.synced.notes !== undefined) baselineRef.current.notes = result.synced.notes;
     if (result.synced.contact !== undefined) baselineRef.current.contact = result.synced.contact;
+    if (result.synced.tags !== undefined) {
+      baselineRef.current.tags = result.synced.tags;
+      setTagsDraft(result.synced.tags);
+    }
     if (result.synced.nextStep !== undefined) baselineRef.current.nextStep = result.synced.nextStep;
     if (result.synced.deadline !== undefined) baselineRef.current.deadline = result.synced.deadline;
     const nextDrafts = draftsAfterSave(currentDrafts, result.synced);
@@ -415,6 +430,9 @@ export function ApplicationDrawer({
                   app={shown}
                   contactDraft={contactDraft}
                   onContactChange={setContactDraft}
+                  tagsDraft={tagsDraft}
+                  onTagsChange={setTagsDraft}
+                  knownTags={knownTags}
                   nextDraft={nextDraft}
                   ddlDraft={ddlDraft}
                   onNextChange={setNextDraft}
@@ -449,6 +467,9 @@ function OverviewTab({
   app,
   contactDraft,
   onContactChange,
+  tagsDraft,
+  onTagsChange,
+  knownTags,
   nextDraft,
   ddlDraft,
   onNextChange,
@@ -459,6 +480,9 @@ function OverviewTab({
   app: Application;
   contactDraft: string;
   onContactChange: (value: string) => void;
+  tagsDraft: string[];
+  onTagsChange: (value: string[]) => void;
+  knownTags: string[];
   nextDraft: string;
   ddlDraft: string;
   onNextChange: (value: string) => void;
@@ -572,6 +596,17 @@ function OverviewTab({
         ) : (
           <p className="mt-2 text-sm text-muted">No research notes on this job.</p>
         )}
+      </details>
+      <details className="rounded-lg border border-line bg-bg p-3">
+        <summary className="cursor-pointer text-sm font-medium text-ink">
+          Tags
+          {tagsDraft.length > 0 ? (
+            <span className="ml-2 tabular-nums font-normal text-muted">{tagsDraft.length}</span>
+          ) : null}
+        </summary>
+        <div className="mt-2">
+          <ApplicationTagsEditor tags={tagsDraft} knownTags={knownTags} onChange={onTagsChange} />
+        </div>
       </details>
     </div>
   );

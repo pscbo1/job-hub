@@ -520,6 +520,10 @@ class Application(BaseModel):
         default="",
         description="Optional free-text contact (name, email, WeChat, or a link). Not required.",
     )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Optional free-text direction tags. Not a taxonomy.",
+    )
     close_reason: CloseReason | None = Field(default=None)
     close_note: str = Field(default="")
     posting_id: str | None = Field(default=None)
