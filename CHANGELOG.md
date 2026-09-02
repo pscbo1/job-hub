@@ -38,6 +38,9 @@ Versions follow [Semantic Versioning](https://semver.org):
   required title/company and optional link, location, source note, and market. Request
   replay is idempotent, URL duplicates require an explicit reuse/separate choice, and
   later collectors preserve manual identity fields.
+- **In-app task reminders V1.** Due-dated `job_tasks` can store advance + on-due calendar
+  reminder nodes. Sync catch-up triggers only the latest due node for today, Tasks shows
+  an unread dot and Reminders panel, and read-then-locate jumps to the task.
 
 ### Fixed
 

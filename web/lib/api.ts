@@ -179,6 +179,19 @@ export function getProfile(): Promise<Profile | null> {
 export type JobEngagement = "reference" | "under_study" | "to_do";
 export type HubJobStatus = JobEngagement;
 
+export interface TaskReminder {
+  id: string;
+  task_id: string;
+  due_date: string;
+  reminder_on: string;
+  kind: "advance" | "due";
+  enabled: boolean;
+  created_at: string;
+  in_app_triggered_at?: string | null;
+  in_app_skipped_at?: string | null;
+  read_at?: string | null;
+}
+
 export interface JobTask {
   id: string;
   job_id: string;
@@ -190,6 +203,7 @@ export interface JobTask {
   application_id?: string | null;
   notes?: string | null;
   source_url?: string | null;
+  reminders?: TaskReminder[];
 }
 
 export interface JobTaskCreateBody {
@@ -198,6 +212,7 @@ export interface JobTaskCreateBody {
   notes?: string | null;
   source_url?: string | null;
   application_id?: string | null;
+  reminders?: string[] | null;
 }
 
 export interface JobTaskPatch {
@@ -207,6 +222,7 @@ export interface JobTaskPatch {
   sort_order?: number;
   notes?: string | null;
   source_url?: string | null;
+  reminders?: string[] | null;
 }
 
 export interface HubJob {
@@ -855,6 +871,98 @@ export function leftoverJobContact(jobId: string, initial = ""): string {
   return initial;
 }
 
+export function getHubJob(jobId: string): Promise<HubJob | null> {
+  if (demo.DEMO) {
+    return Promise.resolve(demoJobById(jobId) ?? null);
+  }
+  return getJSON<HubJob | null>(`/api/jobs/${encodeURIComponent(jobId)}`, null);
+}
+
+export type ReminderInboxView = "unread" | "all";
+
+export interface ReminderInboxItem {
+  id: string;
+  task_id: string;
+  job_id: string;
+  task_title: string;
+  job_title: string;
+  company: string;
+  reminder_on: string;
+  due_date: string;
+  kind: "advance" | "due";
+  due_status: "upcoming" | "due_today" | "overdue";
+  read_at?: string | null;
+  in_app_triggered_at?: string | null;
+  market?: string;
+}
+
+export interface ReminderInbox {
+  items: ReminderInboxItem[];
+  unread_count: number;
+  total: number;
+  today: string;
+  tz: string;
+}
+
+function notifyRemindersChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event("job-hub:reminders-refresh"));
+}
+
+export async function syncReminders(): Promise<ReminderInbox["today"] | null> {
+  if (demo.DEMO) return todayFallback();
+  try {
+    const res = await fetch(`${API_BASE}/api/reminders/sync`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { today?: string };
+    return body.today ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function todayFallback(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function listReminders(query: {
+  view?: ReminderInboxView;
+  market?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<ReminderInbox> {
+  const empty: ReminderInbox = {
+    items: [],
+    unread_count: 0,
+    total: 0,
+    today: todayFallback(),
+    tz: "Asia/Shanghai",
+  };
+  if (demo.DEMO) return empty;
+  const q = new URLSearchParams({ view: query.view ?? "unread" });
+  if (query.market) q.set("market", query.market);
+  if (query.limit) q.set("limit", String(query.limit));
+  if (query.offset) q.set("offset", String(query.offset));
+  return getJSON<ReminderInbox>(`/api/reminders?${q.toString()}`, empty);
+}
+
+export async function markReminderRead(reminderId: string): Promise<TaskReminder | null> {
+  if (demo.DEMO) return null;
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/reminders/${encodeURIComponent(reminderId)}/read`,
+      { method: "PATCH", headers: authHeaders() },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as TaskReminder;
+  } catch {
+    return null;
+  }
+}
+
 export async function listJobTasks(jobId: string): Promise<JobTask[]> {
   if (demo.DEMO) {
     return demoJobById(jobId)?.tasks ?? [];
@@ -879,8 +987,18 @@ export async function createJobTask(
       notes: body.notes ?? null,
       source_url: body.source_url ?? null,
       application_id: body.application_id ?? null,
+      reminders: (body.reminders ?? []).map((day) => ({
+        id: `demo-rem-${day}`,
+        task_id: `demo-task-${Date.now()}`,
+        due_date: body.due_at ?? day,
+        reminder_on: day,
+        kind: day === (body.due_at ?? "") ? ("due" as const) : ("advance" as const),
+        enabled: true,
+        created_at: new Date().toISOString(),
+      })),
     };
     if (job) job.tasks = [...(job.tasks ?? []), created];
+    notifyRemindersChanged();
     return created;
   }
   try {
@@ -890,7 +1008,9 @@ export async function createJobTask(
       body: JSON.stringify(body),
     });
     if (!res.ok) return null;
-    return (await res.json()) as JobTask;
+    const created = (await res.json()) as JobTask;
+    notifyRemindersChanged();
+    return created;
   } catch {
     return null;
   }
@@ -915,6 +1035,7 @@ export async function patchJobTask(
       source_url: patch.source_url !== undefined ? patch.source_url : current.source_url,
     };
     if (job) job.tasks = (job.tasks ?? []).map((t) => (t.id === taskId ? saved : t));
+    notifyRemindersChanged();
     return saved;
   }
   try {
@@ -927,7 +1048,9 @@ export async function patchJobTask(
       },
     );
     if (!res.ok) return null;
-    return (await res.json()) as JobTask;
+    const saved = (await res.json()) as JobTask;
+    notifyRemindersChanged();
+    return saved;
   } catch {
     return null;
   }
@@ -937,6 +1060,7 @@ export async function deleteJobTask(jobId: string, taskId: string): Promise<bool
   if (demo.DEMO) {
     const job = demoJobById(jobId);
     if (job) job.tasks = (job.tasks ?? []).filter((t) => t.id !== taskId);
+    notifyRemindersChanged();
     return true;
   }
   try {
@@ -944,6 +1068,7 @@ export async function deleteJobTask(jobId: string, taskId: string): Promise<bool
       `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
       { method: "DELETE", headers: authHeaders() },
     );
+    if (res.ok) notifyRemindersChanged();
     return res.ok;
   } catch {
     return false;

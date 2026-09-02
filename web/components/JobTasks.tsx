@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { TaskReminderEditor } from "@/components/TaskReminderEditor";
 import {
   createJobTask,
   deleteJobTask,
@@ -10,19 +11,30 @@ import {
   type JobTask,
 } from "@/lib/api";
 import { dateInputValue, isDateOverdue } from "@/lib/jobPipeline";
+import { todayInAppTz } from "@/lib/timezone";
+import {
+  previewReminderPlan,
+  reminderDatesFromTask,
+  savedPlansFromReminders,
+} from "@/lib/taskRemindersUi";
 import { cn } from "@/lib/utils";
 
 export function JobTasks({
   job,
   onChange,
+  highlightTaskId,
 }: {
   job: HubJob;
   onChange?: (tasks: JobTask[]) => void;
+  highlightTaskId?: string;
 }) {
   const [tasks, setTasks] = useState<JobTask[]>(job.tasks ?? []);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
+  const [newReminders, setNewReminders] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const plans = useRef<Record<string, Record<string, string[]>>>({});
+  const edited = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
     setTasks(job.tasks ?? []);
@@ -37,11 +49,16 @@ export function JobTasks({
     const text = title.trim();
     if (!text || busy) return;
     setBusy(true);
-    const created = await createJobTask(job.id, { title: text, due_at: due || null });
+    const created = await createJobTask(job.id, {
+      title: text,
+      due_at: due || null,
+      reminders: due ? newReminders : [],
+    });
     setBusy(false);
     if (!created) return;
     setTitle("");
     setDue("");
+    setNewReminders([]);
     emit([...tasks, created]);
   }
 
@@ -51,7 +68,7 @@ export function JobTasks({
     const saved = await patchJobTask(job.id, task.id, { done: !task.done });
     setBusy(false);
     if (!saved) return;
-    emit(tasks.map((t) => (t.id === task.id ? { ...t, done: !task.done } : t)));
+    emit(tasks.map((t) => (t.id === task.id ? saved : t)));
   }
 
   async function rename(taskId: string, nextTitle: string) {
@@ -66,16 +83,50 @@ export function JobTasks({
     const saved = await patchJobTask(job.id, taskId, { title: text });
     setBusy(false);
     if (!saved) return;
-    emit(tasks.map((t) => (t.id === taskId ? { ...t, title: text } : t)));
+    emit(tasks.map((t) => (t.id === taskId ? saved : t)));
+  }
+
+  async function saveDueAndReminders(task: JobTask, nextDue: string, nextDates: string[]) {
+    if (busy) return;
+    setBusy(true);
+    const saved = await patchJobTask(job.id, task.id, {
+      due_at: nextDue || null,
+      reminders: nextDue ? nextDates : [],
+    });
+    setBusy(false);
+    if (!saved) return;
+    const dueKey = saved.due_at?.slice(0, 10) ?? "";
+    if (dueKey) {
+      plans.current[task.id] = {
+        ...(plans.current[task.id] ?? savedPlansFromReminders(saved.reminders, saved.due_at)),
+        [dueKey]: reminderDatesFromTask(saved),
+      };
+    }
+    emit(tasks.map((t) => (t.id === task.id ? saved : t)));
   }
 
   async function setDueAt(task: JobTask, value: string) {
-    if (busy) return;
-    setBusy(true);
-    const saved = await patchJobTask(job.id, task.id, { due_at: value || null });
-    setBusy(false);
-    if (!saved) return;
-    emit(tasks.map((t) => (t.id === task.id ? { ...t, due_at: value || null } : t)));
+    const today = todayInAppTz();
+    const previousDue = dateInputValue(task.due_at);
+    const current = reminderDatesFromTask(task);
+    const savedByDue = {
+      ...savedPlansFromReminders(task.reminders, task.due_at),
+      ...(plans.current[task.id] ?? {}),
+    };
+    const next = previewReminderPlan({
+      nextDue: value,
+      previousDue,
+      currentDates: current,
+      today,
+      savedByDue,
+      editedThisSession: Boolean(edited.current[task.id]),
+    });
+    await saveDueAndReminders(task, value, next);
+  }
+
+  async function setReminders(task: JobTask, dates: string[]) {
+    edited.current[task.id] = true;
+    await saveDueAndReminders(task, dateInputValue(task.due_at), dates);
   }
 
   async function remove(task: JobTask) {
@@ -92,7 +143,14 @@ export function JobTasks({
       <p className="text-[11px] font-medium text-muted">Tasks</p>
       <ul className="space-y-1.5">
         {tasks.map((task) => (
-          <li key={task.id} className="flex flex-wrap items-center gap-2">
+          <li
+            key={task.id}
+            id={`task-item-${task.id}`}
+            className={cn(
+              "flex flex-wrap items-center gap-2 rounded-md",
+              highlightTaskId === task.id && "ring-2 ring-ink/20",
+            )}
+          >
             <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-ink">
               <input
                 type="checkbox"
@@ -139,41 +197,56 @@ export function JobTasks({
             >
               ✕
             </button>
+            <div className="w-full pl-6">
+              <TaskReminderEditor
+                due={dateInputValue(task.due_at)}
+                dates={reminderDatesFromTask(task)}
+                disabled={busy || task.done}
+                onChange={(dates) => void setReminders(task, dates)}
+              />
+            </div>
           </li>
         ))}
       </ul>
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={title}
-          disabled={busy}
-          placeholder="Add OA / interview prep…"
-          aria-label="New task title"
-          onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void add();
-            }
-          }}
-          className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 text-xs text-ink placeholder:text-muted/70"
-        />
-        <input
-          type="date"
-          value={due}
-          disabled={busy}
-          aria-label="New task due date"
-          onChange={(e) => setDue(e.target.value)}
-          className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-ink"
-        />
-        <button
-          type="button"
-          disabled={busy || !title.trim()}
-          onClick={() => void add()}
-          className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink hover:border-ink/30 disabled:opacity-50"
-        >
-          Add
-        </button>
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={title}
+            disabled={busy}
+            placeholder="Add OA / interview prep…"
+            aria-label="New task title"
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void add();
+              }
+            }}
+            className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 text-xs text-ink placeholder:text-muted/70"
+          />
+          <input
+            type="date"
+            value={due}
+            disabled={busy}
+            aria-label="New task due date"
+            onChange={(e) => {
+              const value = e.target.value;
+              setDue(value);
+              setNewReminders(value ? [value] : []);
+            }}
+            className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-ink"
+          />
+          <button
+            type="button"
+            disabled={busy || !title.trim()}
+            onClick={() => void add()}
+            className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink hover:border-ink/30 disabled:opacity-50"
+          >
+            Add
+          </button>
+        </div>
+        <TaskReminderEditor due={due} dates={newReminders} disabled={busy} onChange={setNewReminders} />
       </div>
     </div>
   );

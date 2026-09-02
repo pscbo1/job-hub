@@ -6,11 +6,12 @@ import { JobActions } from "@/components/JobActions";
 import { JobCommNotes } from "@/components/JobCommNotes";
 import { JobContact } from "@/components/JobContact";
 import { JobTasks } from "@/components/JobTasks";
+import { TaskRemindersPanel } from "@/components/TaskRemindersPanel";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { PopoverSelect } from "@/components/ui/popover-select";
-import { getCollectSources, getJobs, patchHubJob, type HubJob } from "@/lib/api";
+import { getCollectSources, getHubJob, getJobs, patchHubJob, type HubJob } from "@/lib/api";
 import { dateInputValue, isDateOverdue, openTasksSorted, taskChipText, taskDueUrgency } from "@/lib/jobPipeline";
-import { jobIdFromSearch, taskJobAnchorId } from "@/lib/jobTasksUi";
+import { jobIdFromSearch, taskIdFromSearch, taskItemAnchorId, taskJobAnchorId } from "@/lib/jobTasksUi";
 import { MARKET_ORDER, type MarketId } from "@/lib/markets";
 import { groupTasksByDue, jobMatchesTaskSearch, TASK_SECTIONS } from "@/lib/taskBoard";
 import { cn, externalUrl } from "@/lib/utils";
@@ -39,9 +40,13 @@ export function TasksExplorer() {
   });
   const [overrides, setOverrides] = useState<Record<string, HubJob>>({});
   const [focusJobId, setFocusJobId] = useState("");
+  const [focusTaskId, setFocusTaskId] = useState("");
+  const [pinned, setPinned] = useState<HubJob | null>(null);
+  const [missingTask, setMissingTask] = useState("");
 
   useEffect(() => {
     setFocusJobId(jobIdFromSearch(window.location.search));
+    setFocusTaskId(taskIdFromSearch(window.location.search));
   }, []);
 
   useEffect(() => {
@@ -60,20 +65,46 @@ export function TasksExplorer() {
   const merged = (j: HubJob): HubJob => overrides[j.id] ?? j;
 
   const visible = useMemo(() => {
-    return jobs
-      .map(merged)
-      .filter((j) => jobMatchesTaskSearch(j, query))
+    const rows = jobs.map(merged).filter((j) => jobMatchesTaskSearch(j, query));
+    const filtered = rows
       .filter((j) => (source ? j.source === source : true))
       .filter((j) => (market ? (j.market || "").toLowerCase() === market : true));
-  }, [jobs, overrides, query, source, market]);
+    if (pinned && !filtered.some((j) => j.id === pinned.id)) {
+      return [merged(pinned), ...filtered];
+    }
+    return filtered;
+  }, [jobs, overrides, query, source, market, pinned]);
 
   const grouped = useMemo(() => groupTasksByDue(visible), [visible]);
 
   useEffect(() => {
     if (!focusJobId || !loaded) return;
-    const el = document.getElementById(taskJobAnchorId(focusJobId));
+    let cancelled = false;
+    const found = jobs.some((j) => j.id === focusJobId) || pinned?.id === focusJobId;
+    if (!found) {
+      void getHubJob(focusJobId).then((job) => {
+        if (cancelled) return;
+        if (job) setPinned(job);
+        else setMissingTask("Task no longer available.");
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    const row = [...jobs, pinned].find((j) => j && j.id === focusJobId);
+    if (focusTaskId && row && !(row.tasks ?? []).some((t) => t.id === focusTaskId)) {
+      setMissingTask("Task no longer available.");
+      return;
+    }
+    setMissingTask("");
+    const el = document.getElementById(
+      focusTaskId ? taskItemAnchorId(focusTaskId) : taskJobAnchorId(focusJobId),
+    );
     el?.scrollIntoView({ block: "start" });
-  }, [focusJobId, loaded, visible]);
+    return () => {
+      cancelled = true;
+    };
+  }, [focusJobId, focusTaskId, loaded, jobs, visible, pinned]);
 
   async function saveNextStep(job: HubJob, nextStep: string) {
     const next = await patchHubJob(job.id, { next_step: nextStep });
@@ -88,6 +119,7 @@ export function TasksExplorer() {
     <div className="space-y-4">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-3xl font-bold tracking-tight text-ink">Tasks</h1>
+        <TaskRemindersPanel />
         <div className="relative min-w-0 flex-1">
           <input
             type="search"
@@ -106,6 +138,7 @@ export function TasksExplorer() {
           Filter ▾
         </button>
       </header>
+      {missingTask && <p className="text-sm text-amber-800">{missingTask}</p>}
       {showFilter && (
         <div className="flex flex-wrap gap-3 rounded-xl border border-line bg-surface p-3">
           <label className="flex items-center gap-2 text-sm text-muted">
@@ -248,6 +281,7 @@ export function TasksExplorer() {
                       </div>
                       <JobTasks
                         job={row}
+                        highlightTaskId={focusJobId === row.id ? focusTaskId : ""}
                         onChange={(tasks) =>
                           setOverrides((o) => ({ ...o, [j.id]: { ...(o[j.id] ?? row), tasks } }))
                         }

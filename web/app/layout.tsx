@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CustomCursor } from "@/components/CustomCursor";
 import { Nav } from "@/components/Nav";
+import { ReminderSync } from "@/components/ReminderSync";
 import { ScrollProgress } from "@/components/ScrollProgress";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 
@@ -69,6 +70,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         )}
         <div className="md:flex md:items-start">
           <Nav />
+        <ReminderSync />
           <div className="min-w-0 flex-1">
             <main id="content" className="min-h-screen">
               {children}

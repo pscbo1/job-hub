@@ -22,6 +22,7 @@ describe("application task helpers", () => {
 
   it("builds Open in Tasks href and job anchors", () => {
     expect(tasksPageHref("demo-hub-2")).toBe("/tasks?job=demo-hub-2");
+    expect(tasksPageHref("demo-hub-2", "task-9")).toBe("/tasks?job=demo-hub-2&task=task-9");
     expect(taskJobAnchorId("demo-hub-2")).toBe("task-job-demo-hub-2");
     expect(jobIdFromSearch("?job=demo-hub-2")).toBe("demo-hub-2");
     expect(jobIdFromSearch("tab=packet")).toBe("");

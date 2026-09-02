@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { TaskReminderEditor } from "@/components/TaskReminderEditor";
 import {
   createJobTask,
   listJobTasks,
@@ -25,6 +26,7 @@ export function ApplicationAddTask({ app }: { app: Application }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
+  const [reminders, setReminders] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -59,6 +61,7 @@ export function ApplicationAddTask({ app }: { app: Application }) {
       notes: notes.trim() || null,
       source_url: sourceUrl.trim() || null,
       application_id: app.id,
+      reminders: due ? reminders : [],
     });
     setBusy(false);
     if (!task) {
@@ -70,6 +73,7 @@ export function ApplicationAddTask({ app }: { app: Application }) {
     setOpen(false);
     setTitle("");
     setDue("");
+    setReminders([]);
     setNotes("");
     setSourceUrl("");
   }
@@ -168,10 +172,15 @@ export function ApplicationAddTask({ app }: { app: Application }) {
                 <input
                   type="date"
                   value={due}
-                  onChange={(e) => setDue(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setDue(value);
+                    setReminders(value ? [value] : []);
+                  }}
                   className="mt-1 h-9 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink"
                 />
               </label>
+              <TaskReminderEditor due={due} dates={reminders} disabled={busy} onChange={setReminders} />
               <label className="block text-xs text-muted">
                 Notes (optional)
                 <textarea

@@ -8,17 +8,28 @@ export function canCreateJobTask(title: string): boolean {
   return title.trim().length > 0;
 }
 
-export function tasksPageHref(jobId: string): string {
-  return `/tasks?job=${encodeURIComponent(jobId)}`;
+export function tasksPageHref(jobId: string, taskId?: string): string {
+  const params = new URLSearchParams({ job: jobId });
+  if (taskId?.trim()) params.set("task", taskId.trim());
+  return `/tasks?${params.toString()}`;
 }
 
 export function taskJobAnchorId(jobId: string): string {
   return `task-job-${jobId}`;
 }
 
+export function taskItemAnchorId(taskId: string): string {
+  return `task-item-${taskId}`;
+}
+
 export function jobIdFromSearch(search: string): string {
   const raw = search.startsWith("?") ? search.slice(1) : search;
   return new URLSearchParams(raw).get("job")?.trim() ?? "";
+}
+
+export function taskIdFromSearch(search: string): string {
+  const raw = search.startsWith("?") ? search.slice(1) : search;
+  return new URLSearchParams(raw).get("task")?.trim() ?? "";
 }
 
 export function taskCreatedSummary(

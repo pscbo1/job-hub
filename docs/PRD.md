@@ -385,6 +385,14 @@ Job 可有 checklist tasks 与主 DDL（`deadline`）。`follow_up_at` 是提醒
 5. 创建后打开 Application Overview；当前筛选隐藏新 Draft 时明确提示并提供 Show in list。
 6. 手动 Job 的 title、company、location、market、source note 不被后续同 URL collector 覆盖。
 
+### 11.7 In-app task reminders V1
+
+1. 用户只在 due-dated `job_tasks` 上设置提醒：到期当天必有 On due date，可另加若干提前日历日。
+2. 保存 task 与 reminder 节点在同一 SQLite transaction。无 due 则全部 disable；不发邮件、不推送、不定时调度。
+3. 打开/回到前台/保存 task 后调用 `POST /api/reminders/sync`。每个 task+当前 due 只触发 **今天及之前最新** 的节点；更早未处理的记 skipped。
+4. Tasks 导航未读圆点来自服务器 unread_count。Reminders 面板默认 Unread，All 只含已触发且有效的节点。
+5. 点击先 mark read 再跳到对应 job+task；失败保持未读并可 Retry / Open task。
+
 ---
 
 ## 12. Channel Requirements
@@ -684,6 +692,23 @@ Constraints：
 | sort_order | int | |
 | created_at | timestamptz | |
 
+### 16.5c `task_reminders`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | text PK | |
+| task_id | text FK | `job_tasks.id` |
+| due_date | date | cycle key with task_id + reminder_on |
+| reminder_on | date | calendar date in app timezone |
+| kind | text | `advance` or `due` |
+| enabled | boolean | clear due disables all; do not delete for dedup |
+| created_at | timestamptz | UTC |
+| in_app_triggered_at | timestamptz | set on sync; never auto-read |
+| in_app_skipped_at | timestamptz | older catch-up nodes |
+| read_at | timestamptz | set only by explicit read |
+
+Unique `(task_id, due_date, reminder_on)`. Existing dated tasks migrate to a due node only.
+
 ### 16.6 `job_sources`
 
 | Field | Type | Notes |
@@ -787,6 +812,11 @@ V0 不创建或不启用：
 - `GET /api/applications/:id/submissions/:sid/items/:index/file` 下载当次快照字节，不是最新版本
 - `GET|POST|DELETE /api/applications/:id/comm-notes`
 - `GET /api/jobs/:id/comm-notes` — Job 级 communication notes（含已取消 draft 留下的记录）
+- `POST /api/jobs/:id/tasks` and `PATCH /api/jobs/:id/tasks/:task_id` — optional `reminders` dates saved with the task in one transaction
+- `POST /api/reminders/sync` — idempotent in-app catch-up; never auto-read
+- `GET /api/reminders?view=unread|all` — pagination plus `unread_count`, `today`, `tz`
+- `PATCH /api/reminders/:id/read`
+- `GET /api/jobs/:id` — locate a job/task beyond the Tasks page first page
 
 ---
 
@@ -1202,6 +1232,23 @@ Then Name、Link、Market、Location、Status、Next Step、Comment 均有明确
 12. 后续同 URL collector 不覆盖 manual title/company/location/market/source note。
 13. 390px 下 dialog、focus trap、首错聚焦、Esc/关闭焦点恢复可用。
 14. API 创建失败与创建后列表刷新失败分开表达；后者不得显示为创建失败。
+
+### TR-01–TR-14｜In-app task reminders V1
+
+1. 只有带 due 的 `job_tasks` 产生提醒；Job DDL / `follow_up_at` 不是来源。
+2. 新建 dated task 默认只有 On due date，没有 1/3/7 天批量提前项。
+3. 提前日期必须满足 today ≤ reminder < due；已保存的过去日期仍可见。
+4. 无 due 时不能添加；清空 due 会 disable 全部节点。
+5. task 与 reminders 同一 transaction 保存；失败全部回滚。
+6. sync 对每个 task+当前 due 只触发最新 `reminder_on` ≤ today；更早未处理记 skipped。
+7. 已触发节点再次 sync 复用，包括 `read_at`；永不自动已读。
+8. 完成 / 删除 / 不可见 job 不再触发。
+9. Due today → Overdue 只改文案，不新建节点、不重置未读。
+10. Unread 空态 All caught up；All 空态 No reminders；面板不自动打开。
+11. 未读圆点来自服务器 unread_count，无未读则隐藏。
+12. 点击先 read 再定位 job+task；失败保持未读，可 Retry 或 Open task。
+13. All 列表不含 future / disabled / skipped 节点。
+14. 时区默认 Asia/Shanghai；日期是日历日，时间戳 UTC。
 
 ---
 
