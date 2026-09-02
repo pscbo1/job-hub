@@ -633,6 +633,24 @@ export function removeDemoPacketBinding(appId: string, bindingId: string): void 
 
 const demoCommNotes: Record<string, import("@/lib/api").ApplicationCommNote[]> = {};
 const demoJobCommNotes: import("@/lib/api").ApplicationCommNote[] = [];
+const DEMO_JOB_COMM_KEY = "job-hub.demo.jobCommNotes";
+
+function hydrateDemoJobCommNotes(): void {
+  if (typeof window === "undefined" || demoJobCommNotes.length > 0) return;
+  try {
+    const raw = sessionStorage.getItem(DEMO_JOB_COMM_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as import("@/lib/api").ApplicationCommNote[];
+    if (Array.isArray(parsed)) demoJobCommNotes.push(...parsed);
+  } catch {
+    /* ignore bad demo cache */
+  }
+}
+
+function persistDemoJobCommNotes(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(DEMO_JOB_COMM_KEY, JSON.stringify(demoJobCommNotes));
+}
 const demoIdempotency: Record<string, string> = {};
 
 export function recordDemoSubmission(appId: string, notes = ""): Application | null {
@@ -709,6 +727,7 @@ export function listDemoCommNotes(appId: string): import("@/lib/api").Applicatio
 }
 
 export function listDemoCommNotesForJob(jobId: string): import("@/lib/api").ApplicationCommNote[] {
+  hydrateDemoJobCommNotes();
   const fromIndex = Object.values(demoCommNotes)
     .flat()
     .filter((note) => note.job_id === jobId);
@@ -751,6 +770,7 @@ export function abandonDemoApplication(id: string): boolean {
     for (const note of notes) {
       demoJobCommNotes.push({ ...note, job_id: note.job_id ?? app.job_id });
     }
+    persistDemoJobCommNotes();
   }
   delete demoCommNotes[id];
   delete demoPacketIds[id];
