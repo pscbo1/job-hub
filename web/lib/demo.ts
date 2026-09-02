@@ -1225,7 +1225,7 @@ function demoTopicsFrom(text: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const match of text.matchAll(/(?<![#\w])#([^\s#]{1,40})/g)) {
-    const topic = match[1]?.trim();
+    const topic = match[1]?.trim().replace(/[.,;:!?]+$/, "");
     if (!topic || seen.has(topic.toLowerCase())) continue;
     seen.add(topic.toLowerCase());
     out.push(topic);

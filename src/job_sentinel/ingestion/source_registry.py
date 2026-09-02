@@ -18,12 +18,12 @@ from job_sentinel.ingestion.collect_sources import (
     load_company_ats_sources,
 )
 from job_sentinel.jobs.tags import normalize_application_tags
-from job_sentinel.markets import SourceMarket
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from job_sentinel.db.repository import JobRepository
+    from job_sentinel.markets import SourceMarket
 
 _SEED_META_KEY = "source_registry_seeded"
 _ID_SAFE = re.compile(r"[^a-z0-9]+")
@@ -77,9 +77,7 @@ def list_company_collect_sources(repo: JobRepository) -> list[CollectSource]:
     """CollectSource rows for career pages currently in the table."""
     seed_source_registry(repo)
     return [
-        _company_to_collect(row)
-        for row in repo.list_company_sources()
-        if row.kind == COMPANY_KIND
+        _company_to_collect(row) for row in repo.list_company_sources() if row.kind == COMPANY_KIND
     ]
 
 
@@ -90,7 +88,7 @@ def list_vertical_channels(
     channel_type: str | None = None,
 ) -> list[CompanySource]:
     seed_source_registry(repo)
-    rows = [row for row in repo.list_source_registry(kind=VERTICAL_KIND)]
+    rows = list(repo.list_source_registry(kind=VERTICAL_KIND))
     wanted_type = (channel_type or "").strip().casefold()
     if wanted_type:
         rows = [row for row in rows if row.channel_type.casefold() == wanted_type]
@@ -281,7 +279,9 @@ def _unique_company_id(repo: JobRepository, company: str, *, fallback: str = "co
     return candidate
 
 
-def _resolve_optional_board(careers_url: str) -> tuple[str | None, str | None, str | None, bool, str]:
+def _resolve_optional_board(
+    careers_url: str,
+) -> tuple[str | None, str | None, str | None, bool, str]:
     url = careers_url.strip()
     if not url:
         return None, None, None, False, "ats_board"

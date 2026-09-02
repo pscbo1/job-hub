@@ -27,7 +27,7 @@ def extract_topics(*texts: str) -> list[str]:
     out: list[str] = []
     for text in texts:
         for match in _HASHTAG.finditer(text or ""):
-            topic = match.group(1).strip()
+            topic = match.group(1).strip().rstrip(".,;:!?")
             if not topic:
                 continue
             key = topic.casefold()

@@ -183,7 +183,11 @@ def test_vertical_channels_stay_out_of_company_and_collect(tmp_path: Path) -> No
     collect_ids = {row["id"] for row in collect.json()["sources"]}
     assert channel_id not in collect_ids
     assert "impactpool" in collect_ids
-    assert client.patch(f"/api/company-sources/{channel_id}", json={"enabled": False}).status_code == 404
+    blocked = client.patch(
+        f"/api/company-sources/{channel_id}",
+        json={"enabled": False},
+    )
+    assert blocked.status_code == 404
     missing = client.post("/api/vertical-channels", json={"name": "   "})
     assert missing.status_code == 400
     bad_type = client.post(

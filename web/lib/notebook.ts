@@ -35,7 +35,7 @@ export function extractNotebookTopics(...texts: string[]): string[] {
   for (const text of texts) {
     const matches = text.matchAll(HASHTAG);
     for (const match of matches) {
-      const topic = match[1]?.trim();
+      const topic = match[1]?.trim().replace(/[.,;:!?]+$/, "");
       if (!topic) continue;
       const key = topic.toLowerCase();
       if (seen.has(key)) continue;
