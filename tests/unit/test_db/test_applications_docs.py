@@ -43,8 +43,8 @@ def _doc(**kwargs: object) -> GeneratedDocument:
 # ── schema version ────────────────────────────────────────────────────────────
 
 
-def test_schema_version_is_14() -> None:
-    assert SCHEMA_VERSION == 14
+def test_schema_version_is_15() -> None:
+    assert SCHEMA_VERSION == 15
 
 
 def test_contact_columns_exist(repo: JobRepository) -> None:
