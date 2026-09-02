@@ -215,6 +215,7 @@ export interface HubJob {
   company: string;
   location: string;
   source: string;
+  source_note?: string;
   job_url: string;
   published_at: string | null;
   discovered_at: string;
@@ -1506,6 +1507,102 @@ export interface ApplicationCreateBody {
   deadline?: string;
   notes?: string;
   resume_document_id?: string | null;
+}
+
+export interface ManualApplicationCreateBody {
+  request_id: string;
+  title: string;
+  company: string;
+  job_url?: string;
+  location?: string;
+  source_note?: string;
+  market?: "cn" | "en";
+  create_separately?: boolean;
+}
+
+export interface ManualApplicationDuplicate {
+  job: Pick<HubJob, "id" | "title" | "company" | "location" | "job_url" | "market">;
+  application: { id: string; stage: ApplicationStage; deleted: boolean } | null;
+}
+
+export type ManualApplicationCreateResult =
+  | {
+      ok: true;
+      job: HubJob;
+      application: Application;
+      replayed: boolean;
+    }
+  | { ok: false; kind: "validation"; fields: Record<string, string> }
+  | { ok: false; kind: "duplicate"; duplicate: ManualApplicationDuplicate }
+  | { ok: false; kind: "cancelled" }
+  | { ok: false; kind: "network"; message: string };
+
+export async function createManualApplication(
+  body: ManualApplicationCreateBody,
+): Promise<ManualApplicationCreateResult> {
+  try {
+    const response = await fetch(`${API_BASE}/api/applications/manual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      job?: HubJob | null;
+      application?: Application | null;
+      replayed?: boolean;
+      cancelled?: boolean;
+      detail?:
+        | string
+        | {
+            code?: string;
+            message?: string;
+            duplicate_candidate?: ManualApplicationDuplicate | null;
+          }
+        | Array<{ loc?: Array<string | number>; msg?: string }>;
+    };
+    if (response.ok && payload.cancelled) return { ok: false, kind: "cancelled" };
+    if (response.ok && payload.job && payload.application) {
+      return {
+        ok: true,
+        job: payload.job,
+        application: payload.application,
+        replayed: payload.replayed === true,
+      };
+    }
+    if (
+      response.status === 409 &&
+      !Array.isArray(payload.detail) &&
+      typeof payload.detail === "object" &&
+      payload.detail?.code === "duplicate_candidate" &&
+      payload.detail.duplicate_candidate
+    ) {
+      return {
+        ok: false,
+        kind: "duplicate",
+        duplicate: payload.detail.duplicate_candidate,
+      };
+    }
+    if (response.status === 422 && Array.isArray(payload.detail)) {
+      const fields: Record<string, string> = {};
+      for (const issue of payload.detail) {
+        const field = String(issue.loc?.at(-1) ?? "form");
+        if (!fields[field]) fields[field] = issue.msg ?? "Check this field";
+      }
+      return { ok: false, kind: "validation", fields };
+    }
+    const detail = typeof payload.detail === "string" ? payload.detail : "";
+    return {
+      ok: false,
+      kind: "network",
+      message: detail || `Could not create draft (${response.status})`,
+    };
+  } catch {
+    return {
+      ok: false,
+      kind: "network",
+      message: "Could not reach the local API. Your draft was not created.",
+    };
+  }
 }
 
 export interface ApplicationPatch {

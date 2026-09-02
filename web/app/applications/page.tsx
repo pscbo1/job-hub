@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { AddApplicationDialog } from "@/components/AddApplicationDialog";
 import { ApplicationDrawer } from "@/components/ApplicationDrawer";
 import { ApplicationRowActions } from "@/components/ApplicationRowActions";
 import { ApplicationViewOptions } from "@/components/ApplicationViewOptions";
@@ -13,6 +14,7 @@ import { PopoverSelect } from "@/components/ui/popover-select";
 import {
   type Application,
   type ApplicationStage,
+  type HubJob,
   type IdleCleanupSettings,
   abandonApplication,
   closeApplication,
@@ -29,6 +31,7 @@ import { applicationMatchesTags, uniqueApplicationTags } from "@/lib/application
 import { applicationWasSubmitted } from "@/lib/applicationLifecycle";
 import { isDateOverdue } from "@/lib/jobPipeline";
 import { currentMaterialCount, formatAppliedDate, materialCountLabel } from "@/lib/materialsUi";
+import { manualApplicationHidden } from "@/lib/manualApplicationUi";
 import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 
@@ -117,6 +120,9 @@ export default function ApplicationsPage() {
   const [idle, setIdle] = useState<IdleCleanupSettings>({ enabled: false, idle_days: 14 });
   const [fetchedApp, setFetchedApp] = useState<Application | null>(null);
   const [fetching, setFetching] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [createdToast, setCreatedToast] = useState<{ hidden: boolean } | null>(null);
+  const addTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   async function refresh() {
     const [list, catalog] = await Promise.all([
@@ -204,6 +210,44 @@ export default function ApplicationsPage() {
     setActiveTab("overview");
     setFetchedApp(null);
     replaceAppQuery(null, "overview");
+  }
+
+  function openAdd(event: React.MouseEvent<HTMLButtonElement>) {
+    addTriggerRef.current = event.currentTarget;
+    setAddOpen(true);
+  }
+
+  function closeAdd() {
+    setAddOpen(false);
+    requestAnimationFrame(() => addTriggerRef.current?.focus());
+  }
+
+  function showCreated(created: { job: HubJob; application: Application }) {
+    const hidden = manualApplicationHidden(created.application, {
+      board,
+      staleOnly,
+      stage: stageFilter,
+      source: sourceFilter,
+      query,
+      selectedTags,
+    });
+    setApps((current) => [
+      created.application,
+      ...current.filter((row) => row.id !== created.application.id),
+    ]);
+    setCreatedToast({ hidden });
+    setAddOpen(false);
+    openApp(created.application.id, "overview");
+  }
+
+  function showCreatedInList() {
+    setBoard("open");
+    setStaleOnly(false);
+    setStageFilter("all");
+    setSourceFilter("");
+    setSelectedTags([]);
+    setQuery("");
+    setCreatedToast({ hidden: false });
   }
 
   async function onStage(id: string, stage: ApplicationStage) {
@@ -387,11 +431,20 @@ export default function ApplicationsPage() {
 
   return (
     <div className={cn("mx-auto max-w-[1280px] px-5 py-12", styles.page)}>
-      <header className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
-        <p className="mt-1 text-sm text-muted">
-          Track applications, next steps, and the materials you send.
-        </p>
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
+          <p className="mt-1 text-sm text-muted">
+            Track applications, next steps, and the materials you send.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={openAdd}
+          className="h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white shadow-sm"
+        >
+          Add application
+        </button>
       </header>
 
       <div className={cn("mb-4", styles.toolbar)}>
@@ -525,8 +578,15 @@ export default function ApplicationsPage() {
             <div className="max-w-xs space-y-1">
               <CardTitle>No applications</CardTitle>
               <CardSub>
-                Start an application from Discover. Search results cannot create a draft on their own.
+                Add an opportunity you found, or start an application from Discover.
               </CardSub>
+              <button
+                type="button"
+                onClick={openAdd}
+                className="mt-3 h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white"
+              >
+                Add application
+              </button>
             </div>
           </Card>
         }
@@ -565,6 +625,36 @@ export default function ApplicationsPage() {
             void refresh();
           }}
         />
+      )}
+
+      {addOpen && <AddApplicationDialog onClose={closeAdd} onCreated={showCreated} />}
+
+      {createdToast && (
+        <div
+          role="status"
+          className="fixed bottom-5 right-5 z-[120] max-w-sm rounded-xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-xl"
+        >
+          <div className="flex items-center gap-3">
+            <span>
+              {createdToast.hidden
+                ? "Draft created. Hidden by current filters."
+                : "Draft created."}
+            </span>
+            {createdToast.hidden && (
+              <button type="button" onClick={showCreatedInList} className="font-medium underline">
+                Show in list
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="Dismiss Draft created message"
+              onClick={() => setCreatedToast(null)}
+              className="text-muted"
+            >
+              ×
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
