@@ -516,7 +516,7 @@ export function JobsExplorer({
                       onChange={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
                     />
                   </div>
-                  <JobCommNotes notes={row.comm_notes ?? []} />
+                  <JobCommNotes jobId={row.id} notes={row.comm_notes} />
                   {(j.description ||
                     (showSponsorToggle &&
                       showSponsorship &&

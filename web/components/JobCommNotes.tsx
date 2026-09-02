@@ -1,10 +1,30 @@
 "use client";
 
-import type { ApplicationCommNote } from "@/lib/api";
+import { useEffect, useState } from "react";
+
+import { listJobCommNotes, type ApplicationCommNote } from "@/lib/api";
 import { hasJobCommNotes } from "@/lib/commNotesUi";
 import { formatDateTimeInAppTz } from "@/lib/timezone";
 
-export function JobCommNotes({ notes }: { notes: ApplicationCommNote[] }) {
+export function JobCommNotes({
+  jobId,
+  notes: initial = [],
+}: {
+  jobId: string;
+  notes?: ApplicationCommNote[];
+}) {
+  const [notes, setNotes] = useState<ApplicationCommNote[]>(initial);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listJobCommNotes(jobId).then((rows) => {
+      if (!cancelled) setNotes(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId]);
+
   if (!hasJobCommNotes(notes)) return null;
   return (
     <details className="border-t border-line">

@@ -251,7 +251,7 @@ export function TasksExplorer() {
                           setOverrides((o) => ({ ...o, [j.id]: { ...(o[j.id] ?? row), tasks } }))
                         }
                       />
-                      <JobCommNotes notes={row.comm_notes ?? []} />
+                      <JobCommNotes jobId={row.id} notes={row.comm_notes} />
                     </Card>
                   );
                 })}
