@@ -84,6 +84,9 @@ describe("application drawer helpers", () => {
     expect(ASSIST_COPY.copyLink).toBe("Copy link");
     expect(ASSIST_COPY.filesSection).toBe("Files");
     expect(ASSIST_COPY.knowledgeSection).toBe("Templates & answers");
+    expect(ASSIST_COPY.attach).toBe("Save");
+    expect(ASSIST_COPY.emptyFiles).toBe("No files yet.");
+    expect(ASSIST_COPY.emptyKnowledge).toBe("No templates yet.");
   });
 
   it("shows an em dash when next step is empty", () => {

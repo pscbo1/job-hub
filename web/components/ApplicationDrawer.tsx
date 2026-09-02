@@ -392,15 +392,6 @@ export function ApplicationDrawer({
                 >
                   {ASSIST_COPY.openWindow}
                 </a>
-                {shown.stage === "draft" && (
-                  <button
-                    type="button"
-                    onClick={() => onSubmitRequest(shown.id)}
-                    className={ASSIST_BTN_SECONDARY}
-                  >
-                    {ASSIST_COPY.markSubmitted}
-                  </button>
-                )}
                 {onToggleIdleExempt && (
                   <details className="text-xs text-muted">
                     <summary className="cursor-pointer hover:text-ink">More</summary>
@@ -529,15 +520,8 @@ function OverviewTab({
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Next step</p>
             <p className="mt-1 text-base font-semibold text-ink">{ASSIST_COPY.heading}</p>
-            <p className="mt-1 text-sm text-muted">{ASSIST_COPY.purpose}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <SourceActionLink
-              variant="primary"
-              apply_url={app.apply_url}
-              url={app.url}
-              job_url={app.job_url}
-            />
             <button
               type="button"
               onClick={onOpenMaterials}
@@ -545,14 +529,6 @@ function OverviewTab({
             >
               {ASSIST_COPY.choose}
             </button>
-            <a
-              href={packetWorkbenchPath(app.id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={ASSIST_BTN_SECONDARY}
-            >
-              {ASSIST_COPY.openWindow}
-            </a>
             <button
               type="button"
               onClick={onSubmitRequest}

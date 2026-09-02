@@ -253,9 +253,13 @@ export function MaterialsArea({
                 ? ASSIST_COPY.loading
                 : assistPacketReadiness(items.length)}
           </p>
-          <p className="mt-1 text-xs text-muted">{ASSIST_COPY.purpose}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canEdit && items !== null && materialsView === "prepare" && (
+            <button type="button" onClick={() => setPicker(true)} className={ASSIST_BTN_SECONDARY}>
+              {ASSIST_COPY.choose}
+            </button>
+          )}
           {standalone ? (
             <a href={`/applications?id=${encodeURIComponent(app.id)}`} className={ASSIST_BTN_SECONDARY}>
               {ASSIST_COPY.backOverview}
@@ -297,14 +301,6 @@ export function MaterialsArea({
 
       {materialsView === "prepare" ? (
         <section className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-ink">{ASSIST_COPY.packet}</h3>
-            {canEdit && items !== null && (
-              <button type="button" onClick={() => setPicker(true)} className={ASSIST_BTN_SECONDARY}>
-                {ASSIST_COPY.choose}
-              </button>
-            )}
-          </div>
           {failed ? (
             <div className="rounded-lg border border-line bg-bg p-3 text-sm text-muted">
               {ASSIST_COPY.loadFailed}
@@ -314,15 +310,6 @@ export function MaterialsArea({
             </div>
           ) : items === null ? (
             <p className="text-sm text-muted">{ASSIST_COPY.loading}</p>
-          ) : items.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-line p-4 text-sm text-muted">
-              <p>{ASSIST_COPY.empty}</p>
-              {canEdit && (
-                <button type="button" onClick={() => setPicker(true)} className="mt-3 text-sm font-medium text-ink underline">
-                  {ASSIST_COPY.choose}
-                </button>
-              )}
-            </div>
           ) : (
             <div className="space-y-5">
               <PacketLane
