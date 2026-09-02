@@ -340,7 +340,9 @@ def create_manual_application(
         return ManualApplicationOutcome(status="cancelled", replayed=True)
     if result.status == "duplicate":
         duplicate = (
-            repo.get_hub_job(result.duplicate_job_id) if result.duplicate_job_id is not None else None
+            repo.get_hub_job(result.duplicate_job_id)
+            if result.duplicate_job_id is not None
+            else None
         )
         duplicate_app = (
             repo.get_application_for_job(duplicate.id, include_deleted=True)
@@ -354,9 +356,7 @@ def create_manual_application(
         )
     stored_job = repo.get_hub_job(result.job_id) if result.job_id is not None else None
     stored_app = (
-        repo.get_application(result.application_id)
-        if result.application_id is not None
-        else None
+        repo.get_application(result.application_id) if result.application_id is not None else None
     )
     if stored_job is None or stored_app is None:
         raise TrackingError("Manual application result is missing", status_code=500)

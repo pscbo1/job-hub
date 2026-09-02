@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from fastapi.testclient import TestClient
@@ -88,10 +89,7 @@ def test_validation_failure_writes_nothing(tmp_path: Path) -> None:
         json=_payload(title=" ", job_url="javascript:alert(1)"),
     )
     assert response.status_code == 422
-    with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM jobs_raw").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
+    assert not db.exists()
 
 
 def test_request_replay_is_idempotent_and_cancelled_request_stays_sealed(
@@ -167,10 +165,8 @@ def test_transaction_rolls_back_when_draft_insert_fails(tmp_path: Path) -> None:
             END
             """
         )
-    try:
+    with suppress(sqlite3.IntegrityError):
         client.post("/api/applications/manual", json=_payload())
-    except sqlite3.IntegrityError:
-        pass
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM jobs_raw").fetchone()[0] == 0
