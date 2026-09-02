@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { ApplicationKnowledgeUse } from "@/components/ApplicationKnowledgeUse";
+import { SourceActionLink } from "@/components/SourceActionLink";
 import {
   addCommNote,
   changePacketVersion,
@@ -26,6 +27,7 @@ import {
   type PacketSnapshotItem,
   type SubmissionMaterialHistoryEntry,
 } from "@/lib/api";
+import { assistPacketReadiness } from "@/lib/applicationUi";
 import { latestVersion, snapshotItemLabel } from "@/lib/materialsUi";
 import { isStaleGeneration } from "@/lib/recordDraft";
 import { formatDateTimeInAppTz } from "@/lib/timezone";
@@ -225,30 +227,40 @@ export function MaterialsArea({
           <p className="mt-1 text-xs text-muted">
             {submitted
               ? `${subs.length} submission${subs.length === 1 ? "" : "s"}`
-              : `${items?.length ?? 0} material${items?.length === 1 ? "" : "s"} selected`}
+              : items === null
+                ? "Loading materials…"
+                : assistPacketReadiness(items.length)}
           </p>
         </div>
-        <div className="flex rounded-lg border border-line bg-bg p-0.5" role="tablist" aria-label="Application packet views">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={materialsView === "prepare"}
-            onClick={() => setMaterialsView("prepare")}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "prepare" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
-          >
-            Prepare
-          </button>
-          {submitted && (
+        <div className="flex flex-wrap items-center gap-2">
+          <SourceActionLink
+            variant="primary"
+            apply_url={app.apply_url}
+            url={app.url}
+            job_url={app.job_url}
+          />
+          <div className="flex rounded-lg border border-line bg-bg p-0.5" role="tablist" aria-label="Application packet views">
             <button
               type="button"
               role="tab"
-              aria-selected={materialsView === "history"}
-              onClick={() => setMaterialsView("history")}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "history" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
+              aria-selected={materialsView === "prepare"}
+              onClick={() => setMaterialsView("prepare")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "prepare" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
             >
-              Submission history
+              Prepare
             </button>
-          )}
+            {submitted && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={materialsView === "history"}
+                onClick={() => setMaterialsView("history")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "history" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
+              >
+                Submission history
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -273,8 +285,12 @@ export function MaterialsArea({
             <p className="text-sm text-muted">Loading materials…</p>
           ) : items.length === 0 ? (
             <div className="rounded-lg border border-dashed border-line p-4 text-sm text-muted">
-              No materials selected.
-              {canEdit && <button type="button" onClick={() => setPicker(true)} className="ml-2 text-ink underline">Choose one</button>}
+              <p>No materials selected. You can still open the apply page and copy answers.</p>
+              {canEdit && (
+                <button type="button" onClick={() => setPicker(true)} className="mt-2 text-ink underline">
+                  Choose one
+                </button>
+              )}
             </div>
           ) : (
             <ul className="space-y-2">
@@ -288,7 +304,7 @@ export function MaterialsArea({
             <button
               type="button"
               onClick={() => setShowLibrary((value) => !value)}
-              className="text-sm font-medium text-ink"
+              className="text-sm font-medium text-ink underline"
               aria-expanded={showLibrary}
             >
               {showLibrary ? "Hide templates & answers" : "Find a template or answer"}
@@ -401,19 +417,32 @@ function CurrentMaterialRow({
         {version?.original_filename ? ` · ${version.original_filename}` : ""}
         {version?.url ? ` · ${version.url}` : ""}
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         {version?.url && (
-          <a href={externalUrl(version.url)} target="_blank" rel="noopener noreferrer" className="text-xs text-brand">
+          <a
+            href={externalUrl(version.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-7 items-center rounded-md border border-line px-2 text-xs font-medium text-ink"
+          >
             Preview
           </a>
         )}
         {version?.file_ref && (
-          <a href={materialVersionFileUrl(version.id)} download={version.original_filename || undefined} className="text-xs text-brand">
+          <a
+            href={materialVersionFileUrl(version.id)}
+            download={version.original_filename || undefined}
+            className="inline-flex h-7 items-center rounded-md border border-line px-2 text-xs font-medium text-ink"
+          >
             Download
           </a>
         )}
-        {copyTarget && (
-          <button type="button" onClick={() => void copyMaterial()} className="text-xs text-brand">
+        {copyTarget ? (
+          <button
+            type="button"
+            onClick={() => void copyMaterial()}
+            className="h-7 rounded-md border border-line px-2 text-xs font-medium text-ink"
+          >
             {copyState === "copied"
               ? "Copied"
               : copyState === "failed"
@@ -422,6 +451,8 @@ function CurrentMaterialRow({
                   ? "Copy link"
                   : "Copy text"}
           </button>
+        ) : (
+          <span className="text-xs text-muted">No text to copy</span>
         )}
         {canEdit && item.material && (
           <label className="flex items-center gap-1 text-xs text-muted">

@@ -46,6 +46,16 @@ export function nextStepLabel(nextStep?: string | null): string {
   return value || "—";
 }
 
+/** Assist workbench: no fake disabled Open apply control. */
+export const ASSIST_NO_APPLY_URL = "No apply URL is stored. You can still prepare materials.";
+
+export function assistPacketReadiness(count: number): string {
+  if (count <= 0) {
+    return "No materials selected. You can still open the apply page and copy answers.";
+  }
+  return `${materialCountLabel(count)} ready for this application.`;
+}
+
 export function latestSubmissionLine(app: Application): string | null {
   const submissions = app.submissions ?? [];
   if (submissions.length === 0) return null;

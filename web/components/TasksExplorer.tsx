@@ -6,6 +6,7 @@ import { JobActions } from "@/components/JobActions";
 import { JobCommNotes } from "@/components/JobCommNotes";
 import { JobContact } from "@/components/JobContact";
 import { JobTasks } from "@/components/JobTasks";
+import { SourceActionLink } from "@/components/SourceActionLink";
 import { TaskRemindersPanel } from "@/components/TaskRemindersPanel";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { PopoverSelect } from "@/components/ui/popover-select";
@@ -14,7 +15,7 @@ import { dateInputValue, isDateOverdue, openTasksSorted, taskChipText, taskDueUr
 import { jobIdFromSearch, taskIdFromSearch, taskItemAnchorId, taskJobAnchorId } from "@/lib/jobTasksUi";
 import { MARKET_ORDER, type MarketId } from "@/lib/markets";
 import { groupTasksByDue, jobMatchesTaskSearch, TASK_SECTIONS } from "@/lib/taskBoard";
-import { cn, externalUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 const TASK_CHIP: Record<string, string> = {
   overdue: "bg-rose-100 text-rose-800",
@@ -324,7 +325,14 @@ export function TasksExplorer() {
                     )}
                   </td>
                   <td className="px-3 py-3"><button type="button" className="text-left text-ink hover:underline" onClick={() => { setPinned(row.job); setView("jobs"); }}>{row.job.title}<span className="block text-xs text-muted">{row.job.company}</span></button></td>
-                  <td className="px-3 py-3 text-right"><button type="button" className="text-xs text-muted underline" onClick={() => { setPinned(row.job); setView("jobs"); }}>Open job</button></td>
+                  <td className="px-3 py-3 text-right">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {row.job.job_url ? (
+                        <SourceActionLink url={row.job.job_url} job_url={row.job.job_url} />
+                      ) : null}
+                      <button type="button" className="text-xs text-muted underline" onClick={() => { setPinned(row.job); setView("jobs"); }}>Open job</button>
+                    </div>
+                  </td>
                 </tr>;
               })}
             </tbody>
@@ -415,14 +423,12 @@ export function TasksExplorer() {
                       </label>
                       <div className="flex flex-wrap items-center gap-2">
                         {row.job_url && (
-                          <a
-                            href={externalUrl(row.job_url)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink"
-                          >
-                            Open source ↗
-                          </a>
+                          <SourceActionLink
+                            variant="primary"
+                            url={row.job_url}
+                            job_url={row.job_url}
+                            className="h-8 px-3 text-xs"
+                          />
                         )}
                         <JobActions
                           job={row}

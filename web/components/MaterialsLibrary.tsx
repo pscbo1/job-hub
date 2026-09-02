@@ -201,13 +201,13 @@ export function MaterialsLibrary({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Materials</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-muted">
             Documents and templates stay independent of application stage.
           </p>
         </div>
         <button
           type="button"
-          className="rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background"
+          className="rounded-md bg-ink px-3 py-2 text-sm font-medium text-white"
           onClick={() => {
             setCreating(true);
             setCreateDraft(emptyCreate(lane === "knowledge" ? "message_template" : "resume"));
@@ -227,8 +227,8 @@ export function MaterialsLibrary({
               className={cn(
                 "rounded-md border px-4 py-2 text-sm font-medium transition-colors",
                 lane === item
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-background text-foreground hover:border-foreground/50",
+                  ? "border-ink bg-ink text-white"
+                  : "border-line bg-surface text-ink hover:border-ink/50",
               )}
               onClick={() => setLane(item)}
             >
@@ -236,14 +236,14 @@ export function MaterialsLibrary({
             </button>
           ))}
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">{MATERIAL_LANE_COPY[lane].description}</p>
+        <p className="mt-2 text-sm text-muted">{MATERIAL_LANE_COPY[lane].description}</p>
       </div>
 
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder={MATERIAL_LANE_COPY[lane].search}
-        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+        className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm"
       />
 
       {notice ? <p className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</p> : null}
@@ -263,9 +263,9 @@ export function MaterialsLibrary({
         />
       ) : null}
 
-      <div className="overflow-x-auto rounded-lg border border-border">
+      <div className="overflow-x-auto rounded-lg border border-line">
         <table className="w-full min-w-[720px] text-left text-sm">
-          <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+          <thead className="bg-bg text-xs uppercase tracking-wide text-muted">
             <tr>
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Type</th>
@@ -278,7 +278,7 @@ export function MaterialsLibrary({
             {visible.map((row) => {
               const latest = latestVersion(row);
               return (
-                <tr key={row.id} className="border-t border-border">
+                <tr key={row.id} className="border-t border-line">
                   <td className="px-3 py-2">
                     <button
                       type="button"
@@ -289,15 +289,15 @@ export function MaterialsLibrary({
                     </button>
                   </td>
                   <td className="px-3 py-2">{formatKind(row.kind)}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{row.purpose.join(", ") || "—"}</td>
+                  <td className="px-3 py-2 text-muted">{row.purpose.join(", ") || "—"}</td>
                   <td className="px-3 py-2">{latest ? versionFileLabel(latest) : "—"}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{formatStamp(row.updated_at)}</td>
+                  <td className="px-3 py-2 text-muted">{formatStamp(row.updated_at)}</td>
                 </tr>
               );
             })}
             {visible.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
+                <td colSpan={5} className="px-3 py-8 text-center text-muted">
                   {MATERIAL_LANE_COPY[lane].empty}
                 </td>
               </tr>
@@ -344,7 +344,7 @@ function CreateForm({
   const kinds = lane === "knowledge" ? KNOWLEDGE_MATERIAL_KINDS : FILE_MATERIAL_KINDS;
   return (
     <form
-      className="space-y-3 rounded-lg border border-border p-4"
+      className="space-y-3 rounded-lg border border-line p-4"
       onSubmit={(event) => {
         event.preventDefault();
         onSave();
@@ -357,7 +357,7 @@ function CreateForm({
           required
           value={draft.title}
           onChange={(event) => onChange({ ...draft, title: event.target.value })}
-          className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+          className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2"
         />
       </label>
       <label className="block text-sm">
@@ -372,7 +372,7 @@ function CreateForm({
               source: isKnowledgeKind(kind) ? "text" : draft.source === "text" ? "upload" : draft.source,
             });
           }}
-          className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+          className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2"
         >
           {kinds.map((kind) => (
             <option key={kind} value={kind}>
@@ -386,7 +386,7 @@ function CreateForm({
         <input
           value={draft.purpose}
           onChange={(event) => onChange({ ...draft, purpose: event.target.value })}
-          className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+          className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2"
           placeholder="cover letter, screening"
         />
       </label>
@@ -395,7 +395,7 @@ function CreateForm({
         <textarea
           value={draft.notes}
           onChange={(event) => onChange({ ...draft, notes: event.target.value })}
-          className="mt-1 min-h-[72px] w-full rounded-md border border-border bg-background px-3 py-2"
+          className="mt-1 min-h-[72px] w-full rounded-md border border-line bg-surface px-3 py-2"
         />
       </label>
       <label className="block text-sm">
@@ -403,13 +403,13 @@ function CreateForm({
         <input
           value={draft.version_label}
           onChange={(event) => onChange({ ...draft, version_label: event.target.value })}
-          className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
+          className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2"
         />
       </label>
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="text-sm">Direction<Input value={draft.direction} onChange={(event) => onChange({ ...draft, direction: event.target.value })} placeholder="e.g. backend" /></label>
-        <label className="text-sm">Language<select value={draft.language} onChange={(event) => onChange({ ...draft, language: event.target.value as CreateDraft["language"] })} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm"><option value="">Any</option><option value="zh">Chinese</option><option value="en">English</option></select></label>
-        <label className="text-sm">Version date<input type="date" value={draft.version_date} onChange={(event) => onChange({ ...draft, version_date: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" /></label>
+        <label className="text-sm">Language<select value={draft.language} onChange={(event) => onChange({ ...draft, language: event.target.value as CreateDraft["language"] })} className="mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm"><option value="">Any</option><option value="zh">Chinese</option><option value="en">English</option></select></label>
+        <label className="text-sm">Version date<input type="date" value={draft.version_date} onChange={(event) => onChange({ ...draft, version_date: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-line bg-surface px-3 text-sm" /></label>
       </div>
       {isKnowledgeKind(draft.kind) ? (
         <label className="block text-sm">
@@ -418,7 +418,7 @@ function CreateForm({
             required
             value={draft.content}
             onChange={(event) => onChange({ ...draft, content: event.target.value, source: "text" })}
-            className="mt-1 min-h-[160px] w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
+            className="mt-1 min-h-[160px] w-full rounded-md border border-line bg-surface px-3 py-2 font-mono text-sm"
           />
         </label>
       ) : (
@@ -431,16 +431,16 @@ function CreateForm({
           onFile={(file) => onChange({ ...draft, file })}
         />
       )}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="text-sm text-rose-700">{error}</p> : null}
       <div className="flex gap-2">
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-foreground px-3 py-1.5 text-sm text-background disabled:opacity-50"
+          className="rounded-md bg-ink px-3 py-1.5 text-sm text-white disabled:opacity-50"
         >
           {busy ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={onCancel} className="rounded-md border border-border px-3 py-1.5 text-sm">
+        <button type="button" onClick={onCancel} className="rounded-md border border-line px-3 py-1.5 text-sm">
           Cancel
         </button>
       </div>
@@ -468,14 +468,14 @@ function SourceFields({
       <div className="flex gap-2">
         <button
           type="button"
-          className={cn("rounded-md border px-3 py-1.5 text-sm", source === "upload" && "border-foreground")}
+          className={cn("rounded-md border px-3 py-1.5 text-sm", source === "upload" && "border-ink")}
           onClick={() => onSource("upload")}
         >
           Upload
         </button>
         <button
           type="button"
-          className={cn("rounded-md border px-3 py-1.5 text-sm", source === "link" && "border-foreground")}
+          className={cn("rounded-md border px-3 py-1.5 text-sm", source === "link" && "border-ink")}
           onClick={() => onSource("link")}
         >
           Link
@@ -484,7 +484,7 @@ function SourceFields({
       {source === "upload" ? (
         <div>
           <input type="file" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
-          {file ? <p className="mt-1 text-xs text-muted-foreground">{file.name}</p> : null}
+          {file ? <p className="mt-1 text-xs text-muted">{file.name}</p> : null}
         </div>
       ) : (
         <input
@@ -492,7 +492,7 @@ function SourceFields({
           value={url}
           onChange={(event) => onUrl(event.target.value)}
           placeholder="https://"
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm"
         />
       )}
     </div>
@@ -651,20 +651,20 @@ function MaterialDetail({
   }
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 w-full max-w-lg overflow-y-auto border-l border-border bg-background p-5 shadow-xl">
+    <aside className="fixed inset-y-0 right-0 z-40 w-full max-w-lg overflow-y-auto border-l border-line bg-surface p-5 shadow-xl">
       {pending ? (
         <div className="mb-4 rounded-md border border-amber-400 bg-amber-50 p-3 text-sm dark:bg-amber-950/40">
           Unsaved notes on another material.
           <div className="mt-2 flex gap-2">
-            <button type="button" className="rounded-md bg-foreground px-2 py-1 text-background" onClick={() => void keep()}>
+            <button type="button" className="rounded-md bg-ink px-2 py-1 text-white" onClick={() => void keep()}>
               {DIRTY_SWITCH_LABELS.save}
             </button>
-            <button type="button" className="rounded-md border border-border px-2 py-1" onClick={discard}>
+            <button type="button" className="rounded-md border border-line px-2 py-1" onClick={discard}>
               {DIRTY_SWITCH_LABELS.discard}
             </button>
             <button
               type="button"
-              className="rounded-md border border-border px-2 py-1"
+              className="rounded-md border border-line px-2 py-1"
               onClick={() => {
                 onStay(held);
                 setPending(null);
@@ -677,14 +677,14 @@ function MaterialDetail({
       ) : null}
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">{formatKind(held.kind)}</p>
+          <p className="text-xs uppercase tracking-wide text-muted">{formatKind(held.kind)}</p>
           <h2 className="text-lg font-semibold">{held.title}</h2>
         </div>
-        <button type="button" onClick={onClose} className="rounded-md border border-border px-2 py-1 text-sm">
+        <button type="button" onClick={onClose} className="rounded-md border border-line px-2 py-1 text-sm">
           Close
         </button>
       </div>
-      <p className="mt-2 text-sm text-muted-foreground">{held.purpose.join(", ") || "No purpose set"}</p>
+      <p className="mt-2 text-sm text-muted">{held.purpose.join(", ") || "No purpose set"}</p>
       <label className="mt-3 block text-sm">
         Notes
         <textarea
@@ -700,16 +700,16 @@ function MaterialDetail({
               if (target.current === id) setDirty(false);
             });
           }}
-          className="mt-1 min-h-[80px] w-full rounded-md border border-border bg-background px-3 py-2"
+          className="mt-1 min-h-[80px] w-full rounded-md border border-line bg-surface px-3 py-2"
         />
       </label>
       {isKnowledgeKind(held.kind) ? (
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={() => void copyLatest()} className="rounded-md border border-border px-3 py-1.5 text-sm">
+          <button type="button" onClick={() => void copyLatest()} className="rounded-md border border-line px-3 py-1.5 text-sm">
             {copied ? "Copied" : "Copy"}
           </button>
           {(packetMode || applicationId) && held.kind === "application_answer" ? (
-            <button type="button" className="rounded-md border border-border px-3 py-1.5 text-sm" onClick={() => void addAnswerToPacket()}>
+            <button type="button" className="rounded-md border border-line px-3 py-1.5 text-sm" onClick={() => void addAnswerToPacket()}>
               Add to Packet
             </button>
           ) : null}
@@ -720,7 +720,7 @@ function MaterialDetail({
         <h3 className="text-sm font-semibold">Versions</h3>
         <button
           type="button"
-          className="rounded-md border border-border px-3 py-1.5 text-sm"
+          className="rounded-md border border-line px-3 py-1.5 text-sm"
           onClick={() => {
             setAdding(true);
             setError(null);
@@ -731,7 +731,7 @@ function MaterialDetail({
       </div>
       {adding ? (
         <form
-          className="mt-3 space-y-2 rounded-md border border-border p-3"
+          className="mt-3 space-y-2 rounded-md border border-line p-3"
           onSubmit={(event) => {
             event.preventDefault();
             void saveVersion();
@@ -742,7 +742,7 @@ function MaterialDetail({
               required
               value={versionDraft.content}
               onChange={(event) => setVersionDraft({ ...versionDraft, content: event.target.value, source: "text" })}
-              className="min-h-[140px] w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
+              className="min-h-[140px] w-full rounded-md border border-line bg-surface px-3 py-2 font-mono text-sm"
             />
           ) : (
             <SourceFields
@@ -758,18 +758,18 @@ function MaterialDetail({
             value={versionDraft.version_label}
             onChange={(event) => setVersionDraft({ ...versionDraft, version_label: event.target.value })}
             placeholder="Version label (optional)"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm"
           />
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <p className="text-sm text-rose-700">{error}</p> : null}
           <div className="flex gap-2">
             <button
               type="submit"
               disabled={busy}
-              className="rounded-md bg-foreground px-3 py-1.5 text-sm text-background disabled:opacity-50"
+              className="rounded-md bg-ink px-3 py-1.5 text-sm text-white disabled:opacity-50"
             >
               {busy ? "Saving…" : "Save version"}
             </button>
-            <button type="button" onClick={() => setAdding(false)} className="rounded-md border border-border px-3 py-1.5 text-sm">
+            <button type="button" onClick={() => setAdding(false)} className="rounded-md border border-line px-3 py-1.5 text-sm">
               Cancel
             </button>
           </div>
@@ -779,27 +779,27 @@ function MaterialDetail({
         {[...held.versions]
           .sort((a, b) => b.version_number - a.version_number)
           .map((version) => (
-            <li key={version.id} className="rounded-md border border-border p-3 text-sm">
+            <li key={version.id} className="rounded-md border border-line p-3 text-sm">
               <p className="font-medium">{versionFileLabel(version)}</p>
-              <p className="text-xs text-muted-foreground">{formatStamp(version.created_at)}</p>
+              <p className="text-xs text-muted">{formatStamp(version.created_at)}</p>
               {version.text ? (
                 <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs">{version.text}</pre>
               ) : null}
               <div className="mt-2 flex flex-wrap gap-2">
                 {version.file_ref ? (
-                  <a href={materialVersionFileUrl(version.id)} className="rounded-md border border-border px-2 py-1 text-xs">
+                  <a href={materialVersionFileUrl(version.id)} className="rounded-md border border-line px-2 py-1 text-xs">
                     Preview / Download
                   </a>
                 ) : null}
                 {version.url ? (
-                  <a href={version.url} target="_blank" rel="noreferrer" className="rounded-md border border-border px-2 py-1 text-xs">
+                  <a href={version.url} target="_blank" rel="noreferrer" className="rounded-md border border-line px-2 py-1 text-xs">
                     Open link
                   </a>
                 ) : null}
                 {packetMode && onPacketAdd ? (
                   <button
                     type="button"
-                    className="rounded-md border border-border px-2 py-1 text-xs"
+                    className="rounded-md border border-line px-2 py-1 text-xs"
                     onClick={() => void onPacketAdd(held, version)}
                   >
                     Use version
@@ -811,7 +811,7 @@ function MaterialDetail({
       </ul>
       <button
         type="button"
-        className="mt-6 text-sm text-destructive"
+        className="mt-6 text-sm text-rose-700"
         onClick={async () => {
           await archiveMaterial(held.id);
           onClose();
@@ -820,7 +820,7 @@ function MaterialDetail({
       >
         Archive material
       </button>
-      <p className="mt-3 text-xs text-muted-foreground">
+      <p className="mt-3 text-xs text-muted">
         New library versions do not change existing application bindings.
       </p>
     </aside>

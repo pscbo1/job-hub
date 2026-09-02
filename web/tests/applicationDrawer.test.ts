@@ -4,7 +4,9 @@ import {
   APPLICATION_ROW_MORE_LABEL,
   APPLICATION_VIEW_OPTIONS_GROUPS,
   APPLICATION_VIEW_OPTIONS_LABEL,
+  ASSIST_NO_APPLY_URL,
   applicationRowMoreLabel,
+  assistPacketReadiness,
   latestSubmissionLine,
   nextStepLabel,
   parseApplicationTab,
@@ -50,6 +52,12 @@ describe("application drawer helpers", () => {
     expect(parseApplicationTab("materials")).toBe("materials");
     expect(parseApplicationTab("notes")).toBe("notes");
     expect(parseApplicationTab(null)).toBe("overview");
+  });
+
+  it("keeps packet readiness from blocking the apply action", () => {
+    expect(assistPacketReadiness(0)).toMatch(/still open the apply page/);
+    expect(assistPacketReadiness(2)).toBe("2 materials ready for this application.");
+    expect(ASSIST_NO_APPLY_URL).toMatch(/No apply URL/);
   });
 
   it("shows an em dash when next step is empty", () => {

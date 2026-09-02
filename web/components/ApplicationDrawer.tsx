@@ -9,9 +9,11 @@ import { SourceActionLink } from "@/components/SourceActionLink";
 import { addCommNote, patchHubJob, updateApplication, type Application } from "@/lib/api";
 import {
   type ApplicationDrawerTab,
+  assistPacketReadiness,
   latestSubmissionLine,
   nextStepLabel,
 } from "@/lib/applicationUi";
+import { currentMaterialCount } from "@/lib/materialsUi";
 import {
   DRAWER_SAVE_STEP_LABELS,
   applyDrawerSynced,
@@ -380,12 +382,17 @@ export function ApplicationDrawer({
                 </button>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-3">
-                <SourceActionLink apply_url={shown.apply_url} url={shown.url} job_url={shown.job_url} />
+                <SourceActionLink
+                  variant="primary"
+                  apply_url={shown.apply_url}
+                  url={shown.url}
+                  job_url={shown.job_url}
+                />
                 {shown.stage === "draft" && (
                   <button
                     type="button"
                     onClick={() => onSubmitRequest(shown.id)}
-                    className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink"
+                    className="h-8 rounded-lg border border-line bg-surface px-3 text-xs font-medium text-ink"
                   >
                     Mark submitted
                   </button>
@@ -451,6 +458,7 @@ export function ApplicationDrawer({
                     setTab("materials");
                     onTabChange("materials");
                   }}
+                  onSubmitRequest={() => onSubmitRequest(shown.id)}
                 />
               )}
               {tab === "materials" && <MaterialsArea key={shown.id} app={shown} onChanged={onChanged} />}
@@ -485,6 +493,7 @@ function OverviewTab({
   onDdlChange,
   sourceMissing,
   onOpenMaterials,
+  onSubmitRequest,
 }: {
   app: Application;
   contactDraft: string;
@@ -498,6 +507,7 @@ function OverviewTab({
   onDdlChange: (value: string) => void;
   sourceMissing: boolean;
   onOpenMaterials: () => void;
+  onSubmitRequest: () => void;
 }) {
   const jd = (app.job_description ?? "").trim();
   const comment = (app.job_comment ?? "").trim();
@@ -507,23 +517,38 @@ function OverviewTab({
   return (
     <div className="space-y-5">
       {app.stage === "draft" && (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand/30 bg-brand/5 p-4">
+        <section className="space-y-3 rounded-lg border border-brand/30 bg-brand/5 p-4">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Next action</p>
-            <p className="mt-1 text-base font-semibold text-ink">Prepare materials</p>
+            <p className="mt-1 text-base font-semibold text-ink">
+              {sourceMissing ? "Prepare materials" : "Open apply page"}
+            </p>
+            <p className="mt-1 text-sm text-muted">{assistPacketReadiness(currentMaterialCount(app))}</p>
           </div>
-          <button type="button" onClick={onOpenMaterials} className="h-10 rounded-lg bg-ink px-4 text-sm font-medium text-white shadow-sm">Open Materials</button>
+          <div className="flex flex-wrap items-center gap-2">
+            <SourceActionLink
+              variant="primary"
+              apply_url={app.apply_url}
+              url={app.url}
+              job_url={app.job_url}
+            />
+            <button
+              type="button"
+              onClick={onOpenMaterials}
+              className="h-10 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink"
+            >
+              Open Materials
+            </button>
+            <button
+              type="button"
+              onClick={onSubmitRequest}
+              className="h-10 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink"
+            >
+              Mark submitted
+            </button>
+          </div>
         </section>
       )}
-      <section className="rounded-lg border border-line bg-bg p-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Source</h3>
-        <div className="mt-1">
-          <SourceActionLink apply_url={app.apply_url} url={app.url} job_url={app.job_url} />
-          {sourceMissing && (
-            <p className="mt-1 text-xs text-muted">No apply or source URL is stored for this job.</p>
-          )}
-        </div>
-      </section>
       <section className="rounded-lg border border-line bg-bg p-3">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Next step</h3>
