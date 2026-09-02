@@ -207,7 +207,27 @@ Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配�
 
 ### 8.3 `/applications`
 
-仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 More 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。Application Detail：Notes（默认）与 Packet。申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
+仅能通过 Start Application 创建 draft，必须绑定稳定 Job。阶段：draft | applied | interview | offer | closed。主栏默认 Open（search + filters）。Closed 与 `No update Nd+` 在 **View options** 中。N 为用户可配置 idle days（默认 14）。idle-cleanup 开启后，所有 Applied 均可进入 Nd+，Interview / Offer 除外；用户可在申请级排除。Closed 立即保存，不要求 close_reason，无 Close modal。Draft→Applied 只能 Mark submitted。
+
+列表保持表格。列：Role/Company（打开详情）、Stage、**Next step**（`Job.next_step`，空为 `—`；仅当 `Job.deadline` 有值时在下方显示 DDL）、Applied、**Materials**（当前 bindings 计数，默认可见：`No materials` / `1 material` / `N materials`，可排序筛选；点击打开详情 Materials tab）、Actions。列表 **不显示 Tags 列**。Draft 行主按钮：已有 apply URL 则 `Open apply page`，否则已有 job/source URL 则 `Open source`，两者都不可用时显示 `Link missing` 并仍提供 Mark submitted；其余动作在行尾 overflow（ellipsis **More actions**）。工具栏 **View options** 收纳 Open / Closed / no-update、可选 **Tag** 筛选（复用已有申请上的字符串），与 cleanup settings，不展开整页。不要根据对话/邮箱/平台私信去猜测入口。页面说明只写 tracking applications / next steps，不写状态机教学文案。
+
+详情为右侧抽屉（桌面约 720px，小屏全屏），不在表下展开整表。Tabs：`Overview / Materials / Notes`，默认 Overview。顶栏：Role、Company、Location、Stage、关闭、source action；Draft 另有次级 Mark submitted。
+
+- Overview：source/link → **Contact**（可选自由文本，PATCH `/api/applications/{id}`；空值允许，不作为 Mark submitted / 改 stage 的前置条件；无结构化 name/email/phone，无 contacts 库）→ Next Step / DDL（与 Tasks 相同的 Job 字段，PATCH `/api/jobs/{id}`）→ **Add task**（创建同一条 `job_tasks` 记录，自动关联当前 Job + Application；完成后停留在申请并给 Open in Tasks。完成 task **不** Mark submitted、不改 stage。无 Job 则不可创建。）→ JD 来自 `Job.description`（缺失时写 “full JD not saved” 并给 Open source，不得把 snippet 标成全文）→ Applied 后显示最近一次 submission 摘要。`Job.comment` 为 JD 下可折叠 Research notes。Overview 折叠 **Tags**：可选自由文本多标签，可复用已有申请上的字符串；无 taxonomy / 颜色 / 管理页；不作为 Mark submitted 或 stage 前置。`Application.notes` 只在 Notes tab，禁止与 comment 合并或双写。
+- Materials：Linked materials（add / change version / remove，与今日相同）；**Templates & answers 可在当前申请内搜索 / 预览 / Copy**（Copy 仅在剪贴板成功后提示）；`application_answer` 可按现有 UNIQUE(application_id, material_id) 规则 bind 或替换 version；message templates 只 Copy，不默认当作 submission materials。不自动建 Draft、不发送、不 log-as-sent。库页仍可从 Open library 进入。Submissions 只读冻结快照。Draft 强调当前 Linked materials。Applied+ 优先最近 submission 摘要；当前 bindings 仍可编辑，但标签必须区分 `Linked materials` 与 `Materials used in this submission`。
+- Notes：`Application.notes` 为主；Communication notes 为可选折叠（`application_comm_notes`，`created_at` 即发生时间）。Cancel Draft 删除未投递 Application，但 **保留 communication notes** 与 **Contact** 文本到 Job（Discover / Tasks 折叠查看）。Tags 只存在于 Application，随草稿一起消失，不写到 Job。不写入 `Job.comment` 或 `Application.notes`。
+
+Deep link：`?id=` 即使不在当前页/筛选也必须打开（含 Closed）；`tab=packet` 映射到 Materials。关闭抽屉不得重置列表筛选、排序、分页或滚动。
+
+所有 Mark submitted 入口共用同一个确认 **modal**（职位/公司 + **当前 bindings 只读预览**，即即将快照的内容）。确认框不提供另一套材料选择器；要改版本先改 Linked materials 再打开确认。有材料：Confirm submitted。空材料：显示「本次未记录材料」/ Record without materials，并走已实现的服务端 `confirm_empty`。Cancel 零写入。History 快照不随后续 binding 编辑而变。保留 idempotency_key / expected_version_ids / `materials_changed` 409（若已有）。**本轮不**增加可编辑 `submitted_at`、submit 时自由 channel、或独立于 bindings 的 `material_version_ids` picker。
+
+显示时区默认 Asia/Shanghai（可复用已有 `NEXT_PUBLIC_APP_TZ` / `NEXT_PUBLIC_TIMEZONE`）。本轮无 Settings 页。
+
+跨记录编辑（DBG-01/02）：notes、communication draft、next step、material notes、Knowledge 编辑器、SubmitConfirm 均按 record id 隔离。脏切换：Save and switch / Discard / Stay。切换申请须 abort 进行中的 fetch，失败显示 Retry 而不是空列表。保存失败时停留在当前记录并保留草稿（含 communication draft），标明失败项并提供 Retry；进行中的保存阻止再次保存、丢弃、切换与关闭。
+
+本轮明确推迟：Knowledge 库级「pick any application」搜索器扩容、全局 `border-border` vs `border-line` token 统一、从数据猜测 Open conversation / Copy email、把 materials 列藏到 More、Part3-after P0。Cancel Draft 删除未投递 Application，communication notes 与 Contact 文本留在 Job。
+
+申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
 
 ### 8.4 `/search`（Collect Jobs）
 
@@ -236,7 +256,11 @@ V0 不在此页面建设完整 Channel 编辑器。Channel Sheet 继续承担人
 
 ### 8.7 `/materials`
 
-Files library。Material 可有多个 Version（upload 或 URL）。Application Packet 绑定 version，UNIQUE(application_id, material_id)。Mark Submitted 从服务器 bindings 拍 submission snapshot；允许空 Packet（需确认 Record without materials）。Cancel Draft 只清 bindings，library 保留。不在此轮做 Knowledge/Answer Bank、Studio AI 或 object storage。
+两条独立车道：Materials 与 Application。Materials 不要求先有 Application。一行一个 Material：name、type、purpose、latest version、updated。Detail 展示版本列表与文件。Add material：name、type、Upload/Link；purpose / notes / version label 可选。Add version：Upload 或 Link，生成不可变版本；material 级字段不变；version purpose/notes 独立。库内新版本不会自动改已有申请 bindings；申请流里 Use version / Change version 才替换当前绑定。上传失败保留输入，重试不得因双击重复版本。
+
+显示标签为 Documents / Templates & Answers（内部 id 仍为 `files` / `knowledge`，默认 Documents）。Templates & Answers：Message templates 与 Application answers（Answer Bank），轻量编辑器，持久化 `content.md` 版本，Copy；answers 可选 Add to Packet；软归档。无 Send / Log-as-sent / CRM / Need Reply / 主动推送。
+
+Application 绑定 version，UNIQUE(application_id, material_id)。同一材料可绑到多个申请、使用不同版本。Draft 可以有材料，Applied 可以没有。Mark Submitted 从服务器 bindings 拍 submission snapshot（复制文件字节）；允许空材料（需确认 Record without materials / `confirm_empty`）。历史展示与下载永远读当次快照，不读最新版本。Cancel Draft 只清 bindings，library 与 submission history 保留。
 
 ---
 
@@ -287,7 +311,7 @@ V0 不展示 profile views、已读未回、浏览量、收藏量和无明确动
 
 ### 10.1 Save and Reference
 
-Save（`favorite`）与 Reference（`reference`）都是独立 boolean。二者可以共存，也可以与 Application 共存。Dismiss 时必须清掉 Save 与 Reference。Restore 只清 dismissed_at。
+Save（`favorite`）与 Reference（`reference`）都是独立 boolean。二者可以共存，也可以与 Application 共存。Dismiss 时必须清掉 Save 与 Reference。Restore 清除 `dismissed_at` **以及** auto-archive 标记（`archived_at` / `archive_reason`），然后重新跑规则筛选：符合则回 Current，否则进 Excluded 并带原因；不得从 Current 与 Excluded 同时消失。Applications 与 submission history 不变。
 
 ### 10.2 Engagement（legacy）
 
@@ -299,7 +323,7 @@ Discovery 噪音。Dismiss 写入 dismissed_at 并进入 Excluded。Current 默�
 
 ### 10.4 Application
 
-阶段仅：draft → applied → interview → offer → closed。Start Application 可从任意正常 Discover 岗位创建 draft。Draft→Applied 只能 Mark Submitted（submission + submitted_at）。Closed 立即保存，close_reason 可空，无 Close modal。放弃未投递 draft = 删除 Application。已投递不可硬删。Closed 后可 reopen。
+阶段仅：draft → applied → interview → offer → closed。Start Application 可从任意正常 Discover 岗位创建 draft。Draft→Applied 只能 Mark Submitted（服务器 snapshot + submitted_at / applied_date）。材料绑定不是阶段。Closed 立即保存，close_reason 可空，无 Close modal。放弃未投递 draft = 删除 Application。已投递不可硬删。Closed 后可 reopen（再 Mark submitted → Applied）。Interview/Offer 上再记录 submission 不改变阶段。
 
 ### 10.5 Archive
 
@@ -349,6 +373,25 @@ Job 可有 checklist tasks 与主 DDL（`deadline`）。`follow_up_at` 是提醒
 3. Job Hub 为本次运行创建 collection run。
 4. 数据逐条进入 `jobs_raw`，随后进入 pipeline。
 5. 页面显示 created、updated、deduplicated、filtered、review、failed 数量和错误摘要。
+
+### 11.6 Add application V1
+
+1. 用户在 Applications 点击 Add application，填写必填 Job title、Company；link、
+   location、source note、CN/EN market 可选。
+2. 系统在单个 SQLite transaction 内写 `jobs_raw`、`jobs`、绑定的 Draft Application
+   和 created event。该入口不抓取 JD。
+3. `request_id` 保证重试幂等；取消过的 request 不可重放。无 URL 时不做公司/标题模糊合并。
+4. 新 URL 与已有 canonical URL 相同时先提示 Use existing / Create separately，不静默合并。
+5. 创建后打开 Application Overview；当前筛选隐藏新 Draft 时明确提示并提供 Show in list。
+6. 手动 Job 的 title、company、location、market、source note 不被后续同 URL collector 覆盖。
+
+### 11.7 In-app task reminders V1
+
+1. 用户只在 due-dated `job_tasks` 上设置提醒：到期当天必有 On due date，可另加若干提前日历日。
+2. 保存 task 与 reminder 节点在同一 SQLite transaction。无 due 则全部 disable；不发邮件、不推送、不定时调度。
+3. 打开/回到前台/保存 task 后调用 `POST /api/reminders/sync`。每个 task+当前 due 只触发 **今天及之前最新** 的节点；更早未处理的记 skipped。
+4. Tasks 导航未读圆点来自服务器 unread_count。Reminders 面板默认 Unread，All 只含已触发且有效的节点。
+5. 点击先 mark read 再跳到对应 job+task；失败保持未读并可 Retry / Open task。
 
 ---
 
@@ -639,12 +682,32 @@ Constraints：
 | Field | Type | Notes |
 |---|---|---|
 | id | text PK | |
-| job_id | text FK | |
+| job_id | text FK | required; no personal tasks without a Job |
+| application_id | text FK | nullable; set when created from an Application |
 | title | text | required |
 | due_at | date | nullable |
-| done | boolean | default false |
+| notes | text | nullable |
+| source_url | text | nullable |
+| done | boolean | default false; completing does not Mark submitted or change Application stage |
 | sort_order | int | |
 | created_at | timestamptz | |
+
+### 16.5c `task_reminders`
+
+| Field | Type | Notes |
+|---|---|---|
+| id | text PK | |
+| task_id | text FK | `job_tasks.id` |
+| due_date | date | cycle key with task_id + reminder_on |
+| reminder_on | date | calendar date in app timezone |
+| kind | text | `advance` or `due` |
+| enabled | boolean | clear due disables all; do not delete for dedup |
+| created_at | timestamptz | UTC |
+| in_app_triggered_at | timestamptz | set on sync; never auto-read |
+| in_app_skipped_at | timestamptz | older catch-up nodes |
+| read_at | timestamptz | set only by explicit read |
+
+Unique `(task_id, due_date, reminder_on)`. Existing dated tasks migrate to a due node only.
 
 ### 16.6 `job_sources`
 
@@ -684,10 +747,12 @@ Constraints：
 
 ### 16.8 Application and related
 
-- `applications`：unique `job_id`；stage draft|applied|interview|offer|closed；close_reason 可空；无 rejected；Closed 即历史，无独立 archived 阶段。
-- `application_submissions`：每次 Mark Submitted / 重投一条。
+- `applications`：unique `job_id`；stage draft|applied|interview|offer|closed；close_reason 可空；无 rejected；Closed 即历史，无独立 archived 阶段。可选 `contact` 自由文本（无结构化联系人列）。可选 `tags` 字符串列表（方向标签，无 taxonomy）。
+- `jobs.contact`：Cancel Draft 后留下的 Contact 文本，供 Job 查找；不写入 `jobs.comment`。
+- `application_submissions`：每次 Mark Submitted / 重投一条。含 `idempotency_key`（空值以外部分唯一）。`packet_snapshot` 冻结当时材料名、版本、URL，以及服务器复制的文件字节（`snapshot_file_ref`）。
 - `application_events`：阶段与关闭历史。
-- `materials` / `material_versions` / `application_material_bindings`：Library + Packet。binding UNIQUE(application_id, material_id)，由 version→material_id 解析。purpose 为双层自由文本。soft archive。Cancel Draft 只清 bindings。
+- `application_comm_notes`：沟通备注（非 Timeline）。`application_id` 可空；`job_id` 用于 Cancel Draft 后从 Job 查找。`created_at` 为发生时间，取消草稿不得改写。
+- `materials` / `material_versions` / `application_material_bindings`：Library + 当前 bindings。binding UNIQUE(application_id, material_id)，由 version→material_id 解析。purpose 为双层自由文本。soft archive。Cancel Draft 只清 bindings。kinds 含 files 与 `message_template` / `application_answer`（`content.md`）。
 - `applications.exclude_from_idle`：申请级排除 idle cleanup。`hub_idle_cleanup_settings`：enabled + idle_days（默认 14，可改）。
 
 V0 不创建或不启用：
@@ -735,12 +800,23 @@ V0 不创建或不启用：
 
 ### 17.5 Applications, idle cleanup, Materials
 
-- `GET /api/applications?view=open|closed|all&stale_applied=`
+- `GET /api/applications?view=open|closed|all&stale_applied=&tag=`
+- `POST /api/applications/manual` — title/company 必填；原子创建 raw + manual Job + Draft；
+  `request_id` 幂等，URL duplicate 返回 409，`create_separately` 明确旁路 URL 合并
 - `GET|PUT /api/idle-cleanup-settings` — `enabled`, `idle_days`（默认 14）
-- `PATCH /api/applications/:id` — includes `exclude_from_idle`
-- `GET|POST /api/materials`；`POST /api/materials/upload`；versions upload/URL
+- `PATCH /api/applications/:id` — includes `exclude_from_idle`, optional `contact`, and optional `tags`
+- `GET /api/applications/tags` — unique tag strings already used on applications
+- `GET|POST /api/materials`；`POST /api/materials/upload`；versions upload/URL/text（`content.md`）
 - `GET|PUT /api/applications/:id/packet`；bindings add/change/remove
-- `POST /api/applications/:id/submit` snapshots current server bindings（empty packet allowed）
+- `POST /api/applications/:id/submit` 冻结当前服务器 bindings；空材料需 `confirm_empty`；`expected_version_ids` 不一致返回 `materials_changed`；`idempotency_key` 幂等
+- `GET /api/applications/:id/submissions/:sid/items/:index/file` 下载当次快照字节，不是最新版本
+- `GET|POST|DELETE /api/applications/:id/comm-notes`
+- `GET /api/jobs/:id/comm-notes` — Job 级 communication notes（含已取消 draft 留下的记录）
+- `POST /api/jobs/:id/tasks` and `PATCH /api/jobs/:id/tasks/:task_id` — optional `reminders` dates saved with the task in one transaction
+- `POST /api/reminders/sync` — idempotent in-app catch-up; never auto-read
+- `GET /api/reminders?view=unread|all` — pagination plus `unread_count`, `today`, `tz`
+- `PATCH /api/reminders/:id/read`
+- `GET /api/jobs/:id` — locate a job/task beyond the Tasks page first page
 
 ---
 
@@ -1139,6 +1215,40 @@ Then 记录进入 Review，并显示具体原因。
 Given 现有岗位表包含历史与进行中的岗位，  
 When migration dry run 执行，  
 Then Name、Link、Market、Location、Status、Next Step、Comment 均有明确映射，错误与重复记录有报告。
+
+### MA-01–MA-14｜Add application V1
+
+1. 仅填写 trim 后非空的 title + company 即可创建一个 manual Job 和绑定 Draft。
+2. link、location、source note、market 可选字段在刷新后保持；link 只作为 Open source。
+3. 字段校验失败不写入 raw、Job、Application 或 event。
+4. 关闭/取消未提交表单不写数据库；脏表单必须显式 Discard。
+5. 相同 `request_id` 首次返回 201，重放返回 200，且只有一组 Job + Application。
+6. transaction 任一步失败时全部回滚，不留下无 Draft 的 Job。
+7. 创建成功保留筛选和滚动并打开 Overview；被筛选隐藏时 Show in list 可恢复可见。
+8. 相同规范 URL 返回 duplicate candidate；Use existing 或明确 Create separately。
+9. 两次无 URL 新建互相独立，不做 title/company 模糊合并。
+10. manual Draft 继续使用现有 Discover / Tasks / Materials 投影和 membership。
+11. Cancel Draft 保留 stable Job，并维持现有 notes、contact、task、材料库语义。
+12. 后续同 URL collector 不覆盖 manual title/company/location/market/source note。
+13. 390px 下 dialog、focus trap、首错聚焦、Esc/关闭焦点恢复可用。
+14. API 创建失败与创建后列表刷新失败分开表达；后者不得显示为创建失败。
+
+### TR-01–TR-14｜In-app task reminders V1
+
+1. 只有带 due 的 `job_tasks` 产生提醒；Job DDL / `follow_up_at` 不是来源。
+2. 新建 dated task 默认只有 On due date，没有 1/3/7 天批量提前项。
+3. 提前日期必须满足 today ≤ reminder < due；已保存的过去日期仍可见。
+4. 无 due 时不能添加；清空 due 会 disable 全部节点。
+5. task 与 reminders 同一 transaction 保存；失败全部回滚。
+6. sync 对每个 task+当前 due 只触发最新 `reminder_on` ≤ today；更早未处理记 skipped。
+7. 已触发节点再次 sync 复用，包括 `read_at`；永不自动已读。
+8. 完成 / 删除 / 不可见 job 不再触发。
+9. Due today → Overdue 只改文案，不新建节点、不重置未读。
+10. Unread 空态 All caught up；All 空态 No reminders；面板不自动打开。
+11. 未读圆点来自服务器 unread_count，无未读则隐藏。
+12. 点击先 read 再定位 job+task；失败保持未读，可 Retry 或 Open task。
+13. All 列表不含 future / disabled / skipped 节点。
+14. 时区默认 Asia/Shanghai；日期是日历日，时间戳 UTC。
 
 ---
 

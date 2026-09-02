@@ -18,18 +18,44 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 - **Sealed Part 1 holistic model (2026-09-01).** Nav is Collect Jobs · Discover · Tasks · Applications. Reference is an independent boolean (coexists with Save and Application). Under Study / user-facing To Do removed. Application Closed is history; close_reason optional. Start Application from any normal Discover job. Tasks membership is next_step / deadline / unfinished task / draft. Auto-archive excluded jobs only (default OFF, 14 days).
 - Job checklist tasks (`job_tasks`), DDL / open-task chips, To Do-first sort, and `job-sentinel archive --force|--dry-run` (ported from unmerged Slice 1 PR #1 onto the sealed model).
+- **Materials + Application lanes (Part 2/3).** Independent Materials library (files and Knowledge templates/answers) binds versions onto applications. Mark submitted freezes a server-side snapshot. Optional lightweight communication notes.
 
 ### Changed
 
 - New jobs have no Save/Reference until the user acts. Applied / Interview / Offer / Closed live only on Application. Closed is history.
 - Application close reasons remain optional (`not_selected` / `no_response` / `withdrew` / `other`). No required Close modal. No Rejected stage.
 - Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.
+- Applications list shows current material counts. All Mark submitted entry points share one confirm panel; empty materials need explicit confirm on client and server.
+- **Applications Round 1 UX (2026-09-01).** List columns are Role/Company, Stage, Next step (Job.next_step + DDL when set), Applied, visible materials count, Actions. Detail is a right drawer with Overview / Materials / Notes. Mark submitted confirm is a shared modal that previews current bindings only. Source actions use stored apply/source URLs only. Display timestamps default to Asia/Shanghai.
+- Applications toolbar **More** is **View options** (Views / Cleanup settings in a popover). Row overflow is an ellipsis **More actions** control so Draft source + Mark submitted stay on one line.
+- Materials library tabs display **Documents** and **Templates & Answers** (internal ids remain `files` / `knowledge`). Add/search/empty copy follows the active tab.
+- Application Overview can **Add task** onto the same `job_tasks` row Tasks uses (auto-linked Job + Application). Completing a task does not Mark submitted or change stage.
+- Application Materials can search/preview/copy Templates & Answers in place. Application answers may bind or replace a linked version; message templates stay copy-only.
+- Cancel Draft keeps communication notes on the Job (`job_id`). Discover/Tasks show a folded read-only list with the original occurred-at (`created_at`). Materials library stays.
+- Optional Application **Contact** free text (Overview). Empty is allowed and is not required to mark submitted. Cancel Draft copies leftover text onto the Job for lookup; it is never written to `Job.comment`.
+- Optional Application **Tags** (folded Overview). Free-text multi tags, reuse strings already used on other applications. Filter lives in View options. The list has no Tags column. Cancel Draft drops tags with the application.
+- **Add application V1.** Applications can atomically create a manual Job + Draft from
+  required title/company and optional link, location, source note, and market. Request
+  replay is idempotent, URL duplicates require an explicit reuse/separate choice, and
+  later collectors preserve manual identity fields.
+- **In-app task reminders V1.** Due-dated `job_tasks` can store advance + on-due calendar
+  reminder nodes. Sync catch-up triggers only the latest due node for today, Tasks shows
+  an unread dot and Reminders panel, and read-then-locate jumps to the task.
 
 ### Fixed
 
+- Applications toolbar groups and fixed table columns now follow content-pane breakpoints;
+  compact rows keep all available actions in the accessible ellipsis menu.
 - Search result cards no longer create Application drafts; Start Application on a stable Discover Job is the only draft path.
 - Submitted Applications cannot be hard-deleted (UI or `DELETE /api/applications/{id}`). Cancel draft remains for never-submitted drafts; submitted rows use Closed / Job Archive.
 - Command Palette and More nav no longer advertise Studio, Profile, or Documents.
+- Restore after auto-archive clears archive flags and re-evaluates filters so the job returns to Current or Excluded instead of vanishing.
+- Existing materials can upload a new version without replacing old files, bindings, or snapshots.
+- Submission history downloads frozen snapshot bytes for that submission, not the latest library file.
+- Empty-material Mark submitted cannot skip confirm; retries with the same idempotency key create one record.
+- Switching Application notes or Material notes no longer cross-writes the previous record.
+- Application drawer, notes, next step, communication draft, and Mark submitted confirm isolate edit state by record id (Save and switch / Discard / Stay). Packet and comm-note fetches abort on switch and show Retry on failure.
+- Application drawer save failures stay on the current record, keep unsaved drafts (including communication notes), name the failed field, and offer Retry. In-flight saves block duplicate save, discard, switch, and close.
 
 - **Release workflow left the sdist and wheel unattached.** When a release was
   cut by hand before the tag was pushed, `gh release create` failed with

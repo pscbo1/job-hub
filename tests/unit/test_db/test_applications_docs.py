@@ -43,8 +43,16 @@ def _doc(**kwargs: object) -> GeneratedDocument:
 # ── schema version ────────────────────────────────────────────────────────────
 
 
-def test_schema_version_is_9() -> None:
-    assert SCHEMA_VERSION == 9
+def test_schema_version_is_16() -> None:
+    assert SCHEMA_VERSION == 16
+
+
+def test_contact_columns_exist(repo: JobRepository) -> None:
+    app_cols = {col.name for col in repo._db["applications"].columns}
+    job_cols = {col.name for col in repo._db["jobs"].columns}
+    assert "contact" in app_cols
+    assert "tags" in app_cols
+    assert "contact" in job_cols
 
 
 def test_migration_creates_tables(tmp_path: Path) -> None:

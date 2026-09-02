@@ -1,27 +1,41 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ApplicationWorkspace } from "@/components/ApplicationWorkspace";
+import { AddApplicationDialog } from "@/components/AddApplicationDialog";
+import { ApplicationDrawer } from "@/components/ApplicationDrawer";
+import { ApplicationRowActions } from "@/components/ApplicationRowActions";
+import { ApplicationViewOptions } from "@/components/ApplicationViewOptions";
 import { type Column, DataTable } from "@/components/DataTable";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
+import { SubmitConfirm } from "@/components/SubmitConfirm";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import {
   type Application,
   type ApplicationStage,
+  type HubJob,
   type IdleCleanupSettings,
   abandonApplication,
   closeApplication,
+  getApplication,
   getApplications,
   getApplicationStats,
   getIdleCleanupSettings,
+  listApplicationTags,
   putIdleCleanupSettings,
-  submitApplication,
   updateApplication,
 } from "@/lib/api";
+import { type ApplicationDrawerTab, nextStepLabel, parseApplicationTab, tabQueryValue } from "@/lib/applicationUi";
+import { applicationMatchesTags, uniqueApplicationTags } from "@/lib/applicationTags";
 import { applicationWasSubmitted } from "@/lib/applicationLifecycle";
-import { cn, externalUrl } from "@/lib/utils";
+import { isDateOverdue } from "@/lib/jobPipeline";
+import { currentMaterialCount, formatAppliedDate, materialCountLabel } from "@/lib/materialsUi";
+import { manualApplicationHidden } from "@/lib/manualApplicationUi";
+import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
+import { cn } from "@/lib/utils";
+
+import styles from "./page.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -77,27 +91,49 @@ const STAGE_STYLES: Record<ApplicationStage, string> = {
 
 type BoardView = "open" | "closed";
 
+function replaceAppQuery(id: string | null, tab: ApplicationDrawerTab) {
+  const url = new URL(window.location.href);
+  if (id) url.searchParams.set("id", id);
+  else url.searchParams.delete("id");
+  const tabValue = id ? tabQueryValue(tab) : null;
+  if (tabValue) url.searchParams.set("tab", tabValue);
+  else url.searchParams.delete("tab");
+  url.searchParams.delete("job");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 export default function ApplicationsPage() {
   const [apps, setApps] = useState<Application[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [apiDown, setApiDown] = useState(false);
   const [board, setBoard] = useState<BoardView>("open");
   const [staleOnly, setStaleOnly] = useState(false);
-  const [showMore, setShowMore] = useState(false);
   const [stageFilter, setStageFilter] = useState<ApplicationStage | "all">("all");
   const [sourceFilter, setSourceFilter] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [knownTags, setKnownTags] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"notes" | "packet">("notes");
+  const [activeTab, setActiveTab] = useState<ApplicationDrawerTab>("overview");
+  const [submitId, setSubmitId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [idle, setIdle] = useState<IdleCleanupSettings>({ enabled: false, idle_days: 14 });
+  const [fetchedApp, setFetchedApp] = useState<Application | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [createdToast, setCreatedToast] = useState<{ hidden: boolean } | null>(null);
+  const addTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   async function refresh() {
-    const list = await getApplications(undefined, 500, {
-      view: board,
-      staleApplied: board === "open" && staleOnly,
-    });
+    const [list, catalog] = await Promise.all([
+      getApplications(undefined, 500, {
+        view: board,
+        staleApplied: board === "open" && staleOnly,
+      }),
+      listApplicationTags(),
+    ]);
     setApps(list);
+    setKnownTags(catalog);
     setSelected([]);
   }
 
@@ -106,11 +142,13 @@ export default function ApplicationsPage() {
       getApplications(undefined, 500, { view: "open" }),
       getApplicationStats(),
       getIdleCleanupSettings(),
+      listApplicationTags(),
     ])
-      .then(([list, st, settings]) => {
+      .then(([list, st, settings, catalog]) => {
         if (list.length === 0 && Object.keys(st).length === 0) setApiDown(true);
         setApps(list);
         setIdle(settings);
+        setKnownTags(catalog);
       })
       .finally(() => setLoaded(true));
   }, []);
@@ -118,12 +156,16 @@ export default function ApplicationsPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const jobId = params.get("job");
-    if (params.get("tab") === "packet") setTab("packet");
-    if (params.get("id")) setActiveId(params.get("id"));
+    const id = params.get("id");
+    setActiveTab(parseApplicationTab(params.get("tab")));
+    if (id) setActiveId(id);
     if (jobId) {
       void getApplications(undefined, 500, { view: "all" }).then((list) => {
         const match = list.find((a) => a.job_id === jobId);
-        if (match) setActiveId(match.id);
+        if (match) {
+          setActiveId(match.id);
+          replaceAppQuery(match.id, parseApplicationTab(params.get("tab")));
+        }
       });
     }
   }, []);
@@ -132,6 +174,81 @@ export default function ApplicationsPage() {
     if (!loaded) return;
     void refresh();
   }, [board, staleOnly]);
+
+  useEffect(() => {
+    if (!activeId) {
+      setFetchedApp(null);
+      setFetching(false);
+      return;
+    }
+    const inList = apps.find((row) => row.id === activeId);
+    if (inList) {
+      setFetchedApp(null);
+      setFetching(false);
+      return;
+    }
+    let cancelled = false;
+    setFetching(true);
+    void getApplication(activeId).then((row) => {
+      if (cancelled) return;
+      setFetchedApp(row);
+      setFetching(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, apps]);
+
+  function openApp(id: string, tab: ApplicationDrawerTab = "overview") {
+    setActiveId(id);
+    setActiveTab(tab);
+    replaceAppQuery(id, tab);
+  }
+
+  function closeDrawer() {
+    setActiveId(null);
+    setActiveTab("overview");
+    setFetchedApp(null);
+    replaceAppQuery(null, "overview");
+  }
+
+  function openAdd(event: React.MouseEvent<HTMLButtonElement>) {
+    addTriggerRef.current = event.currentTarget;
+    setAddOpen(true);
+  }
+
+  function closeAdd() {
+    setAddOpen(false);
+    requestAnimationFrame(() => addTriggerRef.current?.focus());
+  }
+
+  function showCreated(created: { job: HubJob; application: Application }) {
+    const hidden = manualApplicationHidden(created.application, {
+      board,
+      staleOnly,
+      stage: stageFilter,
+      source: sourceFilter,
+      query,
+      selectedTags,
+    });
+    setApps((current) => [
+      created.application,
+      ...current.filter((row) => row.id !== created.application.id),
+    ]);
+    setCreatedToast({ hidden });
+    setAddOpen(false);
+    openApp(created.application.id, "overview");
+  }
+
+  function showCreatedInList() {
+    setBoard("open");
+    setStaleOnly(false);
+    setStageFilter("all");
+    setSourceFilter("");
+    setSelectedTags([]);
+    setQuery("");
+    setCreatedToast({ hidden: false });
+  }
 
   async function onStage(id: string, stage: ApplicationStage) {
     const row = apps.find((a) => a.id === id);
@@ -142,19 +259,13 @@ export default function ApplicationsPage() {
     if (ok) void refresh();
   }
 
-  async function onSubmit(id: string) {
-    if (!window.confirm("Mark this application as submitted?")) return;
-    const ok = await submitApplication(id);
-    if (ok) void refresh();
-  }
-
   async function onCancelDraft(id: string) {
-    const row = apps.find((a) => a.id === id);
+    const row = apps.find((a) => a.id === id) ?? fetchedApp;
     if (!row || applicationWasSubmitted(row)) return;
     if (!window.confirm("Cancel this draft? Materials already in the library are kept.")) return;
     setApps((prev) => prev.filter((a) => a.id !== id));
     await abandonApplication(id);
-    if (activeId === id) setActiveId(null);
+    if (activeId === id) closeDrawer();
     void refresh();
   }
 
@@ -172,6 +283,7 @@ export default function ApplicationsPage() {
     () => [...new Set(apps.map((a) => a.source).filter(Boolean))].sort(),
     [apps],
   );
+  const availableTags = useMemo(() => uniqueApplicationTags(apps), [apps]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -179,16 +291,24 @@ export default function ApplicationsPage() {
       if (staleOnly && a.exclude_from_idle) return false;
       if (stageFilter !== "all" && a.stage !== stageFilter) return false;
       if (sourceFilter && a.source !== sourceFilter) return false;
+      if (!applicationMatchesTags(a, selectedTags)) return false;
       if (!q) return true;
-      return [a.title, a.employer, a.location, a.source, a.notes].join(" ").toLowerCase().includes(q);
+      return [a.title, a.employer, a.location, a.source, a.notes, a.next_step].join(" ").toLowerCase().includes(q);
     });
-  }, [apps, stageFilter, sourceFilter, query, staleOnly]);
+  }, [apps, stageFilter, sourceFilter, query, staleOnly, selectedTags]);
+
+  const requestedApp = apps.find((a) => a.id === activeId) ?? fetchedApp;
+  const submitApp =
+    (submitId && apps.find((a) => a.id === submitId)) ||
+    (submitId && fetchedApp?.id === submitId ? fetchedApp : null) ||
+    (submitId && requestedApp?.id === submitId ? requestedApp : null);
 
   const columns: Column<Application>[] = [
     {
       key: "select",
       header: "",
-      headerClassName: "w-8",
+      headerClassName: "!px-3",
+      className: "!px-3",
       render: (a) =>
         staleOnly && !a.exclude_from_idle ? (
           <input
@@ -205,10 +325,10 @@ export default function ApplicationsPage() {
     },
     {
       key: "title",
-      header: "Role",
+      header: "Role / Company",
       sortValue: (a) => a.title.toLowerCase(),
       render: (a) => (
-        <button type="button" className="min-w-0 text-left" onClick={() => { setActiveId(a.id); setTab("notes"); }}>
+        <button type="button" className="min-w-0 text-left" onClick={() => openApp(a.id, "overview")}>
           <div className="font-medium text-ink">{a.title || "Untitled"}</div>
           <div className="text-xs text-muted">{[a.employer, a.location].filter(Boolean).join(" · ")}</div>
         </button>
@@ -217,6 +337,8 @@ export default function ApplicationsPage() {
     {
       key: "stage",
       header: "Stage",
+      headerClassName: "!px-2 whitespace-nowrap",
+      className: "!px-1 whitespace-nowrap",
       sortValue: (a) => ["draft", "applied", "interview", "offer", "closed"].indexOf(a.stage),
       render: (a) => (
         <PopoverSelect
@@ -234,68 +356,66 @@ export default function ApplicationsPage() {
       ),
     },
     {
-      key: "source",
-      header: "Source",
-      sortValue: (a) => a.source.toLowerCase(),
-      render: (a) =>
-        a.source ? (
-          <span className="rounded-full border border-line bg-bg px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted">
-            {a.source}
-          </span>
-        ) : (
-          <span className="text-muted">—</span>
-        ),
+      key: "next_step",
+      header: "Next step",
+      sortValue: (a) => `${a.next_step ?? ""}${a.job_deadline ?? ""}`,
+      render: (a) => {
+        const overdue = isDateOverdue(a.job_deadline, todayInAppTz());
+        return (
+          <button
+            type="button"
+            className="w-full min-w-0 text-left"
+            onClick={() => openApp(a.id, "overview")}
+          >
+            <div className="break-words text-sm text-ink">{nextStepLabel(a.next_step)}</div>
+            {a.job_deadline ? (
+              <div className={cn("text-xs", overdue ? "text-amber-800" : "text-muted")}>
+                DDL {formatCalendarDate(a.job_deadline)}
+              </div>
+            ) : null}
+          </button>
+        );
+      },
     },
     {
       key: "applied_date",
       header: "Applied",
+      headerClassName: "!px-2 whitespace-nowrap",
+      className: "!px-2 whitespace-nowrap",
       sortValue: (a) => a.applied_date || "",
-      render: (a) => <span className="text-muted">{a.applied_date || "—"}</span>,
+      render: (a) => <span className="text-muted">{formatAppliedDate(a.applied_date)}</span>,
+    },
+    {
+      key: "materials",
+      header: "Materials",
+      headerClassName: "whitespace-nowrap",
+      className: "whitespace-nowrap",
+      sortValue: (a) => currentMaterialCount(a),
+      render: (a) => (
+        <button
+          type="button"
+          className="text-left text-sm text-ink hover:underline"
+          onClick={() => openApp(a.id, "materials")}
+        >
+          {materialCountLabel(currentMaterialCount(a))}
+        </button>
+      ),
     },
     {
       key: "actions",
       header: "",
-      headerClassName: "w-48",
+      headerClassName: "!px-[6px] text-right",
+      className: "!px-[6px] text-right",
       render: (a) => (
-        <div className="flex flex-wrap items-center gap-2">
-          {a.url && (
-            <a href={externalUrl(a.url)} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">
-              Open source
-            </a>
-          )}
-          <button
-            type="button"
-            onClick={() => { setActiveId(a.id); setTab("packet"); }}
-            className="text-xs font-medium text-ink hover:underline"
-          >
-            Open materials
-          </button>
-          {a.stage === "draft" && (
-            <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
-              Mark submitted
-            </button>
-          )}
-          {a.stage === "closed" && (
-            <button type="button" onClick={() => onSubmit(a.id)} className="text-xs font-medium text-ink hover:underline">
-              Reopen (mark submitted)
-            </button>
-          )}
-          {!applicationWasSubmitted(a) && (
-            <button
-              type="button"
-              onClick={() => onCancelDraft(a.id)}
-              className="text-muted transition-colors hover:text-red-600"
-              aria-label={`Cancel draft ${a.title}`}
-            >
-              Cancel draft
-            </button>
-          )}
-        </div>
+        <ApplicationRowActions
+          app={a}
+          onSubmit={(id) => setSubmitId(id)}
+          onCancelDraft={(id) => void onCancelDraft(id)}
+        />
       ),
     },
   ];
 
-  const active = apps.find((a) => a.id === activeId) ?? null;
   const idleLabel = `No update ${idle.idle_days}d+`;
 
   if (!loaded) {
@@ -310,154 +430,118 @@ export default function ApplicationsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-5 py-12">
-      <header className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
-        <p className="mt-1 text-sm text-muted">
-          Start Application creates a draft. Mark submitted to enter Applied. Closed is history.
-        </p>
-      </header>
-
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search role, employer, location…"
-          className="h-10 w-full max-w-sm rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm"
-        />
-        <PopoverSelect
-          value={stageFilter}
-          onChange={(v) => setStageFilter(v as ApplicationStage | "all")}
-          aria-label="Stage"
-          className="w-36"
-          options={[
-            { value: "all", label: "All stages" },
-            ...(board === "closed" ? (["closed"] as ApplicationStage[]) : OPEN_STAGES).map((s) => ({
-              value: s,
-              label: s[0].toUpperCase() + s.slice(1),
-            })),
-          ]}
-        />
-        <PopoverSelect
-          value={sourceFilter}
-          onChange={setSourceFilter}
-          aria-label="Source"
-          className="w-40"
-          options={[{ value: "", label: "All sources" }, ...sources.map((s) => ({ value: s, label: s }))]}
-        />
+    <div className={cn("mx-auto max-w-[1280px] px-5 py-12", styles.page)}>
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
+          <p className="mt-1 text-sm text-muted">
+            Track applications, next steps, and the materials you send.
+          </p>
+        </div>
         <button
           type="button"
-          onClick={() => setShowMore((v) => !v)}
-          className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-muted"
+          onClick={openAdd}
+          className="h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white shadow-sm"
         >
-          More ▾
+          Add application
         </button>
-        {staleOnly && selected.length > 0 && (
-          <button
-            type="button"
-            onClick={() => void onCloseSelected()}
-            className="h-9 rounded-lg border border-ink bg-ink px-3 text-sm text-white"
-          >
-            Close selected ({selected.length})
-          </button>
-        )}
-        <span className="ml-auto text-sm text-muted">{visible.length} shown</span>
-        <ExportMenu count={apps.length} />
-      </div>
+      </header>
 
-      {showMore && (
-        <div className="mb-4 space-y-3 rounded-xl border border-line bg-surface p-3 text-sm">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setBoard("open");
-                setStaleOnly(false);
-                setStageFilter("all");
-              }}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium",
-                board === "open" && !staleOnly ? "border-ink bg-ink text-white" : "border-line text-muted",
-              )}
-            >
-              Open
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setBoard("closed");
-                setStaleOnly(false);
-                setStageFilter("all");
-              }}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium",
-                board === "closed" ? "border-ink bg-ink text-white" : "border-line text-muted",
-              )}
-            >
-              Closed
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setBoard("open");
-                setStaleOnly(true);
-                setStageFilter("all");
-              }}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium",
-                staleOnly ? "border-amber-700 bg-amber-50 text-amber-900" : "border-line text-muted",
-              )}
-            >
-              {idleLabel}
-            </button>
-          </div>
-          <div className="space-y-2 border-t border-line pt-3">
-            <p className="font-medium">Idle cleanup</p>
-            <label className="flex items-center gap-2 text-muted">
-              <input
-                type="checkbox"
-                checked={idle.enabled}
-                onChange={(e) => {
-                  const next = { ...idle, enabled: e.target.checked };
-                  setIdle(next);
-                  void putIdleCleanupSettings(next).then(() => refresh());
-                }}
-                className="h-4 w-4 rounded border-line"
-              />
-              Include Applied applications with no update
-            </label>
-            <label className="flex items-center gap-2 text-muted">
-              After
-              <input
-                type="number"
-                min={1}
-                max={365}
-                value={idle.idle_days}
-                onChange={(e) => {
-                  const next = {
-                    ...idle,
-                    idle_days: Math.max(1, Math.min(365, Number(e.target.value) || 14)),
-                  };
-                  setIdle(next);
-                  void putIdleCleanupSettings(next).then(() => refresh());
-                }}
-                className="h-9 w-20 rounded-lg border border-line bg-bg px-2 text-sm text-ink"
-              />
-              days. Interview and Offer never appear here. Close selected is manual.
-            </label>
-          </div>
-          {staleOnly && (
-            <p className="text-xs text-muted">
-              Exempt applications stay out of {idleLabel}. Use More on a row in the workspace to exclude from idle cleanup.
-            </p>
-          )}
+      <div className={cn("mb-4", styles.toolbar)}>
+        <div className={styles.searchGroup}>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search role, employer, location…"
+            className={cn(
+              "h-9 rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm",
+              styles.search,
+            )}
+          />
         </div>
-      )}
+        <div className={styles.filters}>
+          <PopoverSelect
+            value={stageFilter}
+            onChange={(v) => setStageFilter(v as ApplicationStage | "all")}
+            aria-label="Stage"
+            className="h-9 w-36"
+            options={[
+              { value: "all", label: "All stages" },
+              ...(board === "closed" ? (["closed"] as ApplicationStage[]) : OPEN_STAGES).map(
+                (s) => ({
+                  value: s,
+                  label: s[0].toUpperCase() + s.slice(1),
+                }),
+              ),
+            ]}
+          />
+          <PopoverSelect
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            aria-label="Source"
+            className="h-9 w-40"
+            options={[
+              { value: "", label: "All sources" },
+              ...sources.map((s) => ({ value: s, label: s })),
+            ]}
+          />
+        </div>
+        <div className={styles.actions}>
+          {staleOnly && selected.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void onCloseSelected()}
+              className="h-9 whitespace-nowrap rounded-lg border border-ink bg-ink px-3 text-sm text-white"
+            >
+              Close selected ({selected.length})
+            </button>
+          )}
+          <span className={cn("text-sm text-muted", styles.count)}>{visible.length} shown</span>
+          <ApplicationViewOptions
+            board={board}
+            staleOnly={staleOnly}
+            idle={idle}
+            idleLabel={idleLabel}
+            availableTags={availableTags}
+            selectedTags={selectedTags}
+            onOpen={() => {
+              setBoard("open");
+              setStaleOnly(false);
+              setStageFilter("all");
+            }}
+            onClosed={() => {
+              setBoard("closed");
+              setStaleOnly(false);
+              setStageFilter("all");
+            }}
+            onStale={() => {
+              setBoard("open");
+              setStaleOnly(true);
+              setStageFilter("all");
+            }}
+            onIdleChange={(next) => {
+              setIdle(next);
+              void putIdleCleanupSettings(next).then(() => refresh());
+            }}
+            onToggleTag={(tag) =>
+              setSelectedTags((current) =>
+                current.includes(tag)
+                  ? current.filter((item) => item !== tag)
+                  : [...current, tag],
+              )
+            }
+          />
+          <ExportMenu count={apps.length} />
+        </div>
+      </div>
 
       {(board !== "open" || staleOnly) && (
         <p className="mb-3 text-xs text-muted">
           {board === "closed" ? "Viewing closed history." : `Viewing ${idleLabel}.`}
+          {staleOnly
+            ? ` Exempt applications stay out of ${idleLabel}. Use More in the application drawer to exclude from idle cleanup.`
+            : ""}
           <button
             type="button"
             className="ml-2 underline"
@@ -475,6 +559,18 @@ export default function ApplicationsPage() {
         rows={visible}
         columns={columns}
         getRowKey={(a) => a.id}
+        tableClassName={styles.table}
+        colGroup={
+          <colgroup>
+            <col className={styles.selectColumn} />
+            <col className={styles.roleColumn} />
+            <col className={styles.stageColumn} />
+            <col className={styles.nextStepColumn} />
+            <col className={styles.appliedColumn} />
+            <col className={styles.materialsColumn} />
+            <col className={styles.actionsColumn} />
+          </colgroup>
+        }
         initialSortKey="title"
         initialSortDir="asc"
         empty={
@@ -482,35 +578,82 @@ export default function ApplicationsPage() {
             <div className="max-w-xs space-y-1">
               <CardTitle>No applications</CardTitle>
               <CardSub>
-                Start an application from Discover. Search results cannot create a draft on their own.
+                Add an opportunity you found, or start an application from Discover.
               </CardSub>
+              <button
+                type="button"
+                onClick={openAdd}
+                className="mt-3 h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white"
+              >
+                Add application
+              </button>
             </div>
           </Card>
         }
       />
 
-      {active && (
-        <div className="mt-2">
-          <div className="mb-2 flex items-start justify-end gap-3">
-            <details className="text-xs text-muted">
-              <summary className="cursor-pointer hover:text-ink">More</summary>
-              <button
-                type="button"
-                onClick={() =>
-                  void updateApplication(active.id, {
-                    exclude_from_idle: !active.exclude_from_idle,
-                  }).then(() => refresh())
-                }
-                className="mt-2 block text-left hover:text-ink"
-              >
-                {active.exclude_from_idle ? "Include in idle cleanup" : "Exclude from idle cleanup"}
+      {activeId && (
+        <ApplicationDrawer
+          requestedApp={requestedApp}
+          requestedTab={activeTab}
+          loading={fetching && !requestedApp}
+          missing={!fetching && !requestedApp}
+          onClose={closeDrawer}
+          onStay={(id) => {
+            setActiveId(id);
+            replaceAppQuery(id, activeTab);
+          }}
+          onTabChange={(tab) => {
+            setActiveTab(tab);
+            if (activeId) replaceAppQuery(activeId, tab);
+          }}
+          onChanged={() => void refresh()}
+          onSubmitRequest={(id) => setSubmitId(id)}
+          onToggleIdleExempt={(app) =>
+            void updateApplication(app.id, { exclude_from_idle: !app.exclude_from_idle }).then(() => refresh())
+          }
+          knownTags={knownTags}
+        />
+      )}
+
+      {submitId && submitApp && (
+        <SubmitConfirm
+          app={submitApp}
+          onClose={() => setSubmitId(null)}
+          onDone={() => {
+            setSubmitId(null);
+            void refresh();
+          }}
+        />
+      )}
+
+      {addOpen && <AddApplicationDialog onClose={closeAdd} onCreated={showCreated} />}
+
+      {createdToast && (
+        <div
+          role="status"
+          className="fixed bottom-5 right-5 z-[120] max-w-sm rounded-xl border border-line bg-surface px-4 py-3 text-sm text-ink shadow-xl"
+        >
+          <div className="flex items-center gap-3">
+            <span>
+              {createdToast.hidden
+                ? "Draft created. Hidden by current filters."
+                : "Draft created."}
+            </span>
+            {createdToast.hidden && (
+              <button type="button" onClick={showCreatedInList} className="font-medium underline">
+                Show in list
               </button>
-            </details>
-            <button type="button" onClick={() => setActiveId(null)} className="text-xs text-muted">
-              Close
+            )}
+            <button
+              type="button"
+              aria-label="Dismiss Draft created message"
+              onClick={() => setCreatedToast(null)}
+              className="text-muted"
+            >
+              ×
             </button>
           </div>
-          <ApplicationWorkspace app={active} tab={tab} onTab={setTab} onChanged={() => void refresh()} />
         </div>
       )}
     </div>

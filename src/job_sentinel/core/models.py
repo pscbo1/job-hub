@@ -84,8 +84,36 @@ CLOSE_REASON_LABELS_ZH: dict[CloseReason, str] = {
 }
 
 
+class TaskReminderKind(StrEnum):
+    """In-app reminder node on a due-dated job_task. Not email or Job DDL."""
+
+    ADVANCE = "advance"
+    DUE = "due"
+
+
+class TaskReminder(BaseModel):
+    """One calendar-date reminder for a task + due-date cycle."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    task_id: str = Field(..., min_length=1)
+    due_date: date
+    reminder_on: date
+    kind: TaskReminderKind = TaskReminderKind.ADVANCE
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    in_app_triggered_at: datetime | None = None
+    in_app_skipped_at: datetime | None = None
+    read_at: datetime | None = None
+
+    model_config = {"frozen": False}
+
+
 class JobTask(BaseModel):
-    """Checklist item on a Job (OA, interview prep). Not an Application stage."""
+    """Checklist item on a Job (OA, interview prep). Not an Application stage.
+
+    One ``job_tasks`` row can appear on Tasks and on a linked Application.
+    Completing a task does not Mark submitted or change Application stage.
+    """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     job_id: str = Field(..., min_length=1)
@@ -94,6 +122,10 @@ class JobTask(BaseModel):
     done: bool = Field(default=False)
     sort_order: int = Field(default=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    application_id: str | None = Field(default=None)
+    notes: str | None = Field(default=None)
+    source_url: str | None = Field(default=None)
+    reminders: list[TaskReminder] = Field(default_factory=list)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -107,7 +139,35 @@ class JobTask(BaseModel):
             return None
         return v
 
+    @field_validator("application_id", "notes", "source_url", mode="before")
+    @classmethod
+    def _blank_optional(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
+
     model_config = {"frozen": False}
+
+
+class ApplicationCommNote(BaseModel):
+    """Lightweight communication note. Not a CRM timeline and never auto-sent.
+
+    ``created_at`` is the occurred-at time and is never rewritten on Cancel Draft.
+    ``job_id`` keeps the note visible from the Job after the Application is gone.
+    """
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    application_id: str | None = Field(default=None)
+    job_id: str | None = Field(default=None)
+    body: str = Field(default="")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("application_id", "job_id", mode="before")
+    @classmethod
+    def _blank_optional_id(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
 
 
 def compute_job_fingerprint(company: str, title: str, location: str) -> str:
@@ -249,6 +309,10 @@ class Job(BaseModel):
     source_job_id: str = Field(default="")
     job_url: str = Field(default="")
     canonical_url: str = Field(default="")
+    source_note: str = Field(
+        default="",
+        description="User-provided source context for manually added opportunities.",
+    )
     title: str = Field(default="")
     company: str = Field(default="")
     location: str = Field(default="")
@@ -270,6 +334,10 @@ class Job(BaseModel):
         description="Independent keep-aside. Can coexist with Save and Application.",
     )
     comment: str = Field(default="")
+    contact: str = Field(
+        default="",
+        description="Leftover Application contact after Cancel Draft. Never merged with comment.",
+    )
     next_step: str = Field(default="")
     deadline: datetime | None = Field(default=None)
     follow_up_at: datetime | None = Field(default=None)
@@ -282,6 +350,10 @@ class Job(BaseModel):
         description="Last user tracking or task edit. Collectors never bump this.",
     )
     tasks: list[JobTask] = Field(default_factory=list)
+    comm_notes: list[ApplicationCommNote] = Field(
+        default_factory=list,
+        description="Job-scoped communication notes, including leftover cancelled-draft notes.",
+    )
     match_score: float | None = Field(default=None)
     market: str = Field(
         default="",
@@ -415,6 +487,7 @@ class PacketSnapshotItem(BaseModel):
     version_label: str = Field(default="")
     original_filename: str = Field(default="")
     file_ref: str = Field(default="")
+    snapshot_file_ref: str = Field(default="")
     url: str = Field(default="")
     material_purpose: list[str] = Field(default_factory=list)
     version_purpose: list[str] = Field(default_factory=list)
@@ -440,6 +513,7 @@ class ApplicationSubmission(BaseModel):
     channel: str = Field(default="")
     packet_snapshot: PacketSnapshot = Field(default_factory=PacketSnapshot)
     notes: str = Field(default="")
+    idempotency_key: str = Field(default="")
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -471,6 +545,14 @@ class Application(BaseModel):
     applied_date: str = Field(default="")
     deadline: str = Field(default="")
     notes: str = Field(default="")
+    contact: str = Field(
+        default="",
+        description="Optional free-text contact (name, email, WeChat, or a link). Not required.",
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Optional free-text direction tags. Not a taxonomy.",
+    )
     close_reason: CloseReason | None = Field(default=None)
     close_note: str = Field(default="")
     posting_id: str | None = Field(default=None)
@@ -480,6 +562,11 @@ class Application(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     raw_data: dict[str, Any] = Field(default_factory=dict)
     submissions: list[ApplicationSubmission] = Field(default_factory=list)
+    current_material_count: int = Field(
+        default=0,
+        description="Count of current application↔material bindings (not history).",
+    )
+    comm_notes: list[ApplicationCommNote] = Field(default_factory=list)
     exclude_from_idle: bool = Field(
         default=False,
         description="Manual exemption from idle / no-update cleanup.",
@@ -487,6 +574,30 @@ class Application(BaseModel):
     stale_applied: bool = Field(
         default=False,
         description="Computed: Applied with no meaningful update for N days.",
+    )
+    next_step: str = Field(
+        default="",
+        description="Job.next_step projection for Applications list/detail. Not stored.",
+    )
+    job_deadline: str = Field(
+        default="",
+        description="Job.deadline (ISO date) projection. Distinct from Application.deadline.",
+    )
+    job_description: str = Field(
+        default="",
+        description="Job.description projection. Empty means the full JD was not saved.",
+    )
+    job_comment: str = Field(
+        default="",
+        description="Job.comment projection (Research notes). Never merged with Application.notes.",
+    )
+    apply_url: str = Field(
+        default="",
+        description="Existing apply URL when present in stored ingest payload. Never inferred.",
+    )
+    job_url: str = Field(
+        default="",
+        description="Job.job_url or canonical_url projection for Open source. Not stored.",
     )
 
     @model_validator(mode="before")
@@ -545,13 +656,32 @@ class Application(BaseModel):
 
 
 class MaterialKind(StrEnum):
-    """Library kinds for file materials. Knowledge kinds are Part 3."""
+    """Library kinds. File kinds live under Materials → Files; Knowledge under Knowledge."""
 
     RESUME = "resume"
     COVER_LETTER = "cover_letter"
     PORTFOLIO = "portfolio"
     TRANSCRIPT = "transcript"
     OTHER = "other"
+    MESSAGE_TEMPLATE = "message_template"
+    APPLICATION_ANSWER = "application_answer"
+
+
+FILE_MATERIAL_KINDS = frozenset(
+    {
+        MaterialKind.RESUME.value,
+        MaterialKind.COVER_LETTER.value,
+        MaterialKind.PORTFOLIO.value,
+        MaterialKind.TRANSCRIPT.value,
+        MaterialKind.OTHER.value,
+    }
+)
+KNOWLEDGE_MATERIAL_KINDS = frozenset(
+    {
+        MaterialKind.MESSAGE_TEMPLATE.value,
+        MaterialKind.APPLICATION_ANSWER.value,
+    }
+)
 
 
 class MaterialVersion(BaseModel):
@@ -568,6 +698,10 @@ class MaterialVersion(BaseModel):
     byte_size: int = Field(default=0, ge=0)
     url: str = Field(default="")
     notes: str = Field(default="")
+    text: str = Field(
+        default="",
+        description="Loaded markdown body for Knowledge versions (content.md). Not a DB column.",
+    )
     archived_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 

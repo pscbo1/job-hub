@@ -8,6 +8,7 @@
  */
 
 import * as demo from "@/lib/demo";
+import { uniqueApplicationTags } from "@/lib/applicationTags";
 import { parseMarketId, sourceInMarket } from "@/lib/markets";
 import type { CommonSearchFilters, SearchPreset } from "@/lib/searchCapabilities";
 import { jobBelongsOnTasks } from "@/lib/taskBoard";
@@ -178,6 +179,19 @@ export function getProfile(): Promise<Profile | null> {
 export type JobEngagement = "reference" | "under_study" | "to_do";
 export type HubJobStatus = JobEngagement;
 
+export interface TaskReminder {
+  id: string;
+  task_id: string;
+  due_date: string;
+  reminder_on: string;
+  kind: "advance" | "due";
+  enabled: boolean;
+  created_at: string;
+  in_app_triggered_at?: string | null;
+  in_app_skipped_at?: string | null;
+  read_at?: string | null;
+}
+
 export interface JobTask {
   id: string;
   job_id: string;
@@ -186,6 +200,19 @@ export interface JobTask {
   done: boolean;
   sort_order: number;
   created_at: string;
+  application_id?: string | null;
+  notes?: string | null;
+  source_url?: string | null;
+  reminders?: TaskReminder[];
+}
+
+export interface JobTaskCreateBody {
+  title: string;
+  due_at?: string | null;
+  notes?: string | null;
+  source_url?: string | null;
+  application_id?: string | null;
+  reminders?: string[] | null;
 }
 
 export interface JobTaskPatch {
@@ -193,6 +220,9 @@ export interface JobTaskPatch {
   due_at?: string | null;
   done?: boolean;
   sort_order?: number;
+  notes?: string | null;
+  source_url?: string | null;
+  reminders?: string[] | null;
 }
 
 export interface HubJob {
@@ -201,6 +231,7 @@ export interface HubJob {
   company: string;
   location: string;
   source: string;
+  source_note?: string;
   job_url: string;
   published_at: string | null;
   discovered_at: string;
@@ -209,6 +240,7 @@ export interface HubJob {
   favorite?: boolean;
   reference?: boolean;
   comment?: string;
+  contact?: string;
   next_step?: string;
   deadline?: string | null;
   follow_up_at?: string | null;
@@ -217,6 +249,7 @@ export interface HubJob {
   application_id?: string | null;
   last_activity_at?: string | null;
   tasks?: JobTask[];
+  comm_notes?: ApplicationCommNote[];
   match_score: number | null;
   salary?: string;
   description?: string;
@@ -287,7 +320,7 @@ export function getJobs(
     if (query.hasDraft === true) {
       rows = [];
     }
-    return Promise.resolve(rows.slice(0, limit));
+    return Promise.resolve(rows.slice(0, limit).map(withDemoCommNotes));
   }
   const q = new URLSearchParams({ limit: String(limit), filter_state: filterState });
   if (since) q.set("since", since);
@@ -355,6 +388,12 @@ export async function patchHubJob(
       tasks: current.tasks,
     };
     Object.assign(current, next);
+    for (const row of demo.demoApplications) {
+      if (row.job_id !== jobId) continue;
+      if (body.next_step !== undefined) row.next_step = body.next_step;
+      if (body.deadline !== undefined) row.job_deadline = body.deadline ?? "";
+      if (body.comment !== undefined) row.job_comment = body.comment;
+    }
     return next;
   }
   try {
@@ -483,7 +522,14 @@ export async function putIdleCleanupSettings(
   }
 }
 
-export type MaterialKind = "resume" | "cover_letter" | "portfolio" | "transcript" | "other";
+export type MaterialKind =
+  | "resume"
+  | "cover_letter"
+  | "portfolio"
+  | "transcript"
+  | "other"
+  | "message_template"
+  | "application_answer";
 
 export interface MaterialVersion {
   id: string;
@@ -497,6 +543,7 @@ export interface MaterialVersion {
   byte_size: number;
   url: string;
   notes: string;
+  text?: string;
   archived_at?: string | null;
   created_at: string;
   display_label?: string;
@@ -537,6 +584,16 @@ export function getMaterials(includeArchived = false): Promise<Material[]> {
   return getJSON<Material[]>(`/api/materials${q}`, []);
 }
 
+export async function getMaterial(id: string, includeArchived = true): Promise<Material | null> {
+  if (demo.DEMO) {
+    return demo.demoMaterials.find((m) => m.id === id) ?? null;
+  }
+  return getJSON<Material | null>(
+    `/api/materials/${encodeURIComponent(id)}?include_archived=${includeArchived ? "true" : "false"}`,
+    null,
+  );
+}
+
 export async function createMaterial(body: {
   title: string;
   kind?: string;
@@ -546,6 +603,7 @@ export async function createMaterial(body: {
   version_label?: string;
   version_purpose?: string[];
   version_notes?: string;
+  content?: string;
 }): Promise<Material | null> {
   if (demo.DEMO) {
     const created = demo.makeDemoMaterial(body);
@@ -629,7 +687,7 @@ export async function archiveMaterial(id: string, restore = false): Promise<Mate
 
 export async function addMaterialVersion(
   materialId: string,
-  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string },
+  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string; content?: string },
 ): Promise<MaterialVersion | null> {
   if (demo.DEMO) {
     const found = demo.demoMaterials.find((m) => m.id === materialId);
@@ -678,13 +736,34 @@ export function materialVersionFileUrl(versionId: string): string {
   return `${API_BASE}/api/material-versions/${encodeURIComponent(versionId)}/file`;
 }
 
+export function submissionSnapshotFileUrl(appId: string, submissionId: string, index: number): string {
+  return `${API_BASE}/api/applications/${encodeURIComponent(appId)}/submissions/${encodeURIComponent(submissionId)}/items/${index}/file`;
+}
+
 export async function getPacket(appId: string): Promise<PacketItem[]> {
-  if (demo.DEMO) return demo.demoPacketFor(appId);
-  const data = await getJSON<{ items: PacketItem[] }>(
-    `/api/applications/${encodeURIComponent(appId)}/packet`,
-    { items: [] },
-  );
-  return data.items;
+  const result = await loadPacket(appId);
+  return result.ok ? result.items : [];
+}
+
+/** Distinguish empty packet from fetch failure (DBG-02 Retry vs empty). */
+export async function loadPacket(
+  appId: string,
+  signal?: AbortSignal,
+): Promise<{ ok: true; items: PacketItem[] } | { ok: false }> {
+  if (demo.DEMO) return { ok: true, items: demo.demoPacketFor(appId) };
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet`, {
+      cache: "no-store",
+      headers: authHeaders(),
+      signal,
+    });
+    if (!res.ok) return { ok: false };
+    const data = (await res.json()) as { items?: PacketItem[] };
+    return { ok: true, items: data.items ?? [] };
+  } catch {
+    if (signal?.aborted) return { ok: false };
+    return { ok: false };
+  }
 }
 
 export async function replacePacket(appId: string, versionIds: string[]): Promise<PacketItem[]> {
@@ -703,6 +782,27 @@ export async function replacePacket(appId: string, versionIds: string[]): Promis
     return data.items;
   } catch {
     return [];
+  }
+}
+
+export async function addPacketBinding(appId: string, versionId: string): Promise<boolean> {
+  if (demo.DEMO) {
+    const current = demo.demoPacketFor(appId).map((item) => item.binding.material_version_id);
+    if (!current.includes(versionId)) demo.setDemoPacket(appId, [...current, versionId]);
+    return true;
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/packet/bindings`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ material_version_id: versionId }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -750,9 +850,129 @@ function demoJobById(jobId: string): HubJob | undefined {
   return demo.demoHubJobs.find((j) => j.id === jobId);
 }
 
+function withDemoCommNotes(job: HubJob): HubJob {
+  return {
+    ...job,
+    comm_notes: demo.listDemoCommNotesForJob(job.id),
+    contact: demo.leftoverDemoJobContact(job.id) || job.contact || "",
+  };
+}
+
+export async function listJobCommNotes(jobId: string): Promise<ApplicationCommNote[]> {
+  if (demo.DEMO) return demo.listDemoCommNotesForJob(jobId);
+  return getJSON<ApplicationCommNote[]>(
+    `/api/jobs/${encodeURIComponent(jobId)}/comm-notes`,
+    [],
+  );
+}
+
+export function leftoverJobContact(jobId: string, initial = ""): string {
+  if (demo.DEMO) return demo.leftoverDemoJobContact(jobId) || initial;
+  return initial;
+}
+
+export function getHubJob(jobId: string): Promise<HubJob | null> {
+  if (demo.DEMO) {
+    return Promise.resolve(demoJobById(jobId) ?? null);
+  }
+  return getJSON<HubJob | null>(`/api/jobs/${encodeURIComponent(jobId)}`, null);
+}
+
+export type ReminderInboxView = "unread" | "all";
+
+export interface ReminderInboxItem {
+  id: string;
+  task_id: string;
+  job_id: string;
+  task_title: string;
+  job_title: string;
+  company: string;
+  reminder_on: string;
+  due_date: string;
+  kind: "advance" | "due";
+  due_status: "upcoming" | "due_today" | "overdue";
+  read_at?: string | null;
+  in_app_triggered_at?: string | null;
+  market?: string;
+}
+
+export interface ReminderInbox {
+  items: ReminderInboxItem[];
+  unread_count: number;
+  total: number;
+  today: string;
+  tz: string;
+}
+
+function notifyRemindersChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event("job-hub:reminders-refresh"));
+}
+
+export async function syncReminders(): Promise<ReminderInbox["today"] | null> {
+  if (demo.DEMO) return todayFallback();
+  try {
+    const res = await fetch(`${API_BASE}/api/reminders/sync`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { today?: string };
+    return body.today ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function todayFallback(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function listReminders(query: {
+  view?: ReminderInboxView;
+  market?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<ReminderInbox> {
+  const empty: ReminderInbox = {
+    items: [],
+    unread_count: 0,
+    total: 0,
+    today: todayFallback(),
+    tz: "Asia/Shanghai",
+  };
+  if (demo.DEMO) return empty;
+  const q = new URLSearchParams({ view: query.view ?? "unread" });
+  if (query.market) q.set("market", query.market);
+  if (query.limit) q.set("limit", String(query.limit));
+  if (query.offset) q.set("offset", String(query.offset));
+  return getJSON<ReminderInbox>(`/api/reminders?${q.toString()}`, empty);
+}
+
+export async function markReminderRead(reminderId: string): Promise<TaskReminder | null> {
+  if (demo.DEMO) return null;
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/reminders/${encodeURIComponent(reminderId)}/read`,
+      { method: "PATCH", headers: authHeaders() },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as TaskReminder;
+  } catch {
+    return null;
+  }
+}
+
+export async function listJobTasks(jobId: string): Promise<JobTask[]> {
+  if (demo.DEMO) {
+    return demoJobById(jobId)?.tasks ?? [];
+  }
+  return getJSON<JobTask[]>(`/api/jobs/${encodeURIComponent(jobId)}/tasks`, []);
+}
+
 export async function createJobTask(
   jobId: string,
-  body: { title: string; due_at?: string | null },
+  body: JobTaskCreateBody,
 ): Promise<JobTask | null> {
   if (demo.DEMO) {
     const job = demoJobById(jobId);
@@ -764,8 +984,21 @@ export async function createJobTask(
       done: false,
       sort_order: job?.tasks?.length ?? 0,
       created_at: new Date().toISOString(),
+      notes: body.notes ?? null,
+      source_url: body.source_url ?? null,
+      application_id: body.application_id ?? null,
+      reminders: (body.reminders ?? []).map((day) => ({
+        id: `demo-rem-${day}`,
+        task_id: `demo-task-${Date.now()}`,
+        due_date: body.due_at ?? day,
+        reminder_on: day,
+        kind: day === (body.due_at ?? "") ? ("due" as const) : ("advance" as const),
+        enabled: true,
+        created_at: new Date().toISOString(),
+      })),
     };
     if (job) job.tasks = [...(job.tasks ?? []), created];
+    notifyRemindersChanged();
     return created;
   }
   try {
@@ -775,7 +1008,9 @@ export async function createJobTask(
       body: JSON.stringify(body),
     });
     if (!res.ok) return null;
-    return (await res.json()) as JobTask;
+    const created = (await res.json()) as JobTask;
+    notifyRemindersChanged();
+    return created;
   } catch {
     return null;
   }
@@ -796,8 +1031,11 @@ export async function patchJobTask(
       due_at: patch.due_at !== undefined ? patch.due_at : current.due_at,
       done: patch.done ?? current.done,
       sort_order: patch.sort_order ?? current.sort_order,
+      notes: patch.notes !== undefined ? patch.notes : current.notes,
+      source_url: patch.source_url !== undefined ? patch.source_url : current.source_url,
     };
     if (job) job.tasks = (job.tasks ?? []).map((t) => (t.id === taskId ? saved : t));
+    notifyRemindersChanged();
     return saved;
   }
   try {
@@ -810,7 +1048,9 @@ export async function patchJobTask(
       },
     );
     if (!res.ok) return null;
-    return (await res.json()) as JobTask;
+    const saved = (await res.json()) as JobTask;
+    notifyRemindersChanged();
+    return saved;
   } catch {
     return null;
   }
@@ -820,6 +1060,7 @@ export async function deleteJobTask(jobId: string, taskId: string): Promise<bool
   if (demo.DEMO) {
     const job = demoJobById(jobId);
     if (job) job.tasks = (job.tasks ?? []).filter((t) => t.id !== taskId);
+    notifyRemindersChanged();
     return true;
   }
   try {
@@ -827,6 +1068,7 @@ export async function deleteJobTask(jobId: string, taskId: string): Promise<bool
       `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`,
       { method: "DELETE", headers: authHeaders() },
     );
+    if (res.ok) notifyRemindersChanged();
     return res.ok;
   } catch {
     return false;
@@ -1303,6 +1545,7 @@ export interface PacketSnapshotItem {
   version_label: string;
   original_filename: string;
   file_ref: string;
+  snapshot_file_ref?: string;
   url: string;
   material_purpose: string[];
   version_purpose: string[];
@@ -1322,6 +1565,15 @@ export interface ApplicationSubmission {
     note: string;
   };
   notes: string;
+  idempotency_key?: string;
+}
+
+export interface ApplicationCommNote {
+  id: string;
+  application_id?: string | null;
+  job_id?: string | null;
+  body: string;
+  created_at: string;
 }
 
 export interface Application {
@@ -1337,6 +1589,10 @@ export interface Application {
   applied_date: string;
   deadline: string;
   notes: string;
+  /** Optional free-text contact. Empty is allowed. Not required to mark submitted. */
+  contact?: string;
+  /** Optional free-text direction tags. Not shown as a list column. */
+  tags?: string[];
   close_reason?: CloseReason | null;
   close_note?: string;
   stale_applied?: boolean;
@@ -1347,6 +1603,19 @@ export interface Application {
   updated_at: string;
   raw_data: Record<string, unknown>;
   submissions?: ApplicationSubmission[];
+  current_material_count?: number;
+  comm_notes?: ApplicationCommNote[];
+  /** Job.next_step projection. Not stored on the application row. */
+  next_step?: string;
+  /** Job.deadline (YYYY-MM-DD). Distinct from Application.deadline. */
+  job_deadline?: string;
+  job_description?: string;
+  /** Job.comment (research notes). Never merged with Application.notes. */
+  job_comment?: string;
+  /** Stored apply URL from ingest payload when present. Never inferred. */
+  apply_url?: string;
+  /** Job.job_url / canonical_url projection for Open source. */
+  job_url?: string;
 }
 
 export interface ApplicationCreateBody {
@@ -1365,9 +1634,107 @@ export interface ApplicationCreateBody {
   resume_document_id?: string | null;
 }
 
+export interface ManualApplicationCreateBody {
+  request_id: string;
+  title: string;
+  company: string;
+  job_url?: string;
+  location?: string;
+  source_note?: string;
+  market?: "cn" | "en";
+  create_separately?: boolean;
+}
+
+export interface ManualApplicationDuplicate {
+  job: Pick<HubJob, "id" | "title" | "company" | "location" | "job_url" | "market">;
+  application: { id: string; stage: ApplicationStage; deleted: boolean } | null;
+}
+
+export type ManualApplicationCreateResult =
+  | {
+      ok: true;
+      job: HubJob;
+      application: Application;
+      replayed: boolean;
+    }
+  | { ok: false; kind: "validation"; fields: Record<string, string> }
+  | { ok: false; kind: "duplicate"; duplicate: ManualApplicationDuplicate }
+  | { ok: false; kind: "cancelled" }
+  | { ok: false; kind: "network"; message: string };
+
+export async function createManualApplication(
+  body: ManualApplicationCreateBody,
+): Promise<ManualApplicationCreateResult> {
+  try {
+    const response = await fetch(`${API_BASE}/api/applications/manual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      job?: HubJob | null;
+      application?: Application | null;
+      replayed?: boolean;
+      cancelled?: boolean;
+      detail?:
+        | string
+        | {
+            code?: string;
+            message?: string;
+            duplicate_candidate?: ManualApplicationDuplicate | null;
+          }
+        | Array<{ loc?: Array<string | number>; msg?: string }>;
+    };
+    if (response.ok && payload.cancelled) return { ok: false, kind: "cancelled" };
+    if (response.ok && payload.job && payload.application) {
+      return {
+        ok: true,
+        job: payload.job,
+        application: payload.application,
+        replayed: payload.replayed === true,
+      };
+    }
+    if (
+      response.status === 409 &&
+      !Array.isArray(payload.detail) &&
+      typeof payload.detail === "object" &&
+      payload.detail?.code === "duplicate_candidate" &&
+      payload.detail.duplicate_candidate
+    ) {
+      return {
+        ok: false,
+        kind: "duplicate",
+        duplicate: payload.detail.duplicate_candidate,
+      };
+    }
+    if (response.status === 422 && Array.isArray(payload.detail)) {
+      const fields: Record<string, string> = {};
+      for (const issue of payload.detail) {
+        const field = String(issue.loc?.at(-1) ?? "form");
+        if (!fields[field]) fields[field] = issue.msg ?? "Check this field";
+      }
+      return { ok: false, kind: "validation", fields };
+    }
+    const detail = typeof payload.detail === "string" ? payload.detail : "";
+    return {
+      ok: false,
+      kind: "network",
+      message: detail || `Could not create draft (${response.status})`,
+    };
+  } catch {
+    return {
+      ok: false,
+      kind: "network",
+      message: "Could not reach the local API. Your draft was not created.",
+    };
+  }
+}
+
 export interface ApplicationPatch {
   stage?: ApplicationStage;
   notes?: string;
+  contact?: string;
+  tags?: string[];
   applied_date?: string;
   deadline?: string;
   salary?: string;
@@ -1404,7 +1771,7 @@ export interface GeneratedDocument {
 export function getApplications(
   stage?: ApplicationStage,
   limit = 200,
-  query: { view?: "open" | "closed" | "all"; staleApplied?: boolean } = {},
+  query: { view?: "open" | "closed" | "all"; staleApplied?: boolean; tag?: string } = {},
 ): Promise<Application[]> {
   if (demo.DEMO) {
     let rows = demo.demoApplications;
@@ -1417,6 +1784,12 @@ export function getApplications(
     if (query.staleApplied) {
       rows = rows.filter((a) => a.stale_applied && !a.exclude_from_idle && a.stage === "applied");
     }
+    if (query.tag) {
+      const wanted = query.tag;
+      rows = rows.filter((a) =>
+        (a.tags ?? []).some((tag) => tag.toLowerCase() === wanted.toLowerCase()),
+      );
+    }
     return Promise.resolve(rows);
   }
   const params = new URLSearchParams();
@@ -1424,7 +1797,14 @@ export function getApplications(
   params.set("limit", String(limit));
   if (query.view && query.view !== "all") params.set("view", query.view);
   if (query.staleApplied) params.set("stale_applied", "true");
+  if (query.tag) params.set("tag", query.tag);
   return getJSON<Application[]>(`/api/applications?${params}`, []);
+}
+
+export async function listApplicationTags(): Promise<string[]> {
+  if (demo.DEMO) return uniqueApplicationTags(demo.demoApplications);
+  const payload = await getJSON<{ tags: string[] }>("/api/applications/tags", { tags: [] });
+  return payload.tags ?? [];
 }
 
 /** Create a new tracked application (from a posting or manually). */
@@ -1455,6 +1835,9 @@ export async function createApplication(body: ApplicationCreateBody): Promise<Ap
 
 /** Fetch a single application by id. */
 export function getApplication(id: string): Promise<Application | null> {
+  if (demo.DEMO) {
+    return Promise.resolve(demo.demoApplications.find((row) => row.id === id) ?? null);
+  }
   return getJSON<Application | null>(`/api/applications/${encodeURIComponent(id)}`, null);
 }
 
@@ -1482,12 +1865,22 @@ export async function updateApplication(
   }
 }
 
+export type SubmitResult =
+  | { ok: true; application: Application }
+  | { ok: false; code: string; message: string };
+
 export async function submitApplication(
   id: string,
-  body: { channel?: string; notes?: string } = {},
-): Promise<Application | null> {
+  body: {
+    channel?: string;
+    notes?: string;
+    confirm_empty?: boolean;
+    expected_version_ids?: string[] | null;
+    idempotency_key?: string;
+  } = {},
+): Promise<SubmitResult> {
   if (demo.DEMO) {
-    return Promise.resolve(demo.recordDemoSubmission(id, body.notes ?? ""));
+    return demo.recordDemoSubmissionResult(id, body);
   }
   try {
     const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/submit`, {
@@ -1495,10 +1888,75 @@ export async function submitApplication(
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(body),
     });
+    if (res.ok) {
+      return { ok: true, application: (await res.json()) as Application };
+    }
+    const payload = (await res.json().catch(() => null)) as
+      | { detail?: string | { code?: string; message?: string } }
+      | null;
+    const detail = payload?.detail;
+    if (detail && typeof detail === "object") {
+      return {
+        ok: false,
+        code: detail.code || "error",
+        message: detail.message || "Could not record submission",
+      };
+    }
+    return { ok: false, code: "error", message: typeof detail === "string" ? detail : "Could not record submission" };
+  } catch {
+    return { ok: false, code: "error", message: "Could not record submission" };
+  }
+}
+
+export async function listCommNotes(appId: string): Promise<ApplicationCommNote[]> {
+  const result = await loadCommNotes(appId);
+  return result.ok ? result.notes : [];
+}
+
+export async function loadCommNotes(
+  appId: string,
+  signal?: AbortSignal,
+): Promise<{ ok: true; notes: ApplicationCommNote[] } | { ok: false }> {
+  if (demo.DEMO) return { ok: true, notes: demo.listDemoCommNotes(appId) };
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/comm-notes`,
+      { cache: "no-store", headers: authHeaders(), signal },
+    );
+    if (!res.ok) return { ok: false };
+    const data = (await res.json()) as ApplicationCommNote[];
+    return { ok: true, notes: Array.isArray(data) ? data : [] };
+  } catch {
+    if (signal?.aborted) return { ok: false };
+    return { ok: false };
+  }
+}
+
+export async function addCommNote(appId: string, body: string): Promise<ApplicationCommNote | null> {
+  if (demo.DEMO) return demo.addDemoCommNote(appId, body);
+  try {
+    const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(appId)}/comm-notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ body }),
+    });
     if (!res.ok) return null;
-    return (await res.json()) as Application;
+    return (await res.json()) as ApplicationCommNote;
   } catch {
     return null;
+  }
+}
+
+export async function deleteCommNote(appId: string, noteId: string): Promise<boolean> {
+  if (demo.DEMO) return demo.deleteDemoCommNote(appId, noteId);
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/comm-notes/${encodeURIComponent(noteId)}`,
+      { method: "DELETE", headers: { ...authHeaders() } },
+    );
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -1525,7 +1983,7 @@ export async function closeApplication(
 }
 
 export async function abandonApplication(id: string): Promise<boolean> {
-  if (demo.DEMO) return true;
+  if (demo.DEMO) return demo.abandonDemoApplication(id);
   try {
     const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/abandon`, {
       method: "POST",

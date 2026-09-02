@@ -1,0 +1,29 @@
+.wideOnly {
+  display: none;
+}
+
+.compactOnly {
+  display: block;
+}
+
+.trigger {
+  width: 36px;
+  height: 36px;
+}
+
+@container applications (min-width: 1040px) {
+  .wideOnly {
+    display: inline-flex;
+  }
+
+  .compactOnly {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .trigger {
+    width: 44px;
+    height: 44px;
+  }
+}

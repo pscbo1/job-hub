@@ -5,6 +5,8 @@ Business rules live here, not in route handlers or UI components.
 
 from __future__ import annotations
 
+import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,7 +18,9 @@ from job_sentinel.core.models import (
     ApplicationSubmission,
     CloseReason,
     Job,
+    JobRaw,
     PacketSnapshot,
+    compute_job_fingerprint,
 )
 from job_sentinel.ingestion.filters import (
     FILTER_STATE_EXCLUDED,
@@ -39,13 +43,26 @@ PIPELINE_STAGES = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class ManualApplicationOutcome:
+    """Business outcome for Add application idempotency and duplicate handling."""
+
+    status: str
+    job: Job | None = None
+    application: Application | None = None
+    replayed: bool = False
+    duplicate_job: Job | None = None
+    duplicate_application: Application | None = None
+
+
 class TrackingError(Exception):
     """User-facing tracking conflict or validation error."""
 
-    def __init__(self, message: str, *, status_code: int = 409) -> None:
+    def __init__(self, message: str, *, status_code: int = 409, code: str = "") -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.code = code
 
 
 def _now() -> datetime:
@@ -146,9 +163,19 @@ def dismiss_job(repo: JobRepository, job_id: str, *, note: str = "") -> Job:
 
 
 def restore_dismiss(repo: JobRepository, job_id: str) -> Job:
-    """Clear dismissed_at only. Do not restore Save or Reference."""
+    """Clear dismissed_at and auto-archive, then re-evaluate filters.
+
+    The job returns to Current when eligible, otherwise Excluded with a reason.
+    It must never vanish from both views. Applications and submissions stay put.
+    """
     _require_job(repo, job_id)
-    repo.update_hub_job_tracking(job_id, dismissed_at=None, dismissed_note="")
+    repo.update_hub_job_tracking(
+        job_id,
+        dismissed_at=None,
+        dismissed_note="",
+        archived_at=None,
+        archive_reason="",
+    )
     restored = undismiss_hub_job(repo, job_id)
     if restored is None:
         raise TrackingError(f"Job {job_id} not found", status_code=404)
@@ -207,8 +234,8 @@ def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Applicatio
         )
         try:
             app = repo.create_application(app)
-        except ValueError as exc:
-            raise TrackingError(str(exc), status_code=409) from exc
+        except ValueError as extra:
+            raise TrackingError(str(extra), status_code=409) from extra
     repo.append_application_event(
         ApplicationEvent(
             application_id=app.id,
@@ -226,6 +253,121 @@ def start_application(repo: JobRepository, job_id: str) -> tuple[Job, Applicatio
     return stored, refreshed
 
 
+def create_manual_application(
+    repo: JobRepository,
+    *,
+    request_id: str,
+    title: str,
+    company: str,
+    job_url: str = "",
+    location: str = "",
+    source_note: str = "",
+    market: str = "cn",
+    create_separately: bool = False,
+) -> ManualApplicationOutcome:
+    """Atomically create a manual raw record, stable Job, and bound Draft."""
+    from job_sentinel.ingestion.normalize import canonicalize_url
+
+    clean_title = title.strip()
+    clean_company = company.strip()
+    clean_url = job_url.strip()
+    clean_location = location.strip()
+    clean_note = source_note.strip()
+    now = _now()
+    canonical = canonicalize_url(clean_url)
+    source_job_id = f"manual:{request_id}"
+    job = Job(
+        source="manual",
+        source_job_id=source_job_id,
+        job_url=clean_url,
+        canonical_url=canonical,
+        source_note=clean_note,
+        title=clean_title,
+        company=clean_company,
+        location=clean_location,
+        discovered_at=now,
+        last_seen_at=now,
+        updated_at=now,
+        last_activity_at=now,
+        fingerprint=compute_job_fingerprint(clean_company, clean_title, clean_location),
+        market=market,
+        filter_state="included",
+    )
+    raw = JobRaw(
+        source="manual",
+        source_job_id=source_job_id,
+        source_url=clean_url,
+        raw_payload={
+            "request_id": request_id,
+            "title": clean_title,
+            "company": clean_company,
+            "job_url": clean_url,
+            "location": clean_location,
+            "source_note": clean_note,
+            "market": market,
+        },
+        collected_at=now,
+        processed_at=now,
+        job_id=job.id,
+        created_at=now,
+    )
+    application = Application(
+        job_id=job.id,
+        title=clean_title,
+        employer=clean_company,
+        location=clean_location,
+        url=clean_url,
+        source="manual",
+        stage=ApplicationStage.DRAFT,
+        created_at=now,
+        updated_at=now,
+    )
+    event = ApplicationEvent(
+        application_id=application.id,
+        kind="created",
+        payload={"stage": ApplicationStage.DRAFT.value},
+        created_at=now,
+    )
+    result = repo.create_manual_application_bundle(
+        request_id=request_id,
+        raw=raw,
+        job=job,
+        application=application,
+        event=event,
+        create_separately=create_separately,
+    )
+    if result.status == "cancelled":
+        return ManualApplicationOutcome(status="cancelled", replayed=True)
+    if result.status == "duplicate":
+        duplicate = (
+            repo.get_hub_job(result.duplicate_job_id)
+            if result.duplicate_job_id is not None
+            else None
+        )
+        duplicate_app = (
+            repo.get_application_for_job(duplicate.id, include_deleted=True)
+            if duplicate is not None
+            else None
+        )
+        return ManualApplicationOutcome(
+            status="duplicate",
+            duplicate_job=duplicate,
+            duplicate_application=duplicate_app,
+        )
+    stored_job = repo.get_hub_job(result.job_id) if result.job_id is not None else None
+    stored_app = (
+        repo.get_application(result.application_id) if result.application_id is not None else None
+    )
+    if stored_job is None or stored_app is None:
+        raise TrackingError("Manual application result is missing", status_code=500)
+    return ManualApplicationOutcome(
+        status=result.status,
+        job=stored_job,
+        application=stored_app,
+        replayed=result.status == "replayed",
+    )
+
+
 def mark_submitted(
     repo: JobRepository,
     application_id: str,
@@ -234,16 +376,27 @@ def mark_submitted(
     notes: str = "",
     packet_snapshot: PacketSnapshot | None = None,
     materials_dir: Path | None = None,
+    confirm_empty: bool = False,
+    expected_version_ids: list[str] | None = None,
+    idempotency_key: str = "",
 ) -> Application:
-    """Mark Submitted: stage=applied + submission event. Closed re-opens same Application.
+    """Record a submission from current server bindings.
 
-    Packet snapshot is always taken from current server bindings. Client snapshots
-    are not authoritative.
+    Draft or Closed → Applied. Interview / Offer / Applied keep their stage.
+    Empty materials require ``confirm_empty``. Client snapshots are ignored.
     """
     _ = packet_snapshot
     app = repo.get_application(application_id)
     if app is None or app.deleted_at is not None:
         raise TrackingError(f"Application {application_id} not found", status_code=404)
+    key = idempotency_key.strip()
+    if key:
+        existing = repo.find_submission_by_idempotency(app.id, key)
+        if existing is not None:
+            stored = repo.get_application(app.id)
+            if stored is None:
+                raise TrackingError("Application missing after submit", status_code=500)
+            return stored
     from job_sentinel.materials.service import MaterialsError, MaterialsService
     from job_sentinel.materials.storage import MaterialStorage
 
@@ -251,33 +404,70 @@ def mark_submitted(
     service = MaterialsService(repo, MaterialStorage(root))
     try:
         snapshot = service.packet_snapshot(app.id)
-    except MaterialsError as exc:
-        raise TrackingError(exc.message, status_code=exc.status_code) from exc
+    except MaterialsError as extra:
+        raise TrackingError(extra.message, status_code=extra.status_code) from extra
+    current_ids = list(snapshot.material_version_ids)
+    if expected_version_ids is not None and set(expected_version_ids) != set(current_ids):
+        raise TrackingError(
+            "Materials changed while confirming. Review the current list and try again.",
+            status_code=409,
+            code="materials_changed",
+        )
+    if not snapshot.items and not confirm_empty:
+        raise TrackingError(
+            "本次未记录材料",
+            status_code=409,
+            code="empty_materials",
+        )
     submission = ApplicationSubmission(
         application_id=app.id,
         channel=channel,
         notes=notes,
-        packet_snapshot=snapshot,
+        idempotency_key=key,
     )
-    repo.append_application_submission(submission)
+    try:
+        snapshot = service.freeze_snapshot(submission.id, snapshot)
+    except MaterialsError as extra:
+        raise TrackingError(extra.message, status_code=extra.status_code) from extra
+    submission.packet_snapshot = snapshot
+    try:
+        repo.append_application_submission(submission)
+    except ValueError as extra:
+        if key:
+            stored = repo.get_application(app.id)
+            if stored is not None and any(row.idempotency_key == key for row in stored.submissions):
+                return stored
+        raise TrackingError(str(extra), status_code=409) from extra
+    except sqlite3.IntegrityError as extra:
+        if key:
+            stored = repo.get_application(app.id)
+            if stored is not None and any(row.idempotency_key == key for row in stored.submissions):
+                return stored
+        raise TrackingError(str(extra), status_code=409) from extra
     previous = app.stage
-    fields: dict[str, Any] = {
-        "stage": ApplicationStage.APPLIED,
-        "close_reason": None,
-        "close_note": "",
-    }
-    if not app.applied_date:
-        fields["applied_date"] = _now().date().isoformat()
-    repo.update_application(app.id, **fields)
+    fields: dict[str, Any] = {}
+    if previous in {ApplicationStage.DRAFT, ApplicationStage.CLOSED}:
+        fields["stage"] = ApplicationStage.APPLIED
+        fields["close_reason"] = None
+        fields["close_note"] = ""
+        if not app.applied_date:
+            fields["applied_date"] = _now().date().isoformat()
+    if fields:
+        repo.update_application(app.id, **fields)
     repo.append_application_event(
         ApplicationEvent(
             application_id=app.id,
             kind="submitted",
             payload={
                 "from_stage": previous.value,
-                "to_stage": ApplicationStage.APPLIED.value,
+                "to_stage": (
+                    ApplicationStage.APPLIED.value
+                    if previous in {ApplicationStage.DRAFT, ApplicationStage.CLOSED}
+                    else previous.value
+                ),
                 "channel": channel,
                 "reopened_from_closed": previous == ApplicationStage.CLOSED,
+                "submission_id": submission.id,
             },
         )
     )
@@ -300,7 +490,11 @@ def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
             status_code=409,
         )
     repo.clear_application_bindings(app.id)
+    if app.job_id:
+        repo.attach_comm_notes_to_job(app.id, app.job_id)
+        repo.keep_application_contact_on_job(app.job_id, app.contact)
     repo.soft_delete_application(app.id)
+    repo.mark_manual_application_request_cancelled(app.id)
     job: Job | None = None
     if app.job_id:
         job = repo.get_hub_job(app.job_id)

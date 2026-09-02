@@ -130,3 +130,45 @@ def test_open_application_blocks_excluded_archive(tmp_path: Path) -> None:
     result = run_idle_archive(repo, force=True)
     assert result.archived == 0
     repo.close()
+
+
+def test_restore_after_auto_archive_returns_to_current_or_excluded(tmp_path: Path) -> None:
+    from job_sentinel.jobs.actions import restore_dismiss
+    from job_sentinel.jobs.archive import ArchiveSettings, run_idle_archive, save_archive_settings
+
+    repo = JobRepository(tmp_path / "j.db")
+    old = datetime.now(tz=UTC) - timedelta(days=30)
+    eligible = repo.upsert_job(
+        Job(source="zhaopin", source_job_id="ok", title="SWE", discovered_at=old)
+    )
+    intern = repo.upsert_job(
+        Job(
+            source="zhaopin",
+            source_job_id="intern",
+            title="实习 SWE",
+            discovered_at=old,
+        )
+    )
+    dismiss_job(repo, eligible.id)
+    dismiss_job(repo, intern.id)
+    repo.update_hub_job_tracking(eligible.id, dismissed_at=old)
+    repo.update_hub_job_tracking(intern.id, dismissed_at=old)
+    save_archive_settings(repo, ArchiveSettings(enabled=True, idle_days=14))
+    result = run_idle_archive(repo)
+    assert result.archived == 2
+    restored_ok = restore_dismiss(repo, eligible.id)
+    restored_intern = restore_dismiss(repo, intern.id)
+    assert restored_ok.dismissed_at is None
+    assert restored_ok.archived_at is None
+    assert restored_ok.filter_state != "excluded"
+    assert restored_intern.dismissed_at is None
+    assert restored_intern.archived_at is None
+    assert restored_intern.filter_state == "excluded"
+    assert restored_intern.filter_reasons
+    current = {row.id for row in repo.list_hub_jobs(filter_state="included")}
+    excluded = {row.id for row in repo.list_hub_jobs(filter_state="excluded")}
+    assert eligible.id in current
+    assert eligible.id not in excluded
+    assert intern.id in excluded
+    assert intern.id not in current
+    repo.close()

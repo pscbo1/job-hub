@@ -22,6 +22,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +34,7 @@ from job_sentinel.api.chat import ChatMessage, ChatReply
 from job_sentinel.api.chat import answer as chat_answer
 from job_sentinel.api.ops import OpsConfigError, OpsConflictError, get_runner
 from job_sentinel.core.models import (
+    ApplicationCommNote,
     ApplicationStage,
     ApplicationStatus,
     CloseReason,
@@ -143,6 +145,10 @@ class HubJobStatusRequest(BaseModel):
 class JobTaskCreateRequest(BaseModel):
     title: str = Field(..., min_length=1)
     due_at: date | None = None
+    notes: str | None = None
+    source_url: str | None = None
+    application_id: str | None = None
+    reminders: list[date] | None = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -156,12 +162,22 @@ class JobTaskCreateRequest(BaseModel):
             return None
         return v
 
+    @field_validator("notes", "source_url", "application_id", mode="before")
+    @classmethod
+    def _blank_optional(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
+
 
 class JobTaskPatchRequest(BaseModel):
     title: str | None = None
     due_at: date | None = None
     done: bool | None = None
     sort_order: int | None = None
+    notes: str | None = None
+    source_url: str | None = None
+    reminders: list[date] | None = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -174,6 +190,13 @@ class JobTaskPatchRequest(BaseModel):
         if v is None or v == "":
             return None
         return v
+
+    @field_validator("notes", "source_url", mode="before")
+    @classmethod
+    def _blank_optional(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
 
 
 class CollectJobsRequest(BaseModel):
@@ -325,9 +348,45 @@ class ApplicationCreateRequest(BaseModel):
     resume_document_id: str | None = Field(default=None)
 
 
+class ManualApplicationCreateRequest(BaseModel):
+    request_id: uuid.UUID
+    title: str = Field(..., min_length=1, max_length=200)
+    company: str = Field(..., min_length=1, max_length=200)
+    job_url: str = Field(default="", max_length=2048)
+    location: str = Field(default="")
+    source_note: str = Field(default="")
+    market: str = Field(default="cn")
+    create_separately: bool = False
+
+    @field_validator("title", "company", "job_url", "location", "source_note", mode="before")
+    @classmethod
+    def _strip_manual_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("job_url")
+    @classmethod
+    def _validate_job_url(cls, value: str) -> str:
+        if not value:
+            return value
+        parts = urlsplit(value)
+        if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+            raise ValueError("Enter a full http(s) link with a host")
+        return value
+
+    @field_validator("market")
+    @classmethod
+    def _validate_manual_market(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"cn", "en"}:
+            raise ValueError("Market must be cn or en")
+        return normalized
+
+
 class ApplicationPatchRequest(BaseModel):
     stage: ApplicationStage | None = Field(default=None)
     notes: str | None = Field(default=None)
+    contact: str | None = Field(default=None)
+    tags: list[str] | None = Field(default=None)
     applied_date: str | None = Field(default=None)
     deadline: str | None = Field(default=None)
     salary: str | None = Field(default=None)
@@ -346,6 +405,9 @@ class MarkSubmittedRequest(BaseModel):
     channel: str = ""
     notes: str = ""
     packet_snapshot: PacketSnapshot | None = None
+    confirm_empty: bool = False
+    expected_version_ids: list[str] | None = None
+    idempotency_key: str = ""
 
 
 class CloseApplicationRequest(BaseModel):
@@ -378,6 +440,7 @@ class MaterialWriteRequest(BaseModel):
     version_label: str = ""
     version_purpose: list[str] = Field(default_factory=list)
     version_notes: str = ""
+    content: str = ""
 
 
 class MaterialPatchRequest(BaseModel):
@@ -392,6 +455,7 @@ class MaterialVersionWriteRequest(BaseModel):
     version_label: str = ""
     purpose: list[str] = Field(default_factory=list)
     notes: str = ""
+    content: str = ""
 
 
 class MaterialVersionPatchRequest(BaseModel):
@@ -406,6 +470,10 @@ class PacketReplaceRequest(BaseModel):
 
 class PacketBindRequest(BaseModel):
     material_version_id: str
+
+
+class CommNoteWriteRequest(BaseModel):
+    body: str = ""
 
 
 def _summary(p: Profile) -> ProfileSummary:
@@ -727,6 +795,19 @@ def create_app(
             jobs = [j for j in jobs if job_in_market_view(j, view_id, registry)]
         return jobs
 
+    @app.get("/api/jobs/{job_id}", response_model=Job)
+    def get_one_hub_job(job_id: str) -> Job:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            job = repo.get_hub_job(job_id)
+        finally:
+            repo.close()
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        return job
+
     @app.patch("/api/jobs/{job_id}", response_model=Job)
     def patch_hub_job(job_id: str, req: HubJobStatusRequest) -> Job:
         """Update Job tracking: Save, Reference, comment, next step, deadline."""
@@ -823,13 +904,40 @@ def create_app(
         finally:
             repo.close()
 
-    @app.post("/api/jobs/{job_id}/tasks", response_model=JobTask)
-    def create_hub_job_task(job_id: str, req: JobTaskCreateRequest) -> JobTask:
+    @app.get("/api/jobs/{job_id}/comm-notes", response_model=list[ApplicationCommNote])
+    def list_hub_job_comm_notes(job_id: str) -> list[ApplicationCommNote]:
         from job_sentinel.db.repository import JobRepository
 
         repo = JobRepository(db_path)
         try:
-            task = repo.create_job_task(job_id, title=req.title, due_at=req.due_at)
+            if repo.get_hub_job(job_id) is None:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            return repo.list_comm_notes_for_job(job_id)
+        finally:
+            repo.close()
+
+    @app.post("/api/jobs/{job_id}/tasks", response_model=JobTask)
+    def create_hub_job_task(job_id: str, req: JobTaskCreateRequest) -> JobTask:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import ReminderPlanError
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.create_job_task(
+                job_id,
+                title=req.title,
+                due_at=req.due_at,
+                notes=req.notes,
+                source_url=req.source_url,
+                application_id=req.application_id,
+                reminder_dates=req.reminders,
+            )
+        except ReminderPlanError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:
+            detail = str(exc)
+            status = 404 if detail == "Application not found" else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
         finally:
             repo.close()
         if task is None:
@@ -839,10 +947,22 @@ def create_app(
     @app.patch("/api/jobs/{job_id}/tasks/{task_id}", response_model=JobTask)
     def patch_hub_job_task(job_id: str, task_id: str, req: JobTaskPatchRequest) -> JobTask:
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import ReminderPlanError
 
+        payload = req.model_dump(exclude_unset=True)
+        reminder_dates = payload.pop("reminders", None)
+        reminders_set = "reminders" in req.model_fields_set
         repo = JobRepository(db_path)
         try:
-            task = repo.update_job_task(job_id, task_id, req.model_dump(exclude_unset=True))
+            task = repo.update_job_task(
+                job_id,
+                task_id,
+                payload,
+                reminder_dates=reminder_dates,
+                reminders_set=reminders_set,
+            )
+        except ReminderPlanError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
             repo.close()
         if task is None:
@@ -861,6 +981,52 @@ def create_app(
         if not deleted:
             raise HTTPException(status_code=404, detail="Task not found")
         return {"ok": True}
+
+    @app.post("/api/reminders/sync")
+    def sync_in_app_reminders_route() -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import sync_in_app_reminders
+
+        repo = JobRepository(db_path)
+        try:
+            result = sync_in_app_reminders(repo)
+        finally:
+            repo.close()
+        return result.model_dump(mode="json")
+
+    @app.get("/api/reminders")
+    def list_in_app_reminders(
+        view: str = "unread",
+        market: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import list_reminder_inbox
+
+        key = view.strip().lower() or "unread"
+        if key not in {"unread", "all"}:
+            raise HTTPException(status_code=422, detail="view must be unread or all")
+        repo = JobRepository(db_path)
+        try:
+            inbox = list_reminder_inbox(repo, view=key, market=market, limit=limit, offset=offset)
+        finally:
+            repo.close()
+        return inbox.model_dump(mode="json")
+
+    @app.patch("/api/reminders/{reminder_id}/read")
+    def mark_in_app_reminder_read(reminder_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.reminders import mark_reminder_read
+
+        repo = JobRepository(db_path)
+        try:
+            row = mark_reminder_read(repo, reminder_id)
+        finally:
+            repo.close()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        return row.model_dump(mode="json")
 
     @app.post("/api/jobs/{job_id}/start-application")
     def start_application_hub_job(job_id: str) -> dict[str, Any]:
@@ -1200,9 +1366,11 @@ def create_app(
         limit: int = 200,
         view: str = "all",
         stale_applied: bool = False,
+        tag: str = "",
     ) -> list[dict[str, Any]]:
         from job_sentinel.db.repository import JobRepository
         from job_sentinel.jobs.membership import OPEN_APPLICATION_STAGES, enrich_application_stale
+        from job_sentinel.jobs.tags import application_matches_tags
 
         view_key = view.strip().lower()
         if view_key not in {"all", "open", "closed"}:
@@ -1219,7 +1387,19 @@ def create_app(
             apps = [a for a in apps if a.stage == ApplicationStage.CLOSED]
         if stale_applied:
             apps = [a for a in apps if a.stale_applied]
+        if tag.strip():
+            apps = [a for a in apps if application_matches_tags(a, [tag])]
         return [a.model_dump(mode="json") for a in apps]
+
+    @app.get("/api/applications/tags")
+    def list_application_tags() -> dict[str, list[str]]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            return {"tags": repo.list_application_tags()}
+        finally:
+            repo.close()
 
     @app.post("/api/applications")
     def create_application(req: ApplicationCreateRequest, request: Request) -> dict[str, Any]:
@@ -1248,6 +1428,88 @@ def create_app(
         finally:
             repo.close()
         return app.model_dump(mode="json")
+
+    @app.post("/api/applications/manual")
+    def create_manual_application_route(
+        req: ManualApplicationCreateRequest,
+        request: Request,
+    ) -> JSONResponse:
+        """Create one manual Job + Draft transaction, with replay and URL conflict handling."""
+        if auth_mode != "off" and _bearer_user(request) is None:
+            raise HTTPException(status_code=401, detail="Login required.")
+
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import create_manual_application
+
+        repo = JobRepository(db_path)
+        try:
+            outcome = create_manual_application(
+                repo,
+                request_id=str(req.request_id),
+                title=req.title,
+                company=req.company,
+                job_url=req.job_url,
+                location=req.location,
+                source_note=req.source_note,
+                market=req.market,
+                create_separately=req.create_separately,
+            )
+            if outcome.status == "duplicate":
+                duplicate = outcome.duplicate_job
+                duplicate_app = outcome.duplicate_application
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "duplicate_candidate",
+                        "message": "An opportunity with this link already exists.",
+                        "duplicate_candidate": (
+                            {
+                                "job": {
+                                    "id": duplicate.id,
+                                    "title": duplicate.title,
+                                    "company": duplicate.company,
+                                    "location": duplicate.location,
+                                    "job_url": duplicate.job_url,
+                                    "market": duplicate.market,
+                                },
+                                "application": (
+                                    {
+                                        "id": duplicate_app.id,
+                                        "stage": duplicate_app.stage.value,
+                                        "deleted": duplicate_app.deleted_at is not None,
+                                    }
+                                    if duplicate_app is not None
+                                    else None
+                                ),
+                            }
+                            if duplicate is not None
+                            else None
+                        ),
+                    },
+                )
+            if outcome.status == "cancelled":
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "job": None,
+                        "application": None,
+                        "replayed": True,
+                        "cancelled": True,
+                    },
+                )
+            if outcome.job is None or outcome.application is None:
+                raise HTTPException(status_code=500, detail="Manual application result is missing")
+            return JSONResponse(
+                status_code=200 if outcome.replayed else 201,
+                content={
+                    "job": outcome.job.model_dump(mode="json"),
+                    "application": outcome.application.model_dump(mode="json"),
+                    "replayed": outcome.replayed,
+                    "cancelled": False,
+                },
+            )
+        finally:
+            repo.close()
 
     @app.get("/api/applications/export")
     def export_applications(fmt: str = "csv") -> StreamingResponse:
@@ -1333,9 +1595,15 @@ def create_app(
                 channel=req.channel,
                 notes=req.notes,
                 materials_dir=materials_dir,
+                confirm_empty=req.confirm_empty,
+                expected_version_ids=req.expected_version_ids,
+                idempotency_key=req.idempotency_key,
             )
-        except TrackingError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        except TrackingError as err:
+            detail: object = err.message
+            if err.code:
+                detail = {"code": err.code, "message": err.message}
+            raise HTTPException(status_code=err.status_code, detail=detail) from err
         finally:
             repo.close()
         return app.model_dump(mode="json")
@@ -1454,11 +1722,10 @@ def create_app(
 
     @app.get("/api/materials")
     def list_materials(include_archived: bool = False) -> list[dict[str, Any]]:
-        from job_sentinel.db.repository import JobRepository
-
-        repo = JobRepository(db_path)
+        repo, service = _materials()
         try:
             rows = repo.list_materials(include_archived=include_archived)
+            rows = [service.hydrate_material(m) for m in rows]
         finally:
             repo.close()
         return [m.model_dump(mode="json") for m in rows]
@@ -1478,6 +1745,7 @@ def create_app(
                 version_label=req.version_label,
                 version_purpose=req.version_purpose,
                 version_notes=req.version_notes,
+                content=req.content,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -1521,16 +1789,14 @@ def create_app(
 
     @app.get("/api/materials/{material_id}")
     def get_material(material_id: str, include_archived: bool = True) -> dict[str, Any]:
-        from job_sentinel.db.repository import JobRepository
-
-        repo = JobRepository(db_path)
+        repo, service = _materials()
         try:
             material = repo.get_material(material_id, include_archived=include_archived)
+            if material is None:
+                raise HTTPException(status_code=404, detail="Material not found")
+            return _json_object(service.hydrate_material(material))
         finally:
             repo.close()
-        if material is None:
-            raise HTTPException(status_code=404, detail="Material not found")
-        return _json_object(material)
 
     @app.patch("/api/materials/{material_id}")
     def patch_material(material_id: str, req: MaterialPatchRequest) -> dict[str, Any]:
@@ -1583,6 +1849,7 @@ def create_app(
                 version_label=req.version_label,
                 purpose=req.purpose,
                 notes=req.notes,
+                content=req.content,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -1759,6 +2026,83 @@ def create_app(
             raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
         finally:
             repo.close()
+        return {"ok": True}
+
+    @app.get("/api/applications/{app_id}/submissions/{sub_id}/items/{index}/file")
+    def submission_snapshot_file(app_id: str, sub_id: str, index: int) -> FileResponse:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.storage import MaterialStorage, StorageError
+
+        repo = JobRepository(db_path)
+        try:
+            submission = repo.get_application_submission(app_id, sub_id)
+        finally:
+            repo.close()
+        if submission is None:
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        items = submission.packet_snapshot.items
+        if index < 0 or index >= len(items):
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        item = items[index]
+        storage = MaterialStorage(materials_dir)
+        ref = item.snapshot_file_ref or item.file_ref
+        if not ref:
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        try:
+            path = storage.resolve(ref)
+        except StorageError as extra:
+            raise HTTPException(status_code=404, detail="当次材料未记录") from extra
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="当次材料未记录")
+        filename = item.original_filename or path.name
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            filename=filename,
+        )
+
+    @app.get("/api/applications/{app_id}/comm-notes")
+    def list_comm_notes(app_id: str) -> list[dict[str, Any]]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            notes = repo.list_comm_notes(app_id)
+        finally:
+            repo.close()
+        return [n.model_dump(mode="json") for n in notes]
+
+    @app.post("/api/applications/{app_id}/comm-notes")
+    def add_comm_note(app_id: str, req: CommNoteWriteRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        body = req.body.strip()
+        if not body:
+            raise HTTPException(status_code=400, detail="Note text is required")
+        repo = JobRepository(db_path)
+        try:
+            app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            note = repo.create_comm_note(ApplicationCommNote(application_id=app_id, body=body))
+        finally:
+            repo.close()
+        return _json_object(note)
+
+    @app.delete("/api/applications/{app_id}/comm-notes/{note_id}")
+    def delete_comm_note(app_id: str, note_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            ok = repo.delete_comm_note(app_id, note_id)
+        finally:
+            repo.close()
+        if not ok:
+            raise HTTPException(status_code=404, detail="Note not found")
         return {"ok": True}
 
     # ── Generated Documents ───────────────────────────────────────────────

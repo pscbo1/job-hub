@@ -23,8 +23,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlite_utils
 from loguru import logger
@@ -32,6 +33,7 @@ from pydantic import ValidationError
 
 from job_sentinel.core.models import (
     Application,
+    ApplicationCommNote,
     ApplicationEvent,
     ApplicationMaterialBinding,
     ApplicationStage,
@@ -48,6 +50,8 @@ from job_sentinel.core.models import (
     Material,
     MaterialVersion,
     PacketSnapshot,
+    TaskReminder,
+    TaskReminderKind,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
 )
@@ -59,7 +63,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 16
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -67,6 +71,7 @@ _DOC_TABLE = "generated_documents"
 _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
 _JOB_TASKS_TABLE = "job_tasks"
+_TASK_REMINDERS_TABLE = "task_reminders"
 _SPONSOR_EMPLOYERS = "sponsor_employers"
 _SPONSOR_SYNC = "sponsor_registry_sync"
 _SUBMISSIONS_TABLE = "application_submissions"
@@ -74,10 +79,22 @@ _APP_EVENTS_TABLE = "application_events"
 _MATERIALS_TABLE = "materials"
 _MATERIAL_VERSIONS_TABLE = "material_versions"
 _APP_BINDINGS_TABLE = "application_material_bindings"
+_COMM_NOTES_TABLE = "application_comm_notes"
+_MANUAL_APP_REQUESTS_TABLE = "manual_application_requests"
 _DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
 _UNSET: Any = object()
 _APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
 _LEGACY_JOB_STATUSES = frozenset({"applied", "interview", "interviewing", "offer", "closed"})
+
+
+@dataclass(frozen=True)
+class ManualApplicationWriteResult:
+    """Transactional outcome for one manual Add application request."""
+
+    status: Literal["created", "replayed", "cancelled", "duplicate"]
+    job_id: str | None = None
+    application_id: str | None = None
+    duplicate_job_id: str | None = None
 
 
 def _legacy_status_projection(engagement: str | None) -> str | None:
@@ -175,6 +192,8 @@ class JobRepository:
         self._ensure_v0_tables()
         self._ensure_prd02_tables()
         self._ensure_job_tasks_table()
+        self._ensure_task_reminders_table()
+        self._ensure_manual_application_requests_table()
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -243,6 +262,7 @@ class JobRepository:
                 source_job_id TEXT NOT NULL,
                 job_url TEXT NOT NULL DEFAULT '',
                 canonical_url TEXT NOT NULL DEFAULT '',
+                source_note TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 company TEXT NOT NULL DEFAULT '',
                 location TEXT NOT NULL DEFAULT '',
@@ -259,6 +279,7 @@ class JobRepository:
                 favorite INTEGER NOT NULL DEFAULT 0,
                 reference INTEGER NOT NULL DEFAULT 0,
                 comment TEXT NOT NULL DEFAULT '',
+                contact TEXT NOT NULL DEFAULT '',
                 next_step TEXT NOT NULL DEFAULT '',
                 deadline TEXT,
                 follow_up_at TEXT,
@@ -340,6 +361,8 @@ class JobRepository:
             alters.append("ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
         if "comment" not in names:
             alters.append("ALTER TABLE jobs ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+        if "contact" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
         if "next_step" not in names:
             alters.append("ALTER TABLE jobs ADD COLUMN next_step TEXT NOT NULL DEFAULT ''")
         if "deadline" not in names:
@@ -358,6 +381,8 @@ class JobRepository:
             alters.append("ALTER TABLE jobs ADD COLUMN last_activity_at TEXT")
         if "reference" not in names:
             alters.append("ALTER TABLE jobs ADD COLUMN reference INTEGER NOT NULL DEFAULT 0")
+        if "source_note" not in names:
+            alters.append("ALTER TABLE jobs ADD COLUMN source_note TEXT NOT NULL DEFAULT ''")
         for sql in alters:
             self._db.execute(sql)
 
@@ -380,6 +405,7 @@ class JobRepository:
         self._ensure_application_submissions_table()
         self._ensure_application_events_table()
         self._ensure_materials_stub_tables()
+        self._ensure_part3_tables()
         self._backfill_prd02_from_legacy_status()
         self._backfill_reference_from_engagement()
 
@@ -404,6 +430,10 @@ class JobRepository:
             self._db.execute(
                 "ALTER TABLE applications ADD COLUMN exclude_from_idle INTEGER NOT NULL DEFAULT 0"
             )
+        if "contact" not in app_names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
+        if "tags" not in app_names:
+            self._db.execute("ALTER TABLE applications ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
         self._db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS applications_job_id_active
@@ -448,6 +478,59 @@ class JobRepository:
             """
         )
         self._table(_SUBMISSIONS_TABLE).create_index(["application_id"], if_not_exists=True)
+        cols = {col.name for col in self._table(_SUBMISSIONS_TABLE).columns}
+        if "idempotency_key" not in cols:
+            self._db.execute(
+                "ALTER TABLE application_submissions "
+                "ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
+            )
+        self._db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS application_submissions_idempotency
+            ON application_submissions(application_id, idempotency_key)
+            WHERE idempotency_key != ''
+            """
+        )
+
+    def _ensure_part3_tables(self) -> None:
+        self._ensure_application_submissions_table()
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS application_comm_notes (
+                id TEXT PRIMARY KEY,
+                application_id TEXT,
+                job_id TEXT,
+                body TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        names = {col.name for col in self._table(_COMM_NOTES_TABLE).columns}
+        if "job_id" not in names:
+            self._db.execute("ALTER TABLE application_comm_notes ADD COLUMN job_id TEXT")
+        self._table(_COMM_NOTES_TABLE).create_index(["application_id"], if_not_exists=True)
+        self._table(_COMM_NOTES_TABLE).create_index(["job_id"], if_not_exists=True)
+        self._backfill_comm_note_job_ids()
+
+    def _backfill_comm_note_job_ids(self) -> None:
+        """Copy Application.job_id onto notes that still lack it (idempotent)."""
+        if _COMM_NOTES_TABLE not in self._db.table_names():
+            return
+        names = {col.name for col in self._table(_COMM_NOTES_TABLE).columns}
+        if "job_id" not in names:
+            return
+        self._db.execute(
+            """
+            UPDATE application_comm_notes
+            SET job_id = (
+                SELECT job_id FROM applications
+                WHERE applications.id = application_comm_notes.application_id
+            )
+            WHERE (job_id IS NULL OR job_id = '')
+              AND application_id IS NOT NULL
+              AND application_id != ''
+            """
+        )
 
     def _ensure_application_events_table(self) -> None:
         self._db.execute(
@@ -773,6 +856,22 @@ class JobRepository:
         raw.create_index(["collected_at"], if_not_exists=True)
         raw.create_index(["job_id"], if_not_exists=True)
 
+    def _ensure_manual_application_requests_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manual_application_requests (
+                request_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                application_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('active', 'cancelled')),
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        requests = self._table(_MANUAL_APP_REQUESTS_TABLE)
+        requests.create_index(["job_id"], if_not_exists=True)
+        requests.create_index(["application_id"], if_not_exists=True)
+
     def _ensure_job_tasks_table(self) -> None:
         self._db.execute(
             """
@@ -783,13 +882,73 @@ class JobRepository:
                 due_at TEXT,
                 done INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                application_id TEXT,
+                notes TEXT,
+                source_url TEXT
             )
             """
         )
+        names = {col.name for col in self._table(_JOB_TASKS_TABLE).columns}
+        if "application_id" not in names:
+            self._db.execute("ALTER TABLE job_tasks ADD COLUMN application_id TEXT")
+        if "notes" not in names:
+            self._db.execute("ALTER TABLE job_tasks ADD COLUMN notes TEXT")
+        if "source_url" not in names:
+            self._db.execute("ALTER TABLE job_tasks ADD COLUMN source_url TEXT")
         tasks = self._table(_JOB_TASKS_TABLE)
         tasks.create_index(["job_id"], if_not_exists=True)
         tasks.create_index(["due_at"], if_not_exists=True)
+        tasks.create_index(["application_id"], if_not_exists=True)
+
+    def _ensure_task_reminders_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_reminders (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                reminder_on TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('advance', 'due')),
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                in_app_triggered_at TEXT,
+                in_app_skipped_at TEXT,
+                read_at TEXT,
+                UNIQUE (task_id, due_date, reminder_on)
+            )
+            """
+        )
+        reminders = self._table(_TASK_REMINDERS_TABLE)
+        reminders.create_index(["task_id"], if_not_exists=True)
+        reminders.create_index(["due_date"], if_not_exists=True)
+        reminders.create_index(["in_app_triggered_at"], if_not_exists=True)
+
+    def _backfill_due_reminder_nodes(self) -> None:
+        """Existing dated tasks get an On-due node only; no bulk advance dates."""
+        now = _now_iso()
+        rows = list(
+            self._db.execute(
+                """
+                SELECT id, due_at FROM job_tasks
+                WHERE due_at IS NOT NULL AND TRIM(due_at) != ''
+                """
+            )
+        )
+        for row in rows:
+            task_id = str(row[0])
+            due = str(row[1])[:10]
+            reminder_id = uuid.uuid4().hex
+            self._db.execute(
+                """
+                INSERT INTO task_reminders (
+                    id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                    in_app_triggered_at, in_app_skipped_at, read_at
+                ) VALUES (?, ?, ?, ?, 'due', 1, ?, NULL, NULL, NULL)
+                ON CONFLICT(task_id, due_date, reminder_on) DO NOTHING
+                """,
+                [reminder_id, task_id, due, due, now],
+            )
 
     def _get_meta(self, key: str) -> str | None:
         rows = list(self._table(_META_TABLE).rows_where("key = ?", [key]))
@@ -827,6 +986,23 @@ class JobRepository:
         if from_version < 9:
             self._ensure_prd02_application_columns()
             self._ensure_materials_stub_tables()
+        if from_version < 10:
+            self._ensure_part3_tables()
+        if from_version < 11:
+            self._ensure_job_tasks_table()
+        if from_version < 12:
+            self._ensure_part3_tables()
+        if from_version < 13:
+            self._ensure_prd02_job_columns()
+            self._ensure_prd02_application_columns()
+        if from_version < 14:
+            self._ensure_prd02_application_columns()
+        if from_version < 15:
+            self._ensure_prd02_job_columns()
+            self._ensure_manual_application_requests_table()
+        if from_version < 16:
+            self._ensure_task_reminders_table()
+            self._backfill_due_reminder_nodes()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -894,7 +1070,7 @@ class JobRepository:
 
         Dedup: (1) ``(source, source_job_id)`` (2) non-empty ``canonical_url``.
         Fingerprint is never used to merge. Ingest fields only on update —
-        human tracking (engagement, favorite, dismiss, archive, comment, next
+        human tracking (engagement, favorite, dismiss, archive, comment, contact, next
         step) and ``discovered_at`` / ``match_score`` are preserved.
         """
         source_job_id = job.source_job_id.strip() or source_job_id_from_canonical_url(
@@ -924,20 +1100,22 @@ class JobRepository:
             return stored
 
         now = _now_iso()
+        preserve_manual_identity = existing.source == "manual" and job.source != "manual"
         ingest = {
             "job_url": job.job_url,
             "canonical_url": job.canonical_url,
-            "title": job.title,
-            "company": job.company,
-            "location": job.location,
+            "title": existing.title if preserve_manual_identity else job.title,
+            "company": existing.company if preserve_manual_identity else job.company,
+            "location": existing.location if preserve_manual_identity else job.location,
             "description": job.description,
             "employment_type": job.employment_type,
             "salary": job.salary,
             "published_at": _optional_iso(job.published_at),
             "last_seen_at": now,
             "updated_at": now,
-            "fingerprint": fingerprint,
-            "market": job.market,
+            "fingerprint": existing.fingerprint if preserve_manual_identity else fingerprint,
+            "market": existing.market if preserve_manual_identity else job.market,
+            "source_note": existing.source_note,
         }
         self._table(_JOBS_TABLE).update(existing.id, ingest)
         stored = self.get_hub_job(existing.id)
@@ -1168,8 +1346,10 @@ class JobRepository:
 
     def _attach_job_tasks(self, jobs: list[Job]) -> list[Job]:
         grouped = self.list_job_tasks_for_jobs([j.id for j in jobs])
+        notes = self.list_comm_notes_for_jobs([j.id for j in jobs])
         for job in jobs:
             job.tasks = grouped.get(job.id, [])
+            job.comm_notes = notes.get(job.id, [])
         return jobs
 
     def list_job_tasks(self, job_id: str) -> list[JobTask]:
@@ -1178,7 +1358,7 @@ class JobRepository:
             [job_id],
             order_by="sort_order ASC, created_at ASC",
         )
-        return [_job_task_from_row(dict(r)) for r in rows]
+        return self._attach_task_reminders([_job_task_from_row(dict(r)) for r in rows])
 
     def list_job_tasks_for_jobs(self, job_ids: Sequence[str]) -> dict[str, list[JobTask]]:
         grouped: dict[str, list[JobTask]] = {jid: [] for jid in job_ids}
@@ -1191,8 +1371,8 @@ class JobRepository:
             list(ids),
             order_by="sort_order ASC, created_at ASC",
         )
-        for row in rows:
-            task = _job_task_from_row(dict(row))
+        tasks = self._attach_task_reminders([_job_task_from_row(dict(row)) for row in rows])
+        for task in tasks:
             grouped.setdefault(task.job_id, []).append(task)
         return grouped
 
@@ -1203,29 +1383,77 @@ class JobRepository:
         title: str,
         due_at: date | None = None,
         sort_order: int | None = None,
+        notes: str | None = None,
+        source_url: str | None = None,
+        application_id: str | None = None,
+        reminder_dates: list[date] | None = None,
+        now: datetime | None = None,
     ) -> JobTask | None:
         if self.get_hub_job(job_id) is None:
             return None
+        app_id = (application_id or "").strip() or None
+        if app_id:
+            app = self.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise ValueError("Application not found")
+            if app.job_id != job_id:
+                raise ValueError("Application is not linked to this job")
         order = sort_order
         if order is None:
             existing = self.list_job_tasks(job_id)
             order = (existing[-1].sort_order + 1) if existing else 0
-        task = JobTask(job_id=job_id, title=title, due_at=due_at, sort_order=order)
-        self._table(_JOB_TASKS_TABLE).insert(_job_task_to_row(task))
-        self.touch_hub_job_activity(job_id)
-        return task
+        task = JobTask(
+            job_id=job_id,
+            title=title,
+            due_at=due_at,
+            sort_order=order,
+            notes=notes,
+            source_url=source_url,
+            application_id=app_id,
+        )
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._insert_transaction_row(_JOB_TASKS_TABLE, _job_task_to_row(task))
+            self._apply_reminder_plan_tx(
+                task,
+                reminder_dates=reminder_dates,
+                reminders_set=reminder_dates is not None,
+                previous_due=None,
+                now=now,
+            )
+            conn.execute(
+                "UPDATE jobs SET last_activity_at = ? WHERE id = ?",
+                [_now_iso(), job_id],
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return self.get_job_task(task.id)
 
     def get_job_task(self, task_id: str) -> JobTask | None:
         try:
             row = self._table(_JOB_TASKS_TABLE).get(task_id)
-            return _job_task_from_row(dict(row))
         except sqlite_utils.db.NotFoundError:
             return None
+        attached = self._attach_task_reminders([_job_task_from_row(dict(row))])
+        return attached[0] if attached else None
 
-    def update_job_task(self, job_id: str, task_id: str, fields: dict[str, Any]) -> JobTask | None:
+    def update_job_task(
+        self,
+        job_id: str,
+        task_id: str,
+        fields: dict[str, Any],
+        *,
+        reminder_dates: list[date] | None = None,
+        reminders_set: bool = False,
+        now: datetime | None = None,
+    ) -> JobTask | None:
         task = self.get_job_task(task_id)
         if task is None or task.job_id != job_id:
             return None
+        previous_due = task.due_at
         payload: dict[str, Any] = {}
         if "title" in fields and fields["title"] is not None:
             payload["title"] = str(fields["title"]).strip()
@@ -1235,9 +1463,40 @@ class JobRepository:
             payload["done"] = 1 if fields["done"] else 0
         if "sort_order" in fields and fields["sort_order"] is not None:
             payload["sort_order"] = int(fields["sort_order"])
-        if payload:
-            self._table(_JOB_TASKS_TABLE).update(task_id, payload)
-            self.touch_hub_job_activity(job_id)
+        if "notes" in fields:
+            notes = fields["notes"]
+            payload["notes"] = str(notes).strip() if notes else None
+        if "source_url" in fields:
+            url = fields["source_url"]
+            payload["source_url"] = str(url).strip() if url else None
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if payload:
+                assignments = ", ".join(f"{key} = ?" for key in payload)
+                conn.execute(
+                    f"UPDATE job_tasks SET {assignments} WHERE id = ?",  # noqa: S608
+                    [*payload.values(), task_id],
+                )
+            if "due_at" in fields:
+                raw_due = payload.get("due_at")
+                task.due_at = date.fromisoformat(str(raw_due)[:10]) if raw_due else None
+            self._apply_reminder_plan_tx(
+                task,
+                reminder_dates=reminder_dates,
+                reminders_set=reminders_set,
+                previous_due=previous_due,
+                now=now,
+            )
+            if payload or reminders_set:
+                conn.execute(
+                    "UPDATE jobs SET last_activity_at = ? WHERE id = ?",
+                    [_now_iso(), job_id],
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         return self.get_job_task(task_id)
 
     def delete_job_task(self, job_id: str, task_id: str) -> bool:
@@ -1247,6 +1506,256 @@ class JobRepository:
         self._table(_JOB_TASKS_TABLE).delete(task_id)
         self.touch_hub_job_activity(job_id)
         return True
+
+    def _attach_task_reminders(self, tasks: list[JobTask]) -> list[JobTask]:
+        ids = [task.id for task in tasks]
+        grouped = self.list_reminders_for_tasks(ids)
+        for task in tasks:
+            due = task.due_at.isoformat() if task.due_at is not None else ""
+            rows = [
+                row
+                for row in grouped.get(task.id, [])
+                if row.enabled and (not due or row.due_date.isoformat() == due)
+            ]
+            rows.sort(key=lambda row: (row.reminder_on, row.id))
+            task.reminders = rows
+        return tasks
+
+    def list_reminders_for_tasks(self, task_ids: Sequence[str]) -> dict[str, list[TaskReminder]]:
+        grouped: dict[str, list[TaskReminder]] = {tid: [] for tid in task_ids}
+        ids = [tid for tid in task_ids if tid]
+        if not ids:
+            return grouped
+        placeholders = ",".join("?" * len(ids))
+        rows = self._db.execute(
+            f"""
+            SELECT id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                   in_app_triggered_at, in_app_skipped_at, read_at
+            FROM task_reminders
+            WHERE task_id IN ({placeholders})
+            ORDER BY reminder_on ASC, id ASC
+            """,  # noqa: S608
+            list(ids),
+        ).fetchall()
+        for raw in rows:
+            reminder = _task_reminder_from_sql(raw)
+            grouped.setdefault(reminder.task_id, []).append(reminder)
+        return grouped
+
+    def list_reminders_for_task_due(self, task_id: str, due: date) -> list[TaskReminder]:
+        rows = self._db.execute(
+            """
+            SELECT id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                   in_app_triggered_at, in_app_skipped_at, read_at
+            FROM task_reminders
+            WHERE task_id = ? AND due_date = ?
+            ORDER BY reminder_on ASC, id ASC
+            """,
+            [task_id, due.isoformat()],
+        ).fetchall()
+        return [_task_reminder_from_sql(raw) for raw in rows]
+
+    def get_task_reminder(self, reminder_id: str) -> TaskReminder | None:
+        row = self._db.execute(
+            """
+            SELECT id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                   in_app_triggered_at, in_app_skipped_at, read_at
+            FROM task_reminders
+            WHERE id = ?
+            """,
+            [reminder_id],
+        ).fetchone()
+        return _task_reminder_from_sql(row) if row is not None else None
+
+    def list_open_dated_tasks_for_reminders(self) -> list[tuple[JobTask, Job]]:
+        rows = self._db.execute(
+            """
+            SELECT t.id, t.job_id, t.title, t.due_at, t.done, t.sort_order, t.created_at,
+                   t.application_id, t.notes, t.source_url, j.id
+            FROM job_tasks t
+            JOIN jobs j ON j.id = t.job_id
+            WHERE COALESCE(t.done, 0) = 0
+              AND t.due_at IS NOT NULL AND TRIM(t.due_at) != ''
+              AND (j.dismissed_at IS NULL OR j.dismissed_at = '')
+              AND (j.archived_at IS NULL OR j.archived_at = '')
+              AND (j.filter_state IS NULL OR j.filter_state = '' OR j.filter_state = 'included')
+            """
+        ).fetchall()
+        out: list[tuple[JobTask, Job]] = []
+        for raw in rows:
+            task = self.get_job_task(str(raw[0]))
+            job = self.get_hub_job(str(raw[1]))
+            if task is None or job is None:
+                continue
+            out.append((task, job))
+        return out
+
+    def list_triggered_reminder_rows(self, *, market: str | None = None) -> list[dict[str, Any]]:
+        sql = """
+            SELECT r.id, r.task_id, r.due_date, r.reminder_on, r.kind, r.read_at,
+                   r.in_app_triggered_at, t.title AS task_title, t.job_id,
+                   j.title AS job_title, j.company, j.market
+            FROM task_reminders r
+            JOIN job_tasks t ON t.id = r.task_id
+            JOIN jobs j ON j.id = t.job_id
+            WHERE r.enabled = 1
+              AND r.in_app_triggered_at IS NOT NULL
+              AND r.in_app_skipped_at IS NULL
+              AND COALESCE(t.done, 0) = 0
+              AND t.due_at IS NOT NULL AND t.due_at = r.due_date
+              AND (j.dismissed_at IS NULL OR j.dismissed_at = '')
+              AND (j.archived_at IS NULL OR j.archived_at = '')
+              AND (j.filter_state IS NULL OR j.filter_state = '' OR j.filter_state = 'included')
+        """
+        params: list[str] = []
+        key = (market or "").strip().lower()
+        if key in {"cn", "en"}:
+            sql += " AND lower(COALESCE(j.market, '')) = ?"
+            params.append(key)
+        rows = self._db.execute(sql, params).fetchall()
+        names = [
+            "id",
+            "task_id",
+            "due_date",
+            "reminder_on",
+            "kind",
+            "read_at",
+            "in_app_triggered_at",
+            "task_title",
+            "job_id",
+            "job_title",
+            "company",
+            "market",
+        ]
+        return [dict(zip(names, row, strict=True)) for row in rows]
+
+    def trigger_task_reminder(self, reminder_id: str, at: datetime) -> bool:
+        cur = self._db.execute(
+            """
+            UPDATE task_reminders
+            SET in_app_triggered_at = ?
+            WHERE id = ?
+              AND in_app_triggered_at IS NULL
+              AND in_app_skipped_at IS NULL
+            """,
+            [at.isoformat(), reminder_id],
+        )
+        return cur.rowcount > 0
+
+    def skip_task_reminder(self, reminder_id: str, at: datetime) -> bool:
+        cur = self._db.execute(
+            """
+            UPDATE task_reminders
+            SET in_app_skipped_at = ?
+            WHERE id = ?
+              AND in_app_triggered_at IS NULL
+              AND in_app_skipped_at IS NULL
+            """,
+            [at.isoformat(), reminder_id],
+        )
+        return cur.rowcount > 0
+
+    def mark_task_reminder_read(self, reminder_id: str, at: datetime) -> TaskReminder | None:
+        row = self.get_task_reminder(reminder_id)
+        if row is None:
+            return None
+        if row.read_at is None:
+            self._db.execute(
+                """
+                UPDATE task_reminders
+                SET read_at = ?
+                WHERE id = ? AND read_at IS NULL
+                """,
+                [at.isoformat(), reminder_id],
+            )
+        return self.get_task_reminder(reminder_id)
+
+    def _apply_reminder_plan_tx(
+        self,
+        task: JobTask,
+        *,
+        reminder_dates: list[date] | None,
+        reminders_set: bool,
+        previous_due: date | None,
+        now: datetime | None,
+    ) -> None:
+        from job_sentinel.jobs.reminders import normalize_reminder_plan, today_in_app_tz
+
+        moment = now or datetime.now(tz=UTC)
+        today = today_in_app_tz(now=moment)
+        conn = self._db.conn
+        if task.due_at is None:
+            conn.execute("UPDATE task_reminders SET enabled = 0 WHERE task_id = ?", [task.id])
+            return
+        existing_rows = self.list_reminders_for_task_due(task.id, task.due_at)
+        existing = {row.reminder_on for row in existing_rows if row.enabled}
+        requested = reminder_dates if reminders_set else None
+        plan = normalize_reminder_plan(task.due_at, requested, today=today, existing=existing)
+        if plan is None:
+            self._upsert_reminder_row_tx(
+                task.id, task.due_at, task.due_at, TaskReminderKind.DUE, moment
+            )
+            if previous_due is not None and previous_due != task.due_at:
+                old_rows = self.list_reminders_for_task_due(task.id, previous_due)
+                for row in old_rows:
+                    if not row.enabled or row.kind != TaskReminderKind.ADVANCE:
+                        continue
+                    if today <= row.reminder_on < task.due_at:
+                        self._upsert_reminder_row_tx(
+                            task.id,
+                            task.due_at,
+                            row.reminder_on,
+                            TaskReminderKind.ADVANCE,
+                            moment,
+                        )
+            return
+        keep: list[str] = []
+        for day, kind in plan:
+            self._upsert_reminder_row_tx(task.id, task.due_at, day, kind, moment)
+            keep.append(day.isoformat())
+        if keep:
+            placeholders = ",".join("?" * len(keep))
+            conn.execute(
+                f"""
+                UPDATE task_reminders
+                SET enabled = 0
+                WHERE task_id = ? AND due_date = ? AND reminder_on NOT IN ({placeholders})
+                """,  # noqa: S608
+                [task.id, task.due_at.isoformat(), *keep],
+            )
+        else:
+            conn.execute(
+                "UPDATE task_reminders SET enabled = 0 WHERE task_id = ? AND due_date = ?",
+                [task.id, task.due_at.isoformat()],
+            )
+
+    def _upsert_reminder_row_tx(
+        self,
+        task_id: str,
+        due: date,
+        reminder_on: date,
+        kind: TaskReminderKind,
+        moment: datetime,
+    ) -> None:
+        self._db.conn.execute(
+            """
+            INSERT INTO task_reminders (
+                id, task_id, due_date, reminder_on, kind, enabled, created_at,
+                in_app_triggered_at, in_app_skipped_at, read_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL)
+            ON CONFLICT(task_id, due_date, reminder_on) DO UPDATE SET
+                enabled = 1,
+                kind = excluded.kind
+            """,
+            [
+                uuid.uuid4().hex,
+                task_id,
+                due.isoformat(),
+                reminder_on.isoformat(),
+                kind.value,
+                moment.isoformat(),
+            ],
+        )
 
     def touch_hub_job_activity(self, job_id: str) -> None:
         if self.get_hub_job(job_id) is None:
@@ -1286,6 +1795,100 @@ class JobRepository:
         self._table(_JOBS_RAW_TABLE).insert(_job_raw_to_row(raw))
         logger.debug("Inserted jobs_raw | id={} source={}", raw.id, raw.source)
         return raw
+
+    def create_manual_application_bundle(
+        self,
+        *,
+        request_id: str,
+        raw: JobRaw,
+        job: Job,
+        application: Application,
+        event: ApplicationEvent,
+        create_separately: bool,
+    ) -> ManualApplicationWriteResult:
+        """Atomically store raw → Job → Draft → event → idempotency result."""
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute(
+                """
+                SELECT job_id, application_id, status
+                FROM manual_application_requests
+                WHERE request_id = ?
+                """,
+                [request_id],
+            ).fetchone()
+            if prior is not None:
+                conn.rollback()
+                if str(prior[2]) == "cancelled":
+                    return ManualApplicationWriteResult(status="cancelled")
+                return ManualApplicationWriteResult(
+                    status="replayed",
+                    job_id=str(prior[0]),
+                    application_id=str(prior[1]),
+                )
+
+            if job.canonical_url and not create_separately:
+                duplicate = conn.execute(
+                    """
+                    SELECT id
+                    FROM jobs
+                    WHERE canonical_url = ?
+                    ORDER BY discovered_at ASC
+                    LIMIT 1
+                    """,
+                    [job.canonical_url],
+                ).fetchone()
+                if duplicate is not None:
+                    conn.rollback()
+                    return ManualApplicationWriteResult(
+                        status="duplicate",
+                        duplicate_job_id=str(duplicate[0]),
+                    )
+
+            self._insert_transaction_row(_JOBS_RAW_TABLE, _job_raw_to_row(raw))
+            self._insert_transaction_row(_JOBS_TABLE, _hub_job_to_row(job))
+            self._insert_transaction_row(_APP_TABLE, _app_to_row(application))
+            self._insert_transaction_row(_APP_EVENTS_TABLE, _event_to_row(event))
+            self._insert_transaction_row(
+                _MANUAL_APP_REQUESTS_TABLE,
+                {
+                    "request_id": request_id,
+                    "job_id": job.id,
+                    "application_id": application.id,
+                    "status": "active",
+                    "created_at": event.created_at.isoformat(),
+                },
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return ManualApplicationWriteResult(
+            status="created",
+            job_id=job.id,
+            application_id=application.id,
+        )
+
+    def _insert_transaction_row(self, table: str, row: dict[str, Any]) -> None:
+        columns = list(row)
+        names = ", ".join(columns)
+        placeholders = ", ".join("?" for _ in columns)
+        self._db.conn.execute(
+            f"INSERT INTO {table} ({names}) VALUES ({placeholders})",  # noqa: S608
+            [row[name] for name in columns],
+        )
+
+    def mark_manual_application_request_cancelled(self, application_id: str) -> None:
+        """Seal an abandoned manual request so replay cannot recreate its draft."""
+        self._db.execute(
+            """
+            UPDATE manual_application_requests
+            SET status = 'cancelled'
+            WHERE application_id = ?
+            """,
+            [application_id],
+        )
 
     def get_job_raw(self, raw_id: str) -> JobRaw | None:
         try:
@@ -1436,6 +2039,12 @@ class JobRepository:
         )
         return [self._application_from_storage(dict(r)) for r in rows]
 
+    def list_application_tags(self) -> list[str]:
+        """Unique tag strings on active applications. Not a controlled vocabulary."""
+        from job_sentinel.jobs.tags import unique_application_tags
+
+        return unique_application_tags(self.list_applications(limit=10_000))
+
     def update_application(self, app_id: str, **fields: Any) -> bool:
         """
         Partially update an Application row.
@@ -1446,9 +2055,21 @@ class JobRepository:
             return False
         fields.pop("stale_applied", None)
         fields.pop("submissions", None)
+        fields.pop("current_material_count", None)
+        fields.pop("comm_notes", None)
+        fields.pop("next_step", None)
+        fields.pop("job_deadline", None)
+        fields.pop("job_description", None)
+        fields.pop("job_comment", None)
+        fields.pop("apply_url", None)
+        fields.pop("job_url", None)
         fields["updated_at"] = _now_iso()
         if "exclude_from_idle" in fields:
             fields["exclude_from_idle"] = 1 if fields["exclude_from_idle"] else 0
+        if "tags" in fields:
+            from job_sentinel.jobs.tags import normalize_application_tags
+
+            fields["tags"] = json.dumps(normalize_application_tags(fields["tags"] or []))
         if "stage" in fields and isinstance(fields["stage"], ApplicationStage):
             fields["stage"] = fields["stage"].value
         if "close_reason" in fields:
@@ -1504,6 +2125,121 @@ class JobRepository:
     def append_application_submission(self, submission: ApplicationSubmission) -> None:
         self._table(_SUBMISSIONS_TABLE).insert(_submission_to_row(submission))
 
+    def find_submission_by_idempotency(
+        self, application_id: str, key: str
+    ) -> ApplicationSubmission | None:
+        if not key:
+            return None
+        rows = list(
+            self._table(_SUBMISSIONS_TABLE).rows_where(
+                "application_id = ? AND idempotency_key = ?",
+                [application_id, key],
+                limit=1,
+            )
+        )
+        return _submission_from_row(dict(rows[0])) if rows else None
+
+    def get_application_submission(
+        self, application_id: str, submission_id: str
+    ) -> ApplicationSubmission | None:
+        try:
+            row = self._table(_SUBMISSIONS_TABLE).get(submission_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        item = _submission_from_row(dict(row))
+        if item.application_id != application_id:
+            return None
+        return item
+
+    def count_application_bindings(self, application_id: str) -> int:
+        row = self._db.execute(
+            "SELECT COUNT(*) AS c FROM application_material_bindings WHERE application_id = ?",
+            [application_id],
+        ).fetchone()
+        return int(row[0] if row else 0)
+
+    def list_comm_notes(self, application_id: str) -> list[ApplicationCommNote]:
+        rows = self._table(_COMM_NOTES_TABLE).rows_where(
+            "application_id = ?",
+            [application_id],
+            order_by="created_at DESC",
+        )
+        return [_comm_note_from_row(dict(r)) for r in rows]
+
+    def list_comm_notes_for_job(self, job_id: str) -> list[ApplicationCommNote]:
+        if not job_id:
+            return []
+        rows = self._table(_COMM_NOTES_TABLE).rows_where(
+            "job_id = ?",
+            [job_id],
+            order_by="created_at DESC",
+        )
+        return [_comm_note_from_row(dict(r)) for r in rows]
+
+    def list_comm_notes_for_jobs(
+        self, job_ids: Sequence[str]
+    ) -> dict[str, list[ApplicationCommNote]]:
+        grouped: dict[str, list[ApplicationCommNote]] = {jid: [] for jid in job_ids}
+        ids = [jid for jid in job_ids if jid]
+        if not ids:
+            return grouped
+        placeholders = ",".join("?" * len(ids))
+        rows = self._table(_COMM_NOTES_TABLE).rows_where(
+            f"job_id IN ({placeholders})",
+            ids,
+            order_by="created_at DESC",
+        )
+        for row in rows:
+            note = _comm_note_from_row(dict(row))
+            if note.job_id:
+                grouped.setdefault(note.job_id, []).append(note)
+        return grouped
+
+    def attach_comm_notes_to_job(self, application_id: str, job_id: str) -> None:
+        """Ensure cancelled-draft notes keep a Job lookup key. Does not touch created_at."""
+        if not application_id or not job_id:
+            return
+        self._db.execute(
+            """
+            UPDATE application_comm_notes
+            SET job_id = ?
+            WHERE application_id = ?
+              AND (job_id IS NULL OR job_id = '')
+            """,
+            [job_id, application_id],
+        )
+
+    def keep_application_contact_on_job(self, job_id: str, contact: str) -> None:
+        """Copy leftover Application contact onto Job. Never writes Job.comment."""
+        text = (contact or "").strip()
+        if not job_id or not text:
+            return
+        try:
+            self._table(_JOBS_TABLE).get(job_id)
+        except sqlite_utils.db.NotFoundError:
+            return
+        self._table(_JOBS_TABLE).update(job_id, {"contact": text, "updated_at": _now_iso()})
+
+    def create_comm_note(self, note: ApplicationCommNote) -> ApplicationCommNote:
+        job_id = note.job_id
+        if not job_id and note.application_id:
+            app = self.get_application(note.application_id)
+            if app is not None and app.job_id:
+                job_id = app.job_id
+        stamped = note.model_copy(update={"job_id": job_id})
+        self._table(_COMM_NOTES_TABLE).insert(_comm_note_to_row(stamped))
+        return stamped
+
+    def delete_comm_note(self, application_id: str, note_id: str) -> bool:
+        try:
+            row = self._table(_COMM_NOTES_TABLE).get(note_id)
+        except sqlite_utils.db.NotFoundError:
+            return False
+        if str(row.get("application_id") or "") != application_id:
+            return False
+        self._table(_COMM_NOTES_TABLE).delete(note_id)
+        return True
+
     def list_application_submissions(self, application_id: str) -> list[ApplicationSubmission]:
         rows = self._table(_SUBMISSIONS_TABLE).rows_where(
             "application_id = ?",
@@ -1526,7 +2262,58 @@ class JobRepository:
     def _application_from_storage(self, row: dict[str, Any]) -> Application:
         app = _app_from_row(row)
         app.submissions = self.list_application_submissions(app.id)
+        app.current_material_count = self.count_application_bindings(app.id)
+        app.comm_notes = self.list_comm_notes(app.id)
+        return self._attach_job_projection(app)
+
+    def _attach_job_projection(self, app: Application) -> Application:
+        """Copy Job next_step / DDL / JD / comment for Applications UI. Not persisted."""
+        if not app.job_id:
+            return app
+        job = self.get_hub_job(app.job_id)
+        if job is None:
+            return app
+        app.next_step = job.next_step or ""
+        if job.deadline is not None:
+            stamp = (
+                job.deadline.date().isoformat()
+                if hasattr(job.deadline, "date")
+                else str(job.deadline)
+            )
+            app.job_deadline = stamp[:10]
+        app.job_description = job.description or ""
+        app.job_comment = job.comment or ""
+        app.apply_url = self._stored_apply_url(app.job_id)
+        app.job_url = (job.job_url or job.canonical_url or "").strip()
         return app
+
+    def _stored_apply_url(self, job_id: str) -> str:
+        """Return a stored apply URL from ingest payload. Do not guess chat/email links."""
+        try:
+            rows = list(
+                self._table(_JOBS_RAW_TABLE).rows_where(
+                    "job_id = ?",
+                    [job_id],
+                    order_by="collected_at DESC",
+                    limit=1,
+                )
+            )
+        except sqlite3.Error:
+            return ""
+        if not rows:
+            return ""
+        raw = rows[0].get("raw_payload") or "{}"
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("application_url", "apply_url"):
+            value = str(payload.get(key) or "").strip()
+            if value.startswith("http://") or value.startswith("https://"):
+                return value
+        return ""
 
     def application_stats(self) -> dict[str, int]:
         """Count of applications per stage, plus a 'total' key."""
@@ -1885,6 +2672,12 @@ def _parse_dt(value: str) -> datetime:
 # ── Application helpers ───────────────────────────────────────────────────────
 
 
+def _parse_app_tags(value: object) -> list[str]:
+    from job_sentinel.jobs.tags import parse_stored_tags
+
+    return parse_stored_tags(value)
+
+
 def _app_to_row(app: Application) -> dict[str, Any]:
     return {
         "id": app.id,
@@ -1899,6 +2692,8 @@ def _app_to_row(app: Application) -> dict[str, Any]:
         "applied_date": app.applied_date,
         "deadline": app.deadline,
         "notes": app.notes,
+        "contact": app.contact or "",
+        "tags": json.dumps(_parse_app_tags(app.tags)),
         "close_reason": app.close_reason.value if app.close_reason else None,
         "close_note": app.close_note,
         "posting_id": app.posting_id,
@@ -1929,6 +2724,8 @@ def _app_from_row(row: dict[str, Any]) -> Application:
         applied_date=row.get("applied_date", ""),
         deadline=row.get("deadline", ""),
         notes=row.get("notes", ""),
+        contact=row.get("contact") or "",
+        tags=_parse_app_tags(row.get("tags")),
         close_reason=reason,
         close_note=row.get("close_note") or "",
         posting_id=row.get("posting_id") or None,
@@ -2048,7 +2845,15 @@ def _job_task_to_row(task: JobTask) -> dict[str, Any]:
         "done": 1 if task.done else 0,
         "sort_order": task.sort_order,
         "created_at": task.created_at.isoformat(),
+        "application_id": task.application_id or None,
+        "notes": task.notes or None,
+        "source_url": task.source_url or None,
     }
+
+
+def _blank_to_none(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def _job_task_from_row(row: dict[str, Any]) -> JobTask:
@@ -2067,6 +2872,32 @@ def _job_task_from_row(row: dict[str, Any]) -> JobTask:
         done=bool(int(row.get("done") or 0)),
         sort_order=int(row.get("sort_order") or 0),
         created_at=_parse_dt(row.get("created_at", "")),
+        application_id=_blank_to_none(row.get("application_id")),
+        notes=_blank_to_none(row.get("notes")),
+        source_url=_blank_to_none(row.get("source_url")),
+    )
+
+
+def _parse_dt_optional(value: object) -> datetime | None:
+    if value is None or value == "":
+        return None
+    return _parse_dt(str(value))
+
+
+def _task_reminder_from_sql(row: Any) -> TaskReminder:
+    kind_raw = str(row[4] or "advance")
+    kind = TaskReminderKind.DUE if kind_raw == "due" else TaskReminderKind.ADVANCE
+    return TaskReminder(
+        id=str(row[0]),
+        task_id=str(row[1]),
+        due_date=date.fromisoformat(str(row[2])[:10]),
+        reminder_on=date.fromisoformat(str(row[3])[:10]),
+        kind=kind,
+        enabled=bool(int(row[5] or 0)),
+        created_at=_parse_dt(str(row[6] or "")),
+        in_app_triggered_at=_parse_dt_optional(row[7]),
+        in_app_skipped_at=_parse_dt_optional(row[8]),
+        read_at=_parse_dt_optional(row[9]),
     )
 
 
@@ -2117,6 +2948,7 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "source_job_id": job.source_job_id,
         "job_url": job.job_url,
         "canonical_url": job.canonical_url,
+        "source_note": job.source_note,
         "title": job.title,
         "company": job.company,
         "location": job.location,
@@ -2133,6 +2965,7 @@ def _hub_job_to_row(job: Job) -> dict[str, Any]:
         "favorite": 1 if job.favorite else 0,
         "reference": 1 if job.reference else 0,
         "comment": job.comment,
+        "contact": job.contact or "",
         "next_step": job.next_step,
         "deadline": _optional_iso(job.deadline),
         "follow_up_at": _optional_iso(job.follow_up_at),
@@ -2166,6 +2999,7 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         source_job_id=row.get("source_job_id", ""),
         job_url=row.get("job_url", ""),
         canonical_url=row.get("canonical_url", ""),
+        source_note=row.get("source_note", ""),
         title=row.get("title", ""),
         company=row.get("company", ""),
         location=location,
@@ -2181,6 +3015,7 @@ def _hub_job_from_row(row: dict[str, Any]) -> Job:
         favorite=bool(int(row.get("favorite") or 0)),
         reference=bool(int(row.get("reference") or 0)) or engagement == JobEngagement.REFERENCE,
         comment=row.get("comment") or "",
+        contact=row.get("contact") or "",
         next_step=row.get("next_step") or "",
         deadline=_parse_optional_dt(row.get("deadline")),
         follow_up_at=_parse_optional_dt(row.get("follow_up_at")),
@@ -2208,6 +3043,7 @@ def _submission_to_row(item: ApplicationSubmission) -> dict[str, Any]:
         "channel": item.channel,
         "packet_snapshot": json.dumps(item.packet_snapshot.model_dump(mode="json")),
         "notes": item.notes,
+        "idempotency_key": item.idempotency_key,
         "created_at": item.created_at.isoformat(),
     }
 
@@ -2225,6 +3061,27 @@ def _submission_from_row(row: dict[str, Any]) -> ApplicationSubmission:
         channel=row.get("channel") or "",
         packet_snapshot=snapshot,
         notes=row.get("notes") or "",
+        idempotency_key=row.get("idempotency_key") or "",
+        created_at=_parse_dt(row.get("created_at", "")),
+    )
+
+
+def _comm_note_to_row(item: ApplicationCommNote) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "application_id": item.application_id or None,
+        "job_id": item.job_id or None,
+        "body": item.body,
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+def _comm_note_from_row(row: dict[str, Any]) -> ApplicationCommNote:
+    return ApplicationCommNote(
+        id=row["id"],
+        application_id=_blank_to_none(row.get("application_id")),
+        job_id=_blank_to_none(row.get("job_id")),
+        body=row.get("body") or "",
         created_at=_parse_dt(row.get("created_at", "")),
     )
 

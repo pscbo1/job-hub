@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { OPEN_EVENT } from "@/components/CommandPalette";
+import { REMINDERS_COUNT_EVENT } from "@/components/ReminderSync";
 import { getAuthStatus, type AuthStatus } from "@/lib/api";
 import { jobsPath, marketFromPath, searchPath, type MarketId } from "@/lib/markets";
 import { readLastMarket } from "@/lib/marketPrefs";
@@ -80,6 +81,7 @@ export function Nav() {
   const moreRef = useRef<HTMLDivElement>(null);
 
   const [lastMarket, setLastMarket] = useState<MarketId>("cn");
+  const [unreadReminders, setUnreadReminders] = useState(0);
 
   useEffect(() => {
     getAuthStatus().then(setAuth);
@@ -87,6 +89,15 @@ export function Nav() {
     setMore(false);
     setLastMarket(marketFromPath(pathname) ?? readLastMarket());
   }, [pathname]);
+
+  useEffect(() => {
+    const onCount = (event: Event) => {
+      const count = (event as CustomEvent<{ unread_count?: number }>).detail?.unread_count;
+      if (typeof count === "number") setUnreadReminders(count);
+    };
+    window.addEventListener(REMINDERS_COUNT_EVENT, onCount);
+    return () => window.removeEventListener(REMINDERS_COUNT_EVENT, onCount);
+  }, []);
 
   useEffect(() => {
     if (!more) return;
@@ -217,6 +228,12 @@ export function Nav() {
                 )}
               >
                 {l.label}
+                {l.href === "/tasks" && unreadReminders > 0 && (
+                  <span
+                    className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-brand align-middle"
+                    aria-label="Unread reminders"
+                  />
+                )}
               </Link>
             </li>
             );
@@ -333,6 +350,12 @@ export function Nav() {
                   )}
                 >
                   {l.label}
+                  {l.href === "/tasks" && unreadReminders > 0 && (
+                    <span
+                      className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-brand align-middle"
+                      aria-label="Unread reminders"
+                    />
+                  )}
                 </Link>
                 );
               })}

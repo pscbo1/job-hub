@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -23,6 +23,9 @@ interface DataTableProps<T> {
   initialSortKey?: string;
   initialSortDir?: "asc" | "desc";
   empty?: React.ReactNode;
+  colGroup?: ReactNode;
+  wrapperClassName?: string;
+  tableClassName?: string;
 }
 
 /**
@@ -36,6 +39,9 @@ export function DataTable<T>({
   initialSortKey,
   initialSortDir = "desc",
   empty,
+  colGroup,
+  wrapperClassName,
+  tableClassName,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | undefined>(initialSortKey);
   const [sortDir, setSortDir] = useState<"asc" | "desc">(initialSortDir);
@@ -67,8 +73,19 @@ export function DataTable<T>({
   }
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-line shadow-card">
-      <table className="w-full min-w-[640px] border-collapse bg-surface text-left text-sm">
+    <div
+      className={cn(
+        "max-w-full overflow-x-auto rounded-2xl border border-line shadow-card",
+        wrapperClassName,
+      )}
+    >
+      <table
+        className={cn(
+          "w-full min-w-[640px] border-collapse bg-surface text-left text-sm",
+          tableClassName,
+        )}
+      >
+        {colGroup}
         <thead>
           <tr className="border-b border-line bg-bg text-xs uppercase tracking-wider text-muted">
             {columns.map((c) => {

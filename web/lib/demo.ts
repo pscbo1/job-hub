@@ -161,6 +161,8 @@ export const demoHubJobs: HubJob[] = [
     favorite: false,
     match_score: null,
     salary: "面议",
+    description: "负责骑手生态相关用户研究，独立设计研究方案并产出可落地的产品建议。",
+    comment: "Team is research-heavy; ask about mixed methods.",
   },
   {
     id: "demo-hub-2",
@@ -179,6 +181,9 @@ export const demoHubJobs: HubJob[] = [
     salary: "23-50k·15薪",
     deadline: "2026-09-12",
     next_step: "Prep OA",
+    description:
+      "ToB 用户产品，负责需求拆解、方案评审与上线效果跟踪。Full posting is saved on this record.",
+    comment: "OA likely this week. Recruiter asked for a product case.",
     tasks: [
       {
         id: "demo-task-oa",
@@ -190,6 +195,26 @@ export const demoHubJobs: HubJob[] = [
         created_at: "2026-08-25T00:00:00Z",
       },
     ],
+  },
+  {
+    id: "demo-hub-stripe",
+    title: "Backend Engineer (Python)",
+    company: "Stripe",
+    location: "Remote",
+    source: "remoteok",
+    job_url: "https://example.com/job/stripe-backend",
+    published_at: null,
+    discovered_at: "2026-06-01T00:00:00Z",
+    engagement: null,
+    status: null,
+    favorite: true,
+    match_score: null,
+    salary: "$120k–$160k",
+    deadline: "2026-06-20",
+    next_step: "Follow up recruiter",
+    description:
+      "Build payments APIs in Python. Experience with distributed systems and Postgres preferred.",
+    comment: "Referral via intern cohort. Ask about on-call.",
   },
 ];
 
@@ -204,15 +229,66 @@ export const demoApplications: Application[] = [
     applied_date: "2026-06-09",
     salary: "$120k–$160k",
     stale_applied: true,
+    job_id: "demo-hub-stripe",
+    url: "https://example.com/job/stripe-backend",
+    apply_url: "https://boards.example.com/apply/stripe-backend",
+    job_url: "https://example.com/job/stripe-backend",
+    next_step: "Follow up recruiter",
+    job_deadline: "2026-06-20",
+    job_description:
+      "Build payments APIs in Python. Experience with distributed systems and Postgres preferred.",
+    job_comment: "Referral via intern cohort. Ask about on-call.",
+    notes: "Sent résumé v2. Waiting on recruiter ping.",
+    tags: ["英文岗位"],
   }),
-  app("ML Engineer", "Hugging Face", "Remote", "himalayas", "interview", { applied_date: "2026-06-05" }),
-  app("Platform Engineer", "Datadog", "New York, NY", "adzuna", "draft", {}),
+  app("ML Engineer", "Hugging Face", "Remote", "himalayas", "interview", {
+    applied_date: "2026-06-05",
+    job_id: "demo-hub-1",
+    url: "http://www.zhaopin.com/jobdetail/CC383625320J40878294709.htm",
+    job_url: "http://www.zhaopin.com/jobdetail/CC383625320J40878294709.htm",
+    next_step: "Prep research case",
+    job_description:
+      "负责骑手生态相关用户研究，独立设计研究方案并产出可落地的产品建议。",
+    job_comment: "Team is research-heavy; ask about mixed methods.",
+    notes: "Screening call went well.",
+    tags: ["用户研究"],
+  }),
+  app("Platform Engineer", "Datadog", "New York, NY", "adzuna", "draft", {
+    job_id: "demo-hub-2",
+    url: "https://www.liepin.com/job/1985138523.shtml",
+    apply_url: "https://careers.example.com/datadog/platform",
+    job_url: "https://www.liepin.com/job/1985138523.shtml",
+    next_step: "Prep OA",
+    job_deadline: "2026-09-12",
+    job_description:
+      "ToB 用户产品，负责需求拆解、方案评审与上线效果跟踪。Full posting is saved on this record.",
+    job_comment: "OA likely this week. Recruiter asked for a product case.",
+  }),
   app("SWE Intern — Summer 2026", "Google", "Mountain View, CA", "manual", "applied", {
     applied_date: "2026-06-01",
     exclude_from_idle: true,
+    url: "https://example.com/job/google-intern",
+    job_url: "https://example.com/job/google-intern",
+    next_step: "Host matching form",
+    notes: "Applied via university portal.",
   }),
-  app("Backend Intern", "Cloudflare", "Remote", "remoteok", "offer", { applied_date: "2026-05-20" }),
-  app("Data Engineer", "Snowflake", "Austin, TX", "adzuna", "closed", { applied_date: "2026-05-15", close_reason: "not_selected" }),
+  app("Backend Intern", "Cloudflare", "Remote", "remoteok", "offer", {
+    applied_date: "2026-05-20",
+    url: "",
+    job_url: "",
+    apply_url: "",
+    next_step: "Decide by Friday",
+    notes: "Verbal offer; written pending.",
+    tags: ["产品"],
+  }),
+  app("Data Engineer", "Snowflake", "Austin, TX", "adzuna", "closed", {
+    applied_date: "2026-05-15",
+    close_reason: "not_selected",
+    url: "https://example.com/job/snowflake-de",
+    job_url: "https://example.com/job/snowflake-de",
+    job_description: "Warehouse internals and streaming ingestion.",
+    notes: "Closed after onsite.",
+  }),
 ];
 
 function app(
@@ -226,16 +302,25 @@ function app(
   const now = "2026-06-12T10:00:00Z";
   return {
     id: uid(),
+    job_id: opts.job_id ?? null,
     title,
     employer,
     location,
-    url: "https://example.com/job",
+    url: opts.url ?? "https://example.com/job",
     source,
     stage,
     salary: opts.salary ?? "",
     applied_date: opts.applied_date ?? "",
     deadline: "",
-    notes: "",
+    notes: opts.notes ?? "",
+    contact: opts.contact ?? "",
+    tags: opts.tags ?? [],
+    next_step: opts.next_step ?? "",
+    job_deadline: opts.job_deadline ?? "",
+    job_description: opts.job_description ?? "",
+    job_comment: opts.job_comment ?? "",
+    apply_url: opts.apply_url ?? "",
+    job_url: opts.job_url ?? "",
     posting_id: null,
     resume_document_id: null,
     close_reason: opts.close_reason ?? null,
@@ -243,6 +328,8 @@ function app(
     exclude_from_idle: opts.exclude_from_idle ?? false,
     stale_applied: opts.stale_applied ?? false,
     submissions: opts.submissions ?? [],
+    current_material_count: opts.current_material_count ?? 0,
+    comm_notes: opts.comm_notes ?? [],
     created_at: now,
     updated_at: now,
     raw_data: {},
@@ -398,12 +485,28 @@ export const demoMaterials: Material[] = [
   material("mat-portfolio", "作品集", "portfolio", ["backend"], [
     version("ver-port-1", "mat-portfolio", 1, "", "", [], "https://example.com/portfolio"),
   ]),
+  material("mat-template", "Boss greeting", "message_template", ["outreach"], [
+    version("ver-tpl-1", "mat-template", 1, "", "content.md", []),
+  ]),
+  material("mat-answer", "Why this role", "application_answer", ["screening"], [
+    version("ver-ans-1", "mat-answer", 1, "", "content.md", []),
+  ]),
 ];
+
+{
+  const tpl = demoMaterials.find((m) => m.id === "mat-template");
+  if (tpl?.versions[0]) tpl.versions[0].text = "Hi, thanks for the chat about the role.";
+  const ans = demoMaterials.find((m) => m.id === "mat-answer");
+  if (ans?.versions[0]) ans.versions[0].text = "I want to work on rider-experience research.";
+}
 
 const demoPacketIds: Record<string, string[]> = {
   [demoApplications[0].id]: ["ver-en-2", "ver-port-1"],
   [demoApplications[2].id]: ["ver-en-1"],
 };
+
+demoApplications[0].current_material_count = 2;
+demoApplications[2].current_material_count = 1;
 
 {
   const first = demoApplications[0];
@@ -447,11 +550,12 @@ export function makeDemoMaterial(body: {
   notes?: string;
   url?: string;
   version_label?: string;
+  content?: string;
 }): Material {
   const id = uid();
   const v = makeDemoVersion(
     { id, versions: [] } as unknown as Material,
-    { url: body.url, version_label: body.version_label, purpose: body.purpose },
+    { url: body.url, version_label: body.version_label, purpose: body.purpose, content: body.content },
   );
   return {
     id,
@@ -468,7 +572,7 @@ export function makeDemoMaterial(body: {
 
 export function makeDemoVersion(
   materialRow: Material,
-  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string },
+  body: { url?: string; version_label?: string; purpose?: string[]; notes?: string; content?: string },
 ): MaterialVersion {
   const n = (materialRow.versions[0]?.version_number ?? 0) + 1;
   const id = uid();
@@ -479,12 +583,13 @@ export function makeDemoVersion(
     version_number: n,
     version_label: label,
     purpose: body.purpose ?? [],
-    file_ref: body.url ? "" : `demo/${id}/file.pdf`,
-    original_filename: body.url ? "" : "file.pdf",
-    content_type: body.url ? "" : "application/pdf",
+    file_ref: body.url ? "" : `demo/${id}/${body.content ? "content.md" : "file.pdf"}`,
+    original_filename: body.url ? "" : body.content ? "content.md" : "file.pdf",
+    content_type: body.url ? "" : body.content ? "text/markdown" : "application/pdf",
     byte_size: 1,
     url: body.url ?? "",
     notes: body.notes ?? "",
+    text: body.content ?? "",
     archived_at: null,
     created_at: new Date().toISOString(),
     display_label: label ? `v${n} · ${label}` : `v${n}`,
@@ -531,19 +636,98 @@ export function removeDemoPacketBinding(appId: string, bindingId: string): void 
   demoPacketIds[appId] = items.map((item) => item.binding.material_version_id);
 }
 
+const demoCommNotes: Record<string, import("@/lib/api").ApplicationCommNote[]> = {};
+const demoJobCommNotes: import("@/lib/api").ApplicationCommNote[] = [];
+const DEMO_JOB_COMM_KEY = "job-hub.demo.jobCommNotes";
+const DEMO_JOB_CONTACT_KEY = "job-hub.demo.jobContact";
+const demoJobContact: Record<string, string> = {};
+let demoJobContactHydrated = false;
+
+function hydrateDemoJobCommNotes(): void {
+  if (typeof window === "undefined" || demoJobCommNotes.length > 0) return;
+  try {
+    const raw = sessionStorage.getItem(DEMO_JOB_COMM_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as import("@/lib/api").ApplicationCommNote[];
+    if (Array.isArray(parsed)) demoJobCommNotes.push(...parsed);
+  } catch {
+    /* ignore bad demo cache */
+  }
+}
+
+function persistDemoJobCommNotes(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(DEMO_JOB_COMM_KEY, JSON.stringify(demoJobCommNotes));
+}
+
+function hydrateDemoJobContact(): void {
+  if (demoJobContactHydrated || typeof window === "undefined") return;
+  demoJobContactHydrated = true;
+  try {
+    const raw = sessionStorage.getItem(DEMO_JOB_CONTACT_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [jobId, text] of Object.entries(parsed)) {
+        if (typeof text === "string" && text.trim()) demoJobContact[jobId] = text;
+      }
+    }
+  } catch {
+    /* ignore bad demo cache */
+  }
+}
+
+function persistDemoJobContact(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(DEMO_JOB_CONTACT_KEY, JSON.stringify(demoJobContact));
+}
+
+export function leftoverDemoJobContact(jobId: string): string {
+  hydrateDemoJobContact();
+  const stored = (demoJobContact[jobId] ?? "").trim();
+  if (stored) return stored;
+  const job = demoHubJobs.find((row) => row.id === jobId);
+  return (job?.contact ?? "").trim();
+}
+const demoIdempotency: Record<string, string> = {};
+
 export function recordDemoSubmission(appId: string, notes = ""): Application | null {
+  const result = recordDemoSubmissionResult(appId, { notes, confirm_empty: true });
+  return result.ok ? result.application : null;
+}
+
+export function recordDemoSubmissionResult(
+  appId: string,
+  body: { notes?: string; confirm_empty?: boolean; expected_version_ids?: string[] | null; idempotency_key?: string } = {},
+): { ok: true; application: Application } | { ok: false; code: string; message: string } {
   const found = demoApplications.find((a) => a.id === appId);
-  if (!found) return null;
+  if (!found) return { ok: false, code: "error", message: "Application not found" };
+  if (body.idempotency_key && demoIdempotency[body.idempotency_key]) {
+    return { ok: true, application: { ...found } };
+  }
   const packet = demoPacketFor(appId);
+  const ids = packet.map((item) => item.binding.material_version_id);
+  if (body.expected_version_ids != null) {
+    const expected = body.expected_version_ids;
+    const sameLength = expected.length === ids.length;
+    const sameMembers = sameLength && expected.every((id) => ids.includes(id));
+    if (!sameMembers) {
+      return { ok: false, code: "materials_changed", message: "Materials changed while confirming." };
+    }
+  }
+  if (packet.length === 0 && !body.confirm_empty) {
+    return { ok: false, code: "empty_materials", message: "本次未记录材料" };
+  }
   const submission = {
     id: uid(),
     application_id: appId,
     submitted_at: new Date().toISOString(),
     channel: "",
-    notes,
+    notes: body.notes ?? "",
+    idempotency_key: body.idempotency_key ?? "",
     packet_snapshot: {
       binding_ids: packet.map((item) => item.binding.id),
-      material_version_ids: packet.map((item) => item.binding.material_version_id),
+      material_version_ids: ids,
       items: packet.map((item) => ({
         binding_id: item.binding.id,
         material_id: item.material?.id ?? "",
@@ -554,6 +738,7 @@ export function recordDemoSubmission(appId: string, notes = ""): Application | n
         version_label: item.version?.version_label ?? "",
         original_filename: item.version?.original_filename ?? "",
         file_ref: item.version?.file_ref ?? "",
+        snapshot_file_ref: item.version?.file_ref ?? "",
         url: item.version?.url ?? "",
         material_purpose: item.material?.purpose ?? [],
         version_purpose: item.version?.purpose ?? [],
@@ -563,12 +748,80 @@ export function recordDemoSubmission(appId: string, notes = ""): Application | n
       note: "",
     },
   };
-  found.stage = "applied";
-  found.close_reason = null;
-  found.close_note = "";
-  found.applied_date = found.applied_date || new Date().toISOString().slice(0, 10);
+  if (found.stage === "draft" || found.stage === "closed") {
+    found.stage = "applied";
+    found.close_reason = null;
+    found.close_note = "";
+    found.applied_date = found.applied_date || new Date().toISOString().slice(0, 10);
+  }
   found.submissions = [...(found.submissions ?? []), submission];
-  return { ...found };
+  found.current_material_count = packet.length;
+  if (body.idempotency_key) demoIdempotency[body.idempotency_key] = submission.id;
+  return { ok: true, application: { ...found } };
+}
+
+export function listDemoCommNotes(appId: string): import("@/lib/api").ApplicationCommNote[] {
+  return (demoCommNotes[appId] ?? []).map((note) => ({ ...note }));
+}
+
+export function listDemoCommNotesForJob(jobId: string): import("@/lib/api").ApplicationCommNote[] {
+  hydrateDemoJobCommNotes();
+  const fromIndex = Object.values(demoCommNotes)
+    .flat()
+    .filter((note) => note.job_id === jobId);
+  const leftover = demoJobCommNotes.filter((note) => note.job_id === jobId);
+  const seen = new Set<string>();
+  const rows: import("@/lib/api").ApplicationCommNote[] = [];
+  for (const note of [...fromIndex, ...leftover]) {
+    if (seen.has(note.id)) continue;
+    seen.add(note.id);
+    rows.push(note);
+  }
+  return rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+}
+
+export function addDemoCommNote(appId: string, body: string): import("@/lib/api").ApplicationCommNote {
+  const app = demoApplications.find((row) => row.id === appId);
+  const note = {
+    id: uid(),
+    application_id: appId,
+    job_id: app?.job_id ?? null,
+    body,
+    created_at: new Date().toISOString(),
+  };
+  demoCommNotes[appId] = [note, ...(demoCommNotes[appId] ?? [])];
+  return note;
+}
+
+export function deleteDemoCommNote(appId: string, noteId: string): boolean {
+  demoCommNotes[appId] = (demoCommNotes[appId] ?? []).filter((n) => n.id !== noteId);
+  return true;
+}
+
+export function abandonDemoApplication(id: string): boolean {
+  const index = demoApplications.findIndex((row) => row.id === id);
+  if (index < 0) return false;
+  const app = demoApplications[index];
+  if (app.stage !== "draft" || (app.submissions?.length ?? 0) > 0) return false;
+  const notes = demoCommNotes[id] ?? [];
+  if (app.job_id) {
+    for (const note of notes) {
+      demoJobCommNotes.push({ ...note, job_id: note.job_id ?? app.job_id });
+    }
+    persistDemoJobCommNotes();
+    const contact = (app.contact ?? "").trim();
+    if (contact) {
+      hydrateDemoJobContact();
+      demoJobContact[app.job_id] = contact;
+      persistDemoJobContact();
+      const job = demoHubJobs.find((row) => row.id === app.job_id);
+      if (job) job.contact = contact;
+    }
+  }
+  delete demoCommNotes[id];
+  delete demoPacketIds[id];
+  demoApplications.splice(index, 1);
+  return true;
 }
 
 export const demoOps: OpsStatus = {

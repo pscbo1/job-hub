@@ -69,3 +69,23 @@ class MaterialStorage:
             return self.resolve(file_ref).is_file()
         except StorageError:
             return False
+
+    def copy_ref(self, source_ref: str, dest_ref: str) -> str:
+        """Copy an existing stored file to a new write-once path."""
+        src = self.resolve(source_ref)
+        if not src.is_file():
+            raise StorageError("Source file is missing")
+        dest = self.resolve(dest_ref)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(src.read_bytes())
+        return dest_ref
+
+    def read_text(self, file_ref: str, *, limit: int = 200_000) -> str:
+        path = self.resolve(file_ref)
+        if not path.is_file():
+            raise StorageError("File not found")
+        data = path.read_bytes()[:limit]
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise StorageError("File is not UTF-8 text") from exc

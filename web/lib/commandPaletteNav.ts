@@ -29,9 +29,9 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
     },
     {
       label: "Materials",
-      hint: "Files library and application packets",
+      hint: "Documents, templates, and application packets",
       href: "/materials",
-      keywords: "files packet resume cover letter portfolio",
+      keywords: "files documents templates answers packet resume cover letter portfolio",
     },
     {
       label: "Dashboard",
