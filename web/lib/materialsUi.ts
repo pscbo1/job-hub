@@ -73,6 +73,73 @@ export function formatKind(kind: string): string {
   return kind.replaceAll("_", " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
+function looksLikeVersionNoise(value: string): boolean {
+  return /^v?\d+$/i.test(value) || /^\d+\s*·\s*\d+$/.test(value);
+}
+
+/** Title for workbench rows and picker: human name, never raw vN · N. */
+export function humanMaterialTitle(
+  material?: { title?: string | null; kind?: string | null } | null,
+  version?: { original_filename?: string | null } | null,
+): string {
+  const title = (material?.title ?? "").trim();
+  if (title && !looksLikeVersionNoise(title)) return title;
+  const file = (version?.original_filename ?? "").trim();
+  if (file) return file.replace(/\.[^.]+$/, "") || file;
+  const kind = (material?.kind ?? "").trim();
+  if (kind) return formatKind(kind);
+  if (title) return title;
+  return "Untitled material";
+}
+
+/** Extra version text when one material has several files. Skip numeric junk. */
+export function humanVersionLabel(
+  version?: {
+    version_label?: string | null;
+    original_filename?: string | null;
+    version_date?: string | null;
+    display_label?: string | null;
+    version_number?: number | null;
+  } | null,
+): string {
+  const label = (version?.version_label ?? "").trim();
+  if (label && !looksLikeVersionNoise(label)) return label;
+  const file = (version?.original_filename ?? "").trim();
+  if (file) return file;
+  const date = (version?.version_date ?? "").trim();
+  if (date) return date;
+  const display = (version?.display_label ?? "").trim();
+  if (display && !looksLikeVersionNoise(display.replace(/^v/i, "").trim())) return display;
+  const n = version?.version_number;
+  return typeof n === "number" && n > 0 ? `Version ${n}` : "";
+}
+
+export function partitionPacketItems(items: PacketItem[]): {
+  files: PacketItem[];
+  knowledge: PacketItem[];
+} {
+  const files: PacketItem[] = [];
+  const knowledge: PacketItem[] = [];
+  for (const item of items) {
+    if (isKnowledgeKind(item.material?.kind ?? "")) knowledge.push(item);
+    else files.push(item);
+  }
+  return { files, knowledge };
+}
+
+export function partitionMaterials(rows: Material[]): {
+  files: Material[];
+  knowledge: Material[];
+} {
+  const files: Material[] = [];
+  const knowledge: Material[] = [];
+  for (const row of rows) {
+    if (isKnowledgeKind(row.kind)) knowledge.push(row);
+    else files.push(row);
+  }
+  return { files, knowledge };
+}
+
 export function latestVersion(material: Material): MaterialVersion | null {
   const live = material.versions.filter((row) => !row.archived_at);
   if (live.length === 0) return null;

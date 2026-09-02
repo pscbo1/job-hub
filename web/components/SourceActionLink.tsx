@@ -1,6 +1,6 @@
 "use client";
 
-import { ASSIST_BTN_PRIMARY, ASSIST_NO_APPLY_URL } from "@/lib/applicationUi";
+import { ASSIST_BTN_PRIMARY, ASSIST_COPY, ASSIST_NO_APPLY_URL } from "@/lib/applicationUi";
 import { sourceAction } from "@/lib/sourceAction";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +32,7 @@ export function SourceActionLink({
         rel="noopener noreferrer"
         className={cn(ASSIST_BTN_PRIMARY, className)}
       >
-        {action.label}
+        {ASSIST_COPY.openApply}
       </a>
     );
   }

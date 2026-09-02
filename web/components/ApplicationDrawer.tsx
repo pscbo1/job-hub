@@ -10,11 +10,11 @@ import { addCommNote, patchHubJob, updateApplication, type Application } from "@
 import {
   type ApplicationDrawerTab,
   ASSIST_BTN_SECONDARY,
-  assistPacketReadiness,
+  ASSIST_COPY,
+  packetWorkbenchPath,
   latestSubmissionLine,
   nextStepLabel,
 } from "@/lib/applicationUi";
-import { currentMaterialCount } from "@/lib/materialsUi";
 import {
   DRAWER_SAVE_STEP_LABELS,
   applyDrawerSynced,
@@ -28,13 +28,12 @@ import {
 import { tagsEqual } from "@/lib/applicationTags";
 import { dateInputValue, isDateOverdue } from "@/lib/jobPipeline";
 import { DIRTY_SWITCH_LABELS } from "@/lib/recordDraft";
-import { sourceAction } from "@/lib/sourceAction";
 import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 
 const TABS: { id: ApplicationDrawerTab; label: string }[] = [
-  { id: "materials", label: "Materials" },
   { id: "overview", label: "Overview" },
+  { id: "materials", label: "Materials" },
   { id: "notes", label: "Notes" },
 ];
 
@@ -262,10 +261,6 @@ export function ApplicationDrawer({
 
   const saveBusy = saving || saveLock.current;
 
-  const source = shown
-    ? sourceAction({ apply_url: shown.apply_url, url: shown.url, job_url: shown.job_url })
-    : null;
-
   return (
     <div className="fixed inset-0 z-50">
       <button type="button" className="absolute inset-0 bg-ink/30" aria-label="Close drawer" onClick={requestClose} />
@@ -389,13 +384,21 @@ export function ApplicationDrawer({
                   url={shown.url}
                   job_url={shown.job_url}
                 />
+                <a
+                  href={packetWorkbenchPath(shown.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={ASSIST_BTN_SECONDARY}
+                >
+                  {ASSIST_COPY.openWindow}
+                </a>
                 {shown.stage === "draft" && (
                   <button
                     type="button"
                     onClick={() => onSubmitRequest(shown.id)}
                     className={ASSIST_BTN_SECONDARY}
                   >
-                    Mark submitted
+                    {ASSIST_COPY.markSubmitted}
                   </button>
                 )}
                 {onToggleIdleExempt && (
@@ -454,7 +457,6 @@ export function ApplicationDrawer({
                   ddlDraft={ddlDraft}
                   onNextChange={setNextDraft}
                   onDdlChange={setDdlDraft}
-                  sourceMissing={source?.kind === "missing"}
                   onOpenMaterials={() => {
                     setTab("materials");
                     onTabChange("materials");
@@ -462,7 +464,14 @@ export function ApplicationDrawer({
                   onSubmitRequest={() => onSubmitRequest(shown.id)}
                 />
               )}
-              {tab === "materials" && <MaterialsArea key={shown.id} app={shown} onChanged={onChanged} />}
+              {tab === "materials" && (
+                <MaterialsArea
+                  key={shown.id}
+                  app={shown}
+                  onChanged={onChanged}
+                  onSubmitRequest={shown.stage === "draft" ? () => onSubmitRequest(shown.id) : undefined}
+                />
+              )}
               {tab === "notes" && (
                 <NotesPanel
                   key={`${shown.id}:${notesTick}`}
@@ -492,7 +501,6 @@ function OverviewTab({
   ddlDraft,
   onNextChange,
   onDdlChange,
-  sourceMissing,
   onOpenMaterials,
   onSubmitRequest,
 }: {
@@ -506,7 +514,6 @@ function OverviewTab({
   ddlDraft: string;
   onNextChange: (value: string) => void;
   onDdlChange: (value: string) => void;
-  sourceMissing: boolean;
   onOpenMaterials: () => void;
   onSubmitRequest: () => void;
 }) {
@@ -520,11 +527,9 @@ function OverviewTab({
       {app.stage === "draft" && (
         <section className="space-y-3 rounded-lg border border-brand/30 bg-brand/5 p-4">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Next action</p>
-            <p className="mt-1 text-base font-semibold text-ink">
-              {sourceMissing ? "Prepare materials" : "Open apply page"}
-            </p>
-            <p className="mt-1 text-sm text-muted">{assistPacketReadiness(currentMaterialCount(app))}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Next step</p>
+            <p className="mt-1 text-base font-semibold text-ink">{ASSIST_COPY.heading}</p>
+            <p className="mt-1 text-sm text-muted">{ASSIST_COPY.purpose}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <SourceActionLink
@@ -538,14 +543,22 @@ function OverviewTab({
               onClick={onOpenMaterials}
               className={ASSIST_BTN_SECONDARY}
             >
-              Open Materials
+              {ASSIST_COPY.choose}
             </button>
+            <a
+              href={packetWorkbenchPath(app.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={ASSIST_BTN_SECONDARY}
+            >
+              {ASSIST_COPY.openWindow}
+            </a>
             <button
               type="button"
               onClick={onSubmitRequest}
               className={ASSIST_BTN_SECONDARY}
             >
-              Mark submitted
+              {ASSIST_COPY.markSubmitted}
             </button>
           </div>
         </section>

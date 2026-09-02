@@ -515,7 +515,7 @@ export const demoMaterials: Material[] = [
 
 const demoPacketIds: Record<string, string[]> = {
   [demoApplications[0].id]: ["ver-en-2", "ver-port-1"],
-  [demoApplications[2].id]: ["ver-en-1"],
+  [demoApplications[2].id]: ["ver-en-1", "ver-ans-1", "ver-tpl-1"],
 };
 
 const demoPresets: MaterialUsePreset[] = [
@@ -780,7 +780,7 @@ export function createDemoSubmissionMaterialRevision(
 }
 
 demoApplications[0].current_material_count = 2;
-demoApplications[2].current_material_count = 1;
+demoApplications[2].current_material_count = 3;
 
 {
   const first = demoApplications[0];
