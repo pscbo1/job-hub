@@ -213,8 +213,8 @@ Discover More：Auto-archive excluded jobs，默认 OFF，After N days（可配�
 
 详情为右侧抽屉（桌面约 720px，小屏全屏），不在表下展开整表。Tabs：`Overview / Materials / Notes`，默认 Overview。顶栏：Role、Company、Location、Stage、关闭、source action；Draft 另有次级 Mark submitted。
 
-- Overview：source/link → Next Step / DDL（与 Tasks 相同的 Job 字段，PATCH `/api/jobs/{id}`）→ JD 来自 `Job.description`（缺失时写 “full JD not saved” 并给 Open source，不得把 snippet 标成全文）→ Applied 后显示最近一次 submission 摘要。`Job.comment` 为 JD 下可折叠 Research notes。`Application.notes` 只在 Notes tab，禁止与 comment 合并或双写。
-- Materials：Linked materials（add / change version / remove，与今日相同）；Templates & answers 入口仅用于去 Templates & Answers copy；Submissions 只读冻结快照。Draft 强调当前 Linked materials。Applied+ 优先最近 submission 摘要；当前 bindings 仍可编辑，但标签必须区分 `Linked materials` 与 `Materials used in this submission`。
+- Overview：source/link → Next Step / DDL（与 Tasks 相同的 Job 字段，PATCH `/api/jobs/{id}`）→ **Add task**（创建同一条 `job_tasks` 记录，自动关联当前 Job + Application；完成后停留在申请并给 Open in Tasks。完成 task **不** Mark submitted、不改 stage。无 Job 则不可创建。）→ JD 来自 `Job.description`（缺失时写 “full JD not saved” 并给 Open source，不得把 snippet 标成全文）→ Applied 后显示最近一次 submission 摘要。`Job.comment` 为 JD 下可折叠 Research notes。`Application.notes` 只在 Notes tab，禁止与 comment 合并或双写。
+- Materials：Linked materials（add / change version / remove，与今日相同）；**Templates & answers 可在当前申请内搜索 / 预览 / Copy**（Copy 仅在剪贴板成功后提示）；`application_answer` 可按现有 UNIQUE(application_id, material_id) 规则 bind 或替换 version；message templates 只 Copy，不默认当作 submission materials。不自动建 Draft、不发送、不 log-as-sent。库页仍可从 Open library 进入。Submissions 只读冻结快照。Draft 强调当前 Linked materials。Applied+ 优先最近 submission 摘要；当前 bindings 仍可编辑，但标签必须区分 `Linked materials` 与 `Materials used in this submission`。
 - Notes：`Application.notes` 为主；Communication notes 为可选折叠（现有 `application_comm_notes` 表）。
 
 Deep link：`?id=` 即使不在当前页/筛选也必须打开（含 Closed）；`tab=packet` 映射到 Materials。关闭抽屉不得重置列表筛选、排序、分页或滚动。
@@ -225,7 +225,7 @@ Deep link：`?id=` 即使不在当前页/筛选也必须打开（含 Closed）�
 
 跨记录编辑（DBG-01/02）：notes、communication draft、next step、material notes、Knowledge 编辑器、SubmitConfirm 均按 record id 隔离。脏切换：Save and switch / Discard / Stay。切换申请须 abort 进行中的 fetch，失败显示 Retry 而不是空列表。保存失败时停留在当前记录并保留草稿（含 communication draft），标明失败项并提供 Retry；进行中的保存阻止再次保存、丢弃、切换与关闭。
 
-本轮明确推迟：Knowledge「Use in application」搜索选择器扩容、全局 `border-border` vs `border-line` token 统一、从数据猜测 Open conversation / Copy email、把 materials 列藏到 More、Part3-after P0。
+本轮明确推迟：Knowledge 库级「pick any application」搜索器扩容、全局 `border-border` vs `border-line` token 统一、从数据猜测 Open conversation / Copy email、把 materials 列藏到 More、Part3-after P0。Cancel Draft 仍删除该 Application，不另建 post-cancel comm-note 档案。
 
 申请级 “exclude from idle cleanup” 放在 Detail 的折叠 More 中，不占主表行。
 
@@ -663,10 +663,13 @@ Constraints：
 | Field | Type | Notes |
 |---|---|---|
 | id | text PK | |
-| job_id | text FK | |
+| job_id | text FK | required; no personal tasks without a Job |
+| application_id | text FK | nullable; set when created from an Application |
 | title | text | required |
 | due_at | date | nullable |
-| done | boolean | default false |
+| notes | text | nullable |
+| source_url | text | nullable |
+| done | boolean | default false; completing does not Mark submitted or change Application stage |
 | sort_order | int | |
 | created_at | timestamptz | |
 

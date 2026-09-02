@@ -143,6 +143,9 @@ class HubJobStatusRequest(BaseModel):
 class JobTaskCreateRequest(BaseModel):
     title: str = Field(..., min_length=1)
     due_at: date | None = None
+    notes: str | None = None
+    source_url: str | None = None
+    application_id: str | None = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -156,12 +159,21 @@ class JobTaskCreateRequest(BaseModel):
             return None
         return v
 
+    @field_validator("notes", "source_url", "application_id", mode="before")
+    @classmethod
+    def _blank_optional(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
+
 
 class JobTaskPatchRequest(BaseModel):
     title: str | None = None
     due_at: date | None = None
     done: bool | None = None
     sort_order: int | None = None
+    notes: str | None = None
+    source_url: str | None = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -174,6 +186,13 @@ class JobTaskPatchRequest(BaseModel):
         if v is None or v == "":
             return None
         return v
+
+    @field_validator("notes", "source_url", mode="before")
+    @classmethod
+    def _blank_optional(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
 
 
 class CollectJobsRequest(BaseModel):
@@ -838,7 +857,18 @@ def create_app(
 
         repo = JobRepository(db_path)
         try:
-            task = repo.create_job_task(job_id, title=req.title, due_at=req.due_at)
+            task = repo.create_job_task(
+                job_id,
+                title=req.title,
+                due_at=req.due_at,
+                notes=req.notes,
+                source_url=req.source_url,
+                application_id=req.application_id,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status = 404 if detail == "Application not found" else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
         finally:
             repo.close()
         if task is None:

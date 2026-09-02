@@ -24,8 +24,8 @@ def _service(tmp_path: Path) -> tuple[JobRepository, MaterialsService]:
     return repo, service
 
 
-def test_schema_version_is_10() -> None:
-    assert SCHEMA_VERSION == 10
+def test_schema_version_is_11() -> None:
+    assert SCHEMA_VERSION == 11
 
 
 def test_binding_unique_per_material(tmp_path: Path) -> None:

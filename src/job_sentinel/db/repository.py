@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -813,13 +813,24 @@ class JobRepository:
                 due_at TEXT,
                 done INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                application_id TEXT,
+                notes TEXT,
+                source_url TEXT
             )
             """
         )
+        names = {col.name for col in self._table(_JOB_TASKS_TABLE).columns}
+        if "application_id" not in names:
+            self._db.execute("ALTER TABLE job_tasks ADD COLUMN application_id TEXT")
+        if "notes" not in names:
+            self._db.execute("ALTER TABLE job_tasks ADD COLUMN notes TEXT")
+        if "source_url" not in names:
+            self._db.execute("ALTER TABLE job_tasks ADD COLUMN source_url TEXT")
         tasks = self._table(_JOB_TASKS_TABLE)
         tasks.create_index(["job_id"], if_not_exists=True)
         tasks.create_index(["due_at"], if_not_exists=True)
+        tasks.create_index(["application_id"], if_not_exists=True)
 
     def _get_meta(self, key: str) -> str | None:
         rows = list(self._table(_META_TABLE).rows_where("key = ?", [key]))
@@ -859,6 +870,8 @@ class JobRepository:
             self._ensure_materials_stub_tables()
         if from_version < 10:
             self._ensure_part3_tables()
+        if from_version < 11:
+            self._ensure_job_tasks_table()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1235,14 +1248,32 @@ class JobRepository:
         title: str,
         due_at: date | None = None,
         sort_order: int | None = None,
+        notes: str | None = None,
+        source_url: str | None = None,
+        application_id: str | None = None,
     ) -> JobTask | None:
         if self.get_hub_job(job_id) is None:
             return None
+        app_id = (application_id or "").strip() or None
+        if app_id:
+            app = self.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise ValueError("Application not found")
+            if app.job_id != job_id:
+                raise ValueError("Application is not linked to this job")
         order = sort_order
         if order is None:
             existing = self.list_job_tasks(job_id)
             order = (existing[-1].sort_order + 1) if existing else 0
-        task = JobTask(job_id=job_id, title=title, due_at=due_at, sort_order=order)
+        task = JobTask(
+            job_id=job_id,
+            title=title,
+            due_at=due_at,
+            sort_order=order,
+            notes=notes,
+            source_url=source_url,
+            application_id=app_id,
+        )
         self._table(_JOB_TASKS_TABLE).insert(_job_task_to_row(task))
         self.touch_hub_job_activity(job_id)
         return task
@@ -1267,6 +1298,12 @@ class JobRepository:
             payload["done"] = 1 if fields["done"] else 0
         if "sort_order" in fields and fields["sort_order"] is not None:
             payload["sort_order"] = int(fields["sort_order"])
+        if "notes" in fields:
+            notes = fields["notes"]
+            payload["notes"] = str(notes).strip() if notes else None
+        if "source_url" in fields:
+            url = fields["source_url"]
+            payload["source_url"] = str(url).strip() if url else None
         if payload:
             self._table(_JOB_TASKS_TABLE).update(task_id, payload)
             self.touch_hub_job_activity(job_id)
@@ -2195,7 +2232,15 @@ def _job_task_to_row(task: JobTask) -> dict[str, Any]:
         "done": 1 if task.done else 0,
         "sort_order": task.sort_order,
         "created_at": task.created_at.isoformat(),
+        "application_id": task.application_id or None,
+        "notes": task.notes or None,
+        "source_url": task.source_url or None,
     }
+
+
+def _blank_to_none(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def _job_task_from_row(row: dict[str, Any]) -> JobTask:
@@ -2214,6 +2259,9 @@ def _job_task_from_row(row: dict[str, Any]) -> JobTask:
         done=bool(int(row.get("done") or 0)),
         sort_order=int(row.get("sort_order") or 0),
         created_at=_parse_dt(row.get("created_at", "")),
+        application_id=_blank_to_none(row.get("application_id")),
+        notes=_blank_to_none(row.get("notes")),
+        source_url=_blank_to_none(row.get("source_url")),
     )
 
 

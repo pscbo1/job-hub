@@ -8,6 +8,7 @@ import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { getCollectSources, getJobs, patchHubJob, type HubJob } from "@/lib/api";
 import { dateInputValue, isDateOverdue, openTasksSorted, taskChipText, taskDueUrgency } from "@/lib/jobPipeline";
+import { jobIdFromSearch, taskJobAnchorId } from "@/lib/jobTasksUi";
 import { MARKET_ORDER, type MarketId } from "@/lib/markets";
 import { groupTasksByDue, jobMatchesTaskSearch, TASK_SECTIONS } from "@/lib/taskBoard";
 import { cn, externalUrl } from "@/lib/utils";
@@ -35,6 +36,11 @@ export function TasksExplorer() {
     none: true,
   });
   const [overrides, setOverrides] = useState<Record<string, HubJob>>({});
+  const [focusJobId, setFocusJobId] = useState("");
+
+  useEffect(() => {
+    setFocusJobId(jobIdFromSearch(window.location.search));
+  }, []);
 
   useEffect(() => {
     const draft =
@@ -60,6 +66,12 @@ export function TasksExplorer() {
   }, [jobs, overrides, query, source, market]);
 
   const grouped = useMemo(() => groupTasksByDue(visible), [visible]);
+
+  useEffect(() => {
+    if (!focusJobId || !loaded) return;
+    const el = document.getElementById(taskJobAnchorId(focusJobId));
+    el?.scrollIntoView({ block: "start" });
+  }, [focusJobId, loaded, visible]);
 
   async function saveNextStep(job: HubJob, nextStep: string) {
     const next = await patchHubJob(job.id, { next_step: nextStep });
@@ -164,7 +176,11 @@ export function TasksExplorer() {
                   const row = merged(j);
                   const dueTasks = openTasksSorted(row);
                   return (
-                    <Card key={j.id} className="space-y-3">
+                    <Card
+                      key={j.id}
+                      id={taskJobAnchorId(row.id)}
+                      className={cn("space-y-3", focusJobId === row.id && "ring-2 ring-ink/20")}
+                    >
                       <div>
                         <CardTitle className="leading-snug">{row.title}</CardTitle>
                         <CardSub className="mt-0.5">

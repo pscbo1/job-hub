@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { ApplicationKnowledgeUse } from "@/components/ApplicationKnowledgeUse";
 import {
   addCommNote,
   changePacketVersion,
@@ -272,17 +273,12 @@ export function MaterialsArea({
         )}
       </div>
 
-      <div className="rounded-lg border border-line bg-bg p-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Templates & answers
-        </h3>
-        <p className="mt-1 text-sm text-muted">
-          Copy from Templates & Answers. Add to Packet stays on the material itself.
-        </p>
-        <a href="/materials" className="mt-2 inline-block text-sm font-medium text-ink underline">
-          Open Templates & Answers
-        </a>
-      </div>
+      <ApplicationKnowledgeUse
+        app={app}
+        items={failed ? null : items}
+        canEdit={canEdit}
+        onBound={() => void refresh(true)}
+      />
 
       {submitted && (
         <div>

@@ -1,4 +1,4 @@
-import type { Application, Material, MaterialVersion, PacketSnapshotItem } from "@/lib/api";
+import type { Application, Material, MaterialVersion, PacketItem, PacketSnapshotItem } from "@/lib/api";
 import { formatCalendarDate } from "@/lib/timezone";
 
 export function materialCountLabel(count: number): string {
@@ -97,4 +97,36 @@ export function expectedVersionIdsMatch(
   if (expected.length !== current.length) return false;
   const seen = new Set(current);
   return expected.every((id) => seen.has(id));
+}
+
+export function knowledgePreviewText(material: Material): string {
+  const version = latestVersion(material);
+  return (version?.text ?? version?.url ?? "").trim();
+}
+
+export function searchKnowledgeItems(items: Material[], query: string): Material[] {
+  const knowledge = items.filter((row) => isKnowledgeKind(row.kind) && !row.archived_at);
+  const q = query.trim().toLowerCase();
+  if (!q) return knowledge;
+  return knowledge.filter((row) => {
+    const hay = [row.title, formatKind(row.kind), knowledgePreviewText(row)].join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+export type KnowledgeBindDecision = "copy_only" | "bind_new" | "replace_version" | "unavailable";
+
+export function knowledgeBindDecision(opts: {
+  kind: string;
+  items: PacketItem[] | null;
+  materialId: string;
+}): KnowledgeBindDecision {
+  if (opts.kind !== "application_answer") return "copy_only";
+  if (opts.items == null) return "unavailable";
+  const existing = opts.items.find((row) => row.binding.material_id === opts.materialId);
+  return existing ? "replace_version" : "bind_new";
+}
+
+export function copyFeedback(ok: boolean): "Copied" | "Copy failed" {
+  return ok ? "Copied" : "Copy failed";
 }

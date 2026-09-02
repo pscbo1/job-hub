@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { ApplicationAddTask } from "@/components/ApplicationAddTask";
 import { MaterialsArea, NotesPanel } from "@/components/ApplicationWorkspace";
 import { SourceActionLink } from "@/components/SourceActionLink";
 import { addCommNote, patchHubJob, updateApplication, type Application } from "@/lib/api";
@@ -409,6 +410,10 @@ export function ApplicationDrawer({
                   onNextChange={setNextDraft}
                   onDdlChange={setDdlDraft}
                   sourceMissing={source?.kind === "missing"}
+                  onOpenMaterials={() => {
+                    setTab("materials");
+                    onTabChange("materials");
+                  }}
                 />
               )}
               {tab === "materials" && <MaterialsArea key={shown.id} app={shown} onChanged={onChanged} />}
@@ -437,6 +442,7 @@ function OverviewTab({
   onNextChange,
   onDdlChange,
   sourceMissing,
+  onOpenMaterials,
 }: {
   app: Application;
   nextDraft: string;
@@ -444,6 +450,7 @@ function OverviewTab({
   onNextChange: (value: string) => void;
   onDdlChange: (value: string) => void;
   sourceMissing: boolean;
+  onOpenMaterials: () => void;
 }) {
   const jd = (app.job_description ?? "").trim();
   const comment = (app.job_comment ?? "").trim();
@@ -496,6 +503,20 @@ function OverviewTab({
             <span className="mt-1 block text-xs">This application has no linked job, so next step cannot be edited here.</span>
           </p>
         )}
+      </section>
+      <ApplicationAddTask key={app.id} app={app} />
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Templates & answers
+        </h3>
+        <p className="mt-1 text-sm text-muted">Copy or link answers without leaving this application.</p>
+        <button
+          type="button"
+          onClick={onOpenMaterials}
+          className="mt-2 h-9 rounded-lg border border-line px-3 text-sm font-medium text-ink"
+        >
+          Use templates & answers
+        </button>
       </section>
       {summary && app.stage !== "draft" && (
         <section>

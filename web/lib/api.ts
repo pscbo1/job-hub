@@ -186,6 +186,17 @@ export interface JobTask {
   done: boolean;
   sort_order: number;
   created_at: string;
+  application_id?: string | null;
+  notes?: string | null;
+  source_url?: string | null;
+}
+
+export interface JobTaskCreateBody {
+  title: string;
+  due_at?: string | null;
+  notes?: string | null;
+  source_url?: string | null;
+  application_id?: string | null;
 }
 
 export interface JobTaskPatch {
@@ -193,6 +204,8 @@ export interface JobTaskPatch {
   due_at?: string | null;
   done?: boolean;
   sort_order?: number;
+  notes?: string | null;
+  source_url?: string | null;
 }
 
 export interface HubJob {
@@ -817,9 +830,16 @@ function demoJobById(jobId: string): HubJob | undefined {
   return demo.demoHubJobs.find((j) => j.id === jobId);
 }
 
+export async function listJobTasks(jobId: string): Promise<JobTask[]> {
+  if (demo.DEMO) {
+    return demoJobById(jobId)?.tasks ?? [];
+  }
+  return getJSON<JobTask[]>(`/api/jobs/${encodeURIComponent(jobId)}/tasks`, []);
+}
+
 export async function createJobTask(
   jobId: string,
-  body: { title: string; due_at?: string | null },
+  body: JobTaskCreateBody,
 ): Promise<JobTask | null> {
   if (demo.DEMO) {
     const job = demoJobById(jobId);
@@ -831,6 +851,9 @@ export async function createJobTask(
       done: false,
       sort_order: job?.tasks?.length ?? 0,
       created_at: new Date().toISOString(),
+      notes: body.notes ?? null,
+      source_url: body.source_url ?? null,
+      application_id: body.application_id ?? null,
     };
     if (job) job.tasks = [...(job.tasks ?? []), created];
     return created;
@@ -863,6 +886,8 @@ export async function patchJobTask(
       due_at: patch.due_at !== undefined ? patch.due_at : current.due_at,
       done: patch.done ?? current.done,
       sort_order: patch.sort_order ?? current.sort_order,
+      notes: patch.notes !== undefined ? patch.notes : current.notes,
+      source_url: patch.source_url !== undefined ? patch.source_url : current.source_url,
     };
     if (job) job.tasks = (job.tasks ?? []).map((t) => (t.id === taskId ? saved : t));
     return saved;

@@ -85,7 +85,11 @@ CLOSE_REASON_LABELS_ZH: dict[CloseReason, str] = {
 
 
 class JobTask(BaseModel):
-    """Checklist item on a Job (OA, interview prep). Not an Application stage."""
+    """Checklist item on a Job (OA, interview prep). Not an Application stage.
+
+    One ``job_tasks`` row can appear on Tasks and on a linked Application.
+    Completing a task does not Mark submitted or change Application stage.
+    """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     job_id: str = Field(..., min_length=1)
@@ -94,6 +98,9 @@ class JobTask(BaseModel):
     done: bool = Field(default=False)
     sort_order: int = Field(default=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    application_id: str | None = Field(default=None)
+    notes: str | None = Field(default=None)
+    source_url: str | None = Field(default=None)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -106,6 +113,13 @@ class JobTask(BaseModel):
         if v is None or v == "":
             return None
         return v
+
+    @field_validator("application_id", "notes", "source_url", mode="before")
+    @classmethod
+    def _blank_optional(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
 
     model_config = {"frozen": False}
 

@@ -29,6 +29,8 @@ Versions follow [Semantic Versioning](https://semver.org):
 - **Applications Round 1 UX (2026-09-01).** List columns are Role/Company, Stage, Next step (Job.next_step + DDL when set), Applied, visible materials count, Actions. Detail is a right drawer with Overview / Materials / Notes. Mark submitted confirm is a shared modal that previews current bindings only. Source actions use stored apply/source URLs only. Display timestamps default to Asia/Shanghai.
 - Applications toolbar **More** is **View options** (Views / Cleanup settings in a popover). Row overflow is an ellipsis **More actions** control so Draft source + Mark submitted stay on one line.
 - Materials library tabs display **Documents** and **Templates & Answers** (internal ids remain `files` / `knowledge`). Add/search/empty copy follows the active tab.
+- Application Overview can **Add task** onto the same `job_tasks` row Tasks uses (auto-linked Job + Application). Completing a task does not Mark submitted or change stage.
+- Application Materials can search/preview/copy Templates & Answers in place. Application answers may bind or replace a linked version; message templates stay copy-only.
 
 ### Fixed
 
