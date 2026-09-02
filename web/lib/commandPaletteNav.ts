@@ -34,6 +34,18 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
       keywords: "career archive profile resume versions",
     },
     {
+      label: "Notebook",
+      hint: "Free writing pages — not attached to applications",
+      href: "/notebook",
+      keywords: "notebook notes pages writing hashtag",
+    },
+    {
+      label: "Company Sources",
+      hint: "Companies Collect can run — not the job list",
+      href: "/company-sources",
+      keywords: "company sources collect manage",
+    },
+    {
       label: "Tasks",
       hint: "Next steps, deadlines, drafts",
       href: "/tasks",

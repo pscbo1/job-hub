@@ -22,6 +22,7 @@ const PRIMARY: { href: string; label: string; page?: "search" | "jobs" }[] = [
 
 const SECONDARY = [
   { href: "/career-archive", label: "Career Archive" },
+  { href: "/notebook", label: "Notebook" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/chat", label: "Chat" },
   { href: "/interview", label: "Interview Prep" },

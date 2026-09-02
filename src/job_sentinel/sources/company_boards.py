@@ -10,7 +10,8 @@ Supported ATS platforms (no auth, publicly accessible):
   - Workday:    POST https://{host}/wday/cxs/{tenant}/{site}/jobs
                 (slug = {host}/{site}; undocumented CXS used by the public careers SPA)
 
-New companies for Job Hub collect belong in ingestion/company_ats.yaml.
+New companies for Job Hub collect belong in the Company Sources table
+(seeded once from ingestion/company_ats.yaml).
 This module remains the CLI / JobSource wrapper around the shared client.
 
 Usage — standalone helper:

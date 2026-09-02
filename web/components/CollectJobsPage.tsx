@@ -19,6 +19,7 @@ import {
   getFilterSettings,
   getJobs,
   listSearchPresets,
+  patchCompanySource,
   saveFilterSettings,
   updateSearchPreset,
   type CollectOutcome,
@@ -153,13 +154,27 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
           setApiDown(true);
           return;
         }
-        const list = (sourcesResp.sources ?? []).filter(
-          (s) => isSelectableCollectSource(s) && sourceInMarket(s.market, market),
-        );
+        const list = (sourcesResp.sources ?? []).filter((s) => {
+          if (!isSelectableCollectSource(s)) return false;
+          if (s.kind === "career_page" && (s.collect_cn != null || s.collect_en != null)) {
+            return market === "cn" ? Boolean(s.collect_cn) : Boolean(s.collect_en);
+          }
+          return sourceInMarket(s.market, market);
+        });
         setCatalog(list);
-        const ids = list.map((s) => s.id);
         const remembered = readCollectSourceIds(market);
-        setSelected(new Set(initialSourceSelection(remembered, ids, defaultCollectSources(market))));
+        const platformIds = list.filter((s) => s.kind !== "career_page").map((s) => s.id);
+        const companyIds = list.filter((s) => s.kind === "career_page").map((s) => s.id);
+        const platforms = initialSourceSelection(
+          remembered,
+          platformIds,
+          defaultCollectSources(market),
+        );
+        const companies = companyIds.filter((id) => {
+          const row = list.find((s) => s.id === id);
+          return Boolean(row?.include_in_run) || Boolean(remembered?.includes(id));
+        });
+        setSelected(new Set([...platforms, ...companies]));
         setMaxResults(loadMaxResults());
         const queryPrefs = readCollectQueryPrefs(market);
         setLocation(queryPrefs.location);
@@ -182,8 +197,21 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
     writeCollectSourceIds(market, persistableSourceIds(next, catalog.map((s) => s.id)));
   }
 
+  function syncCompanyRun(next: Set<string>) {
+    setCatalog((current) =>
+      current.map((row) => {
+        if (row.kind !== "career_page") return row;
+        const wanted = next.has(row.id);
+        if (Boolean(row.include_in_run) === wanted) return row;
+        void patchCompanySource(row.id, { include_in_run: wanted });
+        return { ...row, include_in_run: wanted };
+      }),
+    );
+  }
+
   function setSourceSelection(next: Set<string>) {
     persistSources(next);
+    syncCompanyRun(next);
     setSelected(next);
   }
 
@@ -206,6 +234,7 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
     setMaxResults(filters.max_results);
     setSelected(nextSources);
     persistSources(nextSources);
+    syncCompanyRun(nextSources);
     persistQuery({
       location: filters.location,
       remote: filters.remote === true,
@@ -518,10 +547,15 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
           )}
 
           <div>
-            <p className="mb-2 text-sm font-medium text-ink">Sources</p>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-sm font-medium text-ink">Sources</p>
+              <Link href="/company-sources" className="text-xs font-medium text-brand hover:underline">
+                Manage sources
+              </Link>
+            </div>
             <p className="mb-2 text-[11px] text-muted">
               Only {market.toUpperCase()} collectors are listed. Collection runs only the sources you
-              check.
+              check. Disabled companies stay on Manage sources.
             </p>
             <CollectSourceGroups
               catalog={catalog}

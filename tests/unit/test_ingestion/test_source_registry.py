@@ -1,0 +1,116 @@
+"""Company Sources: YAML seed once, then Collect reads source_registry."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from fastapi.testclient import TestClient
+
+from job_sentinel.api.app import create_app
+from job_sentinel.db.repository import JobRepository
+from job_sentinel.ingestion.collect_sources import list_collect_sources, resolve_collect_sources
+from job_sentinel.ingestion.source_registry import (
+    create_company_source,
+    list_company_sources,
+    seed_source_registry,
+    update_company_source,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def test_seed_preserves_yaml_ids(tmp_path: Path) -> None:
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        seed_source_registry(repo)
+        ids = {row.id for row in list_company_sources(repo)}
+        assert "dimagi" in ids
+        assert "palantir" in ids
+        assert "tencent" in ids
+        dimagi = next(row for row in list_company_sources(repo) if row.id == "dimagi")
+        assert dimagi.collect_en is True
+        assert dimagi.collect_cn is False
+        assert dimagi.include_in_run is False
+        tencent = next(row for row in list_company_sources(repo) if row.id == "tencent")
+        assert tencent.collect_cn is True
+        assert tencent.runnable is True
+    finally:
+        repo.close()
+
+
+def test_seed_is_once_and_new_companies_are_db_only(tmp_path: Path) -> None:
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        seed_source_registry(repo)
+        create_company_source(
+            repo,
+            company="Acme Labs",
+            collect_en=True,
+            careers_url="https://jobs.lever.co/acme",
+            tags=["research"],
+            note="Product research team",
+        )
+        seed_source_registry(repo)
+        rows = list_company_sources(repo)
+        assert sum(1 for row in rows if row.company == "Acme Labs") == 1
+        acme = next(row for row in rows if row.id.startswith("acme"))
+        assert acme.runnable is True
+        assert acme.tags == ["research"]
+        listed = list_collect_sources(repo=repo, enabled_only=True, market="en")
+        assert any(spec.id == acme.id for spec in listed)
+    finally:
+        repo.close()
+
+
+def test_disabled_company_is_not_collectable(tmp_path: Path) -> None:
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        update_company_source(repo, "dimagi", enabled=False, include_in_run=True)
+        listed = {s.id for s in list_collect_sources(repo=repo, enabled_only=True)}
+        assert "dimagi" not in listed
+        try:
+            resolve_collect_sources(["dimagi"], repo=repo)
+            raised = False
+        except ValueError as exc:
+            raised = True
+            assert "Unknown" in str(exc)
+        assert raised
+        all_rows = list_company_sources(repo)
+        assert any(row.id == "dimagi" and not row.enabled for row in all_rows)
+    finally:
+        repo.close()
+
+
+def test_company_sources_api_and_collect_catalog(tmp_path: Path) -> None:
+    client = TestClient(create_app(profile_path=tmp_path / "p.yaml", db_path=tmp_path / "j.db"))
+    listed = client.get("/api/company-sources")
+    assert listed.status_code == 200
+    body = listed.json()
+    ids = {row["id"] for row in body["sources"]}
+    assert "dimagi" in ids
+    assert "ats" not in body["sources"][0]
+    created = client.post(
+        "/api/company-sources",
+        json={
+            "company": "Nava",
+            "collect_en": True,
+            "include_in_run": True,
+            "tags": ["civic"],
+            "note": "Public interest tech",
+            "careers_url": "https://jobs.lever.co/nava",
+        },
+    )
+    assert created.status_code == 200
+    nava_id = created.json()["id"]
+    patched = client.patch(
+        f"/api/company-sources/{nava_id}",
+        json={"enabled": False, "include_in_run": False},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["enabled"] is False
+    collect = client.get("/api/collect/sources", params={"market": "en"})
+    collect_ids = {row["id"] for row in collect.json()["sources"]}
+    assert nava_id not in collect_ids
+    assert "dimagi" in collect_ids
+    assert "zhaopin" not in collect_ids

@@ -13,9 +13,9 @@ Do not add a source-specific Job Pool, table, or ingest path.
    - `integration` (`mcp_jobs`, `ats_board`, `http_json`, `public_html`, `ssr_json`)
    - `market` (`cn` / `en` / `global`) — required; do not infer with AI
    - `runnable=True` only when a collector is wired
-   - For Greenhouse / Lever / Ashby / Workday company careers: add a row in
-     `src/job_sentinel/ingestion/company_ats.yaml` (`company` + `ats`/`slug` or
-     `careers_url`). Reuse `ats_board`; do not add a Python adapter.
+   - For Greenhouse / Lever / Ashby / Workday company careers: add the company
+     in Job Hub → Collect → Manage sources (or seed `company_ats.yaml` before
+     first DB create). Reuse `ats_board`; do not add a Python adapter.
    - Search lists only `enabled` and `runnable` sources
 
 2. **Adapter** (skip if `ats_board` already covers it)

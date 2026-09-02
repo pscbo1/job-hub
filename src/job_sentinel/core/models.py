@@ -897,3 +897,46 @@ class ScrapeResult(BaseModel):
             f"total={self.total_scraped}, new={self.new_count}, "
             f"errors={len(self.errors)})"
         )
+
+
+class CompanySource(BaseModel):
+    """Company career row in ``source_registry``. Not a job listing."""
+
+    id: str
+    company: str
+    collect_cn: bool = False
+    collect_en: bool = False
+    enabled: bool = True
+    include_in_run: bool = False
+    tags: list[str] = Field(default_factory=list)
+    note: str = ""
+    careers_url: str | None = None
+    runnable: bool = True
+    collector_id: str = ""
+    integration: str = "ats_board"
+    ats: str | None = None
+    slug: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("company", "note", "collector_id", "integration", mode="before")
+    @classmethod
+    def _strip_text(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+
+class NotebookPage(BaseModel):
+    """Free-writing page. Not a journal, material, or application packet item."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    title: str = ""
+    markdown_body: str = ""
+    sort_order: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    topics: list[str] = Field(default_factory=list)
+
+    @field_validator("title", "markdown_body", mode="before")
+    @classmethod
+    def _strip_optional(cls, v: object) -> object:
+        return v if v is None or not isinstance(v, str) else v

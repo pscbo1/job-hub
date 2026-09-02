@@ -2485,6 +2485,11 @@ export interface CollectSource {
   notes: string;
   enabled: boolean;
   search_fields?: string[];
+  collect_cn?: boolean;
+  collect_en?: boolean;
+  include_in_run?: boolean;
+  tags?: string[];
+  company?: string;
 }
 
 export type CollectStatus = "completed" | "failed" | "partial";
@@ -2869,5 +2874,149 @@ export async function getInterviewQuestions(
     return (await res.json()) as InterviewQuestionsResponse;
   } catch {
     return null;
+  }
+}
+
+export interface CompanySource {
+  id: string;
+  company: string;
+  collect_cn: boolean;
+  collect_en: boolean;
+  enabled: boolean;
+  include_in_run: boolean;
+  tags: string[];
+  note: string;
+  careers_url?: string;
+  runnable?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CompanySourceWrite {
+  company: string;
+  collect_cn?: boolean;
+  collect_en?: boolean;
+  enabled?: boolean;
+  include_in_run?: boolean;
+  tags?: string[];
+  note?: string;
+  careers_url?: string;
+}
+
+export interface NotebookPage {
+  id: string;
+  title: string;
+  markdown_body: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  topics: string[];
+}
+
+export function getCompanySources(tag?: string): Promise<{ sources: CompanySource[]; tags: string[] }> {
+  if (demo.DEMO) return Promise.resolve(demo.listDemoCompanySources(tag));
+  const q = tag ? `?tag=${encodeURIComponent(tag)}` : "";
+  return getJSON<{ sources: CompanySource[]; tags: string[] }>(`/api/company-sources${q}`, {
+    sources: [],
+    tags: [],
+  });
+}
+
+export async function createCompanySource(body: CompanySourceWrite): Promise<CompanySource | null> {
+  if (demo.DEMO) return demo.createDemoCompanySource(body);
+  try {
+    const res = await fetch(`${API_BASE}/api/company-sources`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CompanySource;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchCompanySource(
+  id: string,
+  body: Partial<CompanySourceWrite>,
+): Promise<CompanySource | null> {
+  if (demo.DEMO) return demo.patchDemoCompanySource(id, body);
+  try {
+    const res = await fetch(`${API_BASE}/api/company-sources/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CompanySource;
+  } catch {
+    return null;
+  }
+}
+
+export function getNotebookPages(opts?: {
+  q?: string;
+  topic?: string;
+  sort?: "updated" | "title";
+}): Promise<{ pages: NotebookPage[]; topics: string[] }> {
+  if (demo.DEMO) return Promise.resolve(demo.listDemoNotebookPages(opts));
+  const params = new URLSearchParams();
+  if (opts?.q) params.set("q", opts.q);
+  if (opts?.topic) params.set("topic", opts.topic);
+  if (opts?.sort) params.set("sort", opts.sort);
+  const q = params.toString() ? `?${params.toString()}` : "";
+  return getJSON<{ pages: NotebookPage[]; topics: string[] }>(`/api/notebook/pages${q}`, {
+    pages: [],
+    topics: [],
+  });
+}
+
+export async function createNotebookPage(body?: {
+  title?: string;
+  markdown_body?: string;
+}): Promise<NotebookPage | null> {
+  if (demo.DEMO) return demo.createDemoNotebookPage(body);
+  try {
+    const res = await fetch(`${API_BASE}/api/notebook/pages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body ?? {}),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as NotebookPage;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchNotebookPage(
+  id: string,
+  body: { title?: string; markdown_body?: string; sort_order?: number },
+): Promise<NotebookPage | null> {
+  if (demo.DEMO) return demo.patchDemoNotebookPage(id, body);
+  try {
+    const res = await fetch(`${API_BASE}/api/notebook/pages/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as NotebookPage;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteNotebookPage(id: string): Promise<boolean> {
+  if (demo.DEMO) return demo.deleteDemoNotebookPage(id);
+  try {
+    const res = await fetch(`${API_BASE}/api/notebook/pages/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }

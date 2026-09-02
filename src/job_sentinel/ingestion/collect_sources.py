@@ -3,13 +3,14 @@
 Each source declares how it is collected. Search lists only runnable sources.
 Job Pool and the ingest pipeline stay unchanged — adapters emit CollectorRecord.
 
-Greenhouse / Lever / Ashby / Workday company careers live in ``company_ats.yaml``.
+Greenhouse / Lever / Ashby / Workday company careers seed ``source_registry``
+from ``company_ats.yaml`` once. After seed, Collect reads the table.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -22,6 +23,9 @@ from job_sentinel.markets import (
     require_source_market,
     source_in_view,
 )
+
+if TYPE_CHECKING:
+    from job_sentinel.db.repository import JobRepository
 
 CollectKind = Literal["platform", "career_page", "vertical"]
 SourceGroup = Literal["platform", "vertical", "company_careers"]
@@ -72,6 +76,10 @@ class CollectSource(BaseModel):
         default_factory=list,
         description="Search filters this adapter actually consumes.",
     )
+    collect_cn: bool = False
+    collect_en: bool = False
+    include_in_run: bool = True
+    tags: list[str] = Field(default_factory=list)
 
     @field_validator("market", mode="before")
     @classmethod
@@ -86,14 +94,22 @@ class CollectSource(BaseModel):
             self.source_group = _KIND_TO_SOURCE_GROUP[self.kind]
         if not self.search_fields:
             self.search_fields = ordered_search_fields(self.id)
+        if not self.collect_cn and not self.collect_en:
+            if self.market == "cn":
+                self.collect_cn = True
+            elif self.market == "en":
+                self.collect_en = True
+            else:
+                # global boards stay on the EN Collect view unless the user enables CN.
+                self.collect_en = True
         return self
 
 
-# Stable V0 ids. Platform / vertical / custom HTTP sources stay here.
-# Company ATS boards are loaded from company_ats.yaml — do not reuse ids.
+# Stable V0 ids. Platform / vertical stay in code.
+# Company ATS boards seed source_registry from company_ats.yaml — do not reuse ids.
 # FAO Careers (Taleo) and LinkedIn Jobs are not ATS-board sources.
 # FAO stays omitted. LinkedIn, when wired, is a separate public_html collector.
-_BUILTIN_SOURCES: tuple[CollectSource, ...] = (
+_PLATFORM_SOURCES: tuple[CollectSource, ...] = (
     CollectSource(
         id="zhaopin",
         label="Zhaopin",
@@ -131,16 +147,6 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         notes="Impact-sector board — latest public listings, then keyword filter",
     ),
     CollectSource(
-        id="tencent",
-        label="Tencent Careers",
-        kind="career_page",
-        collector_id="tencent",
-        integration="http_json",
-        market="cn",
-        company="Tencent",
-        notes="careers.tencent.com public Query API — try SSV / 公益 / Tech for Good",
-    ),
-    CollectSource(
         id="hiring_cafe",
         label="HiringCafe",
         kind="platform",
@@ -162,6 +168,20 @@ _BUILTIN_SOURCES: tuple[CollectSource, ...] = (
         ),
     ),
 )
+
+_TENCENT_SOURCE = CollectSource(
+    id="tencent",
+    label="Tencent Careers",
+    kind="career_page",
+    collector_id="tencent",
+    integration="http_json",
+    market="cn",
+    company="Tencent",
+    notes="careers.tencent.com public Query API — try SSV / 公益 / Tech for Good",
+)
+
+# YAML fallback (tests without a DB) still merges career pages here.
+_BUILTIN_SOURCES: tuple[CollectSource, ...] = (*_PLATFORM_SOURCES, _TENCENT_SOURCE)
 
 
 def load_company_ats_sources(path: Path | None = None) -> list[CollectSource]:
@@ -231,23 +251,54 @@ def _merge_sources() -> tuple[CollectSource, ...]:
 _SOURCES: tuple[CollectSource, ...] = _merge_sources()
 
 
+def builtin_career_page_sources() -> tuple[CollectSource, ...]:
+    """Career-page CollectSource rows that live in code (Tencent), used to seed DB."""
+    return (_TENCENT_SOURCE,)
+
+
+def _iter_sources(repo: JobRepository | None = None) -> list[CollectSource]:
+    if repo is None:
+        return list(_SOURCES)
+    from job_sentinel.ingestion.source_registry import list_company_collect_sources
+
+    companies = list_company_collect_sources(repo)
+    seen = {s.id for s in _PLATFORM_SOURCES}
+    extra = [spec for spec in companies if spec.id not in seen]
+    return [*_PLATFORM_SOURCES, *extra]
+
+
+def _matches_market(spec: CollectSource, market: str) -> bool:
+    mid = parse_market_id(market)
+    if mid is None:
+        return False
+    if spec.kind == "career_page":
+        return spec.collect_cn if mid == "cn" else spec.collect_en
+    return source_in_view(spec.market, mid)
+
+
 def list_collect_sources(
     *,
     enabled_only: bool = True,
     market: str | None = None,
+    repo: JobRepository | None = None,
 ) -> list[CollectSource]:
-    rows = [s for s in _SOURCES if s.enabled and s.runnable] if enabled_only else list(_SOURCES)
+    rows = _iter_sources(repo)
+    if enabled_only:
+        rows = [s for s in rows if s.enabled and s.runnable]
     if market is None or not str(market).strip():
         return rows
     mid = parse_market_id(market)
     if mid is None:
         raise ValueError(f"Unknown market: {market}")
-    return [s for s in rows if source_in_view(s.market, mid)]
+    return [s for s in rows if _matches_market(s, mid)]
 
 
-def get_collect_source(source_id: str) -> CollectSource | None:
+def get_collect_source(
+    source_id: str,
+    repo: JobRepository | None = None,
+) -> CollectSource | None:
     key = source_id.strip().lower()
-    for spec in _SOURCES:
+    for spec in _iter_sources(repo):
         if spec.id == key:
             return spec
     return None
@@ -257,6 +308,7 @@ def resolve_collect_sources(
     source_ids: list[str],
     *,
     market: str | None = None,
+    repo: JobRepository | None = None,
 ) -> list[CollectSource]:
     """Validate ids. Unknown or non-runnable ids raise ValueError (API maps this to 400)."""
     if not source_ids:
@@ -268,7 +320,7 @@ def resolve_collect_sources(
         key = raw.strip().lower()
         if not key or key in seen:
             continue
-        spec = get_collect_source(key)
+        spec = get_collect_source(key, repo=repo)
         if spec is None or not spec.enabled or not spec.runnable:
             unknown.append(raw)
             continue
@@ -282,7 +334,7 @@ def resolve_collect_sources(
         mid = parse_market_id(market)
         if mid is None:
             raise ValueError(f"Unknown market: {market}")
-        allowed = {s.id for s in list_collect_sources(enabled_only=False, market=mid)}
+        allowed = {s.id for s in list_collect_sources(enabled_only=False, market=mid, repo=repo)}
         crossed = [s.id for s in resolved if s.id not in allowed]
         if crossed:
             raise ValueError(f"Source(s) not in market {mid}: {', '.join(crossed)}")

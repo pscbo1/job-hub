@@ -259,6 +259,44 @@ class CollectJobsRequest(BaseModel):
         return sanitize_overrides(v)
 
 
+class CompanySourceCreateRequest(BaseModel):
+    company: str
+    collect_cn: bool = False
+    collect_en: bool = False
+    enabled: bool = True
+    include_in_run: bool = False
+    tags: list[str] = Field(default_factory=list)
+    note: str = ""
+    careers_url: str = ""
+
+    @field_validator("company", "note", "careers_url", mode="before")
+    @classmethod
+    def _strip_company_text(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+
+class CompanySourcePatchRequest(BaseModel):
+    company: str | None = None
+    collect_cn: bool | None = None
+    collect_en: bool | None = None
+    enabled: bool | None = None
+    include_in_run: bool | None = None
+    tags: list[str] | None = None
+    note: str | None = None
+    careers_url: str | None = None
+
+    @field_validator("company", "note", "careers_url", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+
+class NotebookPageWriteRequest(BaseModel):
+    title: str | None = None
+    markdown_body: str | None = None
+    sort_order: int | None = None
+
+
 class FilterSettingsRequest(BaseModel):
     exclude_outsourcing: bool = True
     exclude_part_time: bool = True
@@ -905,26 +943,26 @@ def create_app(
         since_dt = _parse_since(since)
         mid = _parse_market_param(market)
         source_filter = _parse_source_list(sources)
-        specs = list_cs(enabled_only=False)
-        registry: dict[str, SourceMarket] = {}
-        for spec in specs:
-            sm = parse_source_market(spec.market)
-            if sm is not None:
-                registry[spec.id] = sm
         view_sources: list[str] | None = None
         view_id = parse_market_id(mid) if mid else None
-        if view_id is not None:
-            view_sources = [s.id for s in specs if source_in_view(s.market, view_id)]
-        if view_sources is not None:
-            allowed = set(view_sources)
-            if source_filter:
-                view_sources = [s for s in source_filter if s in allowed]
-            if not view_sources:
-                view_sources = ["__no_such_source__"]
-        elif source_filter:
-            view_sources = source_filter
+        registry: dict[str, SourceMarket] = {}
         repo = JobRepository(db_path)
         try:
+            specs = list_cs(enabled_only=False, repo=repo)
+            for spec in specs:
+                sm = parse_source_market(spec.market)
+                if sm is not None:
+                    registry[spec.id] = sm
+            if view_id is not None:
+                view_sources = [s.id for s in specs if source_in_view(s.market, view_id)]
+            if view_sources is not None:
+                allowed = set(view_sources)
+                if source_filter:
+                    view_sources = [s for s in source_filter if s in allowed]
+                if not view_sources:
+                    view_sources = ["__no_such_source__"]
+            elif source_filter:
+                view_sources = source_filter
             jobs = repo.list_hub_jobs(
                 limit=limit,
                 since=since_dt,
@@ -1396,13 +1434,18 @@ def create_app(
     @app.get("/api/collect/sources")
     def list_collect_sources(market: str | None = None) -> dict[str, Any]:
         """Selectable collection sources for Search. Later kinds append here."""
+        from job_sentinel.db.repository import JobRepository
         from job_sentinel.ingestion.collect_sources import list_collect_sources as list_sources
 
         mid = _parse_market_param(market)
+        repo = JobRepository(db_path)
         try:
-            listed = list_sources(market=mid)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            try:
+                listed = list_sources(market=mid, repo=repo)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            repo.close()
         return {"sources": [s.model_dump() for s in listed]}
 
     @app.post("/api/collect/jobs")
@@ -1435,6 +1478,162 @@ def create_app(
         finally:
             repo.close()
         return outcome.model_dump()
+
+    def _company_source_payload(row: Any) -> dict[str, Any]:
+        payload = row.model_dump(mode="json")
+        payload.pop("ats", None)
+        payload.pop("slug", None)
+        payload.pop("collector_id", None)
+        payload.pop("integration", None)
+        payload["careers_url"] = payload.get("careers_url") or ""
+        return payload
+
+    def _registry_http(exc: Exception) -> HTTPException:
+        status = int(getattr(exc, "status_code", 400))
+        return HTTPException(status_code=status, detail=str(exc))
+
+    @app.get("/api/company-sources")
+    def list_company_sources(tag: str | None = None) -> dict[str, Any]:
+        """Company career table. Not jobs. Disabled rows stay off Collect."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.source_registry import (
+            list_company_sources as list_rows,
+            unique_company_tags,
+        )
+
+        repo = JobRepository(db_path)
+        try:
+            all_rows = list_rows(repo)
+            tags = unique_company_tags(all_rows)
+            rows = list_rows(repo, tag=tag) if tag and tag.strip() else all_rows
+        finally:
+            repo.close()
+        return {"sources": [_company_source_payload(row) for row in rows], "tags": tags}
+
+    @app.post("/api/company-sources")
+    def create_company_source_route(req: CompanySourceCreateRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.source_registry import (
+            SourceRegistryError,
+            create_company_source,
+        )
+
+        repo = JobRepository(db_path)
+        try:
+            row = create_company_source(
+                repo,
+                company=req.company,
+                collect_cn=req.collect_cn,
+                collect_en=req.collect_en,
+                enabled=req.enabled,
+                include_in_run=req.include_in_run,
+                tags=req.tags,
+                note=req.note,
+                careers_url=req.careers_url,
+            )
+        except SourceRegistryError as exc:
+            raise _registry_http(exc) from exc
+        finally:
+            repo.close()
+        return _company_source_payload(row)
+
+    @app.patch("/api/company-sources/{source_id}")
+    def patch_company_source_route(source_id: str, req: CompanySourcePatchRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.source_registry import (
+            SourceRegistryError,
+            update_company_source,
+        )
+
+        repo = JobRepository(db_path)
+        try:
+            row = update_company_source(repo, source_id, **req.model_dump(exclude_unset=True))
+        except SourceRegistryError as exc:
+            raise _registry_http(exc) from exc
+        finally:
+            repo.close()
+        return _company_source_payload(row)
+
+    @app.get("/api/notebook/pages")
+    def list_notebook_pages(
+        q: str = "",
+        topic: str = "",
+        sort: str = "updated",
+    ) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.notebook.service import list_pages, unique_topics
+
+        order = sort.strip().lower()
+        if order not in {"updated", "title"}:
+            raise HTTPException(status_code=422, detail="sort must be updated or title")
+        repo = JobRepository(db_path)
+        try:
+            pages = list_pages(repo, q=q, topic=topic, sort=order)  # type: ignore[arg-type]
+            topics = unique_topics(list_pages(repo, sort=order))  # type: ignore[arg-type]
+        finally:
+            repo.close()
+        return {"pages": [page.model_dump(mode="json") for page in pages], "topics": topics}
+
+    @app.post("/api/notebook/pages")
+    def create_notebook_page_route(req: NotebookPageWriteRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.notebook.service import create_page
+
+        repo = JobRepository(db_path)
+        try:
+            page = create_page(repo, title=req.title or "", markdown_body=req.markdown_body or "")
+        finally:
+            repo.close()
+        return page.model_dump(mode="json")
+
+    @app.get("/api/notebook/pages/{page_id}")
+    def get_notebook_page_route(page_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.notebook.service import NotebookError, get_page
+
+        repo = JobRepository(db_path)
+        try:
+            page = get_page(repo, page_id)
+        except NotebookError as exc:
+            raise _registry_http(exc) from exc
+        finally:
+            repo.close()
+        return page.model_dump(mode="json")
+
+    @app.patch("/api/notebook/pages/{page_id}")
+    def patch_notebook_page_route(page_id: str, req: NotebookPageWriteRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.notebook.service import NotebookError, update_page
+
+        repo = JobRepository(db_path)
+        try:
+            fields = req.model_dump(exclude_unset=True)
+            page = update_page(
+                repo,
+                page_id,
+                title=fields.get("title"),
+                markdown_body=fields.get("markdown_body"),
+                sort_order=fields.get("sort_order"),
+            )
+        except NotebookError as exc:
+            raise _registry_http(exc) from exc
+        finally:
+            repo.close()
+        return page.model_dump(mode="json")
+
+    @app.delete("/api/notebook/pages/{page_id}")
+    def delete_notebook_page_route(page_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.notebook.service import NotebookError, delete_page
+
+        repo = JobRepository(db_path)
+        try:
+            delete_page(repo, page_id)
+        except NotebookError as exc:
+            raise _registry_http(exc) from exc
+        finally:
+            repo.close()
+        return {"ok": True}
 
     @app.get("/api/search/presets")
     def list_search_presets(market: str | None = None) -> dict[str, Any]:

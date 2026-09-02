@@ -1121,3 +1121,203 @@ export function demoChatReply(): { reply: string; source: "rules" } {
       "Try the **Search**, **Applications**, or **Studio** tabs to see it all.",
   };
 }
+
+type DemoCompanySource = {
+  id: string;
+  company: string;
+  collect_cn: boolean;
+  collect_en: boolean;
+  enabled: boolean;
+  include_in_run: boolean;
+  tags: string[];
+  note: string;
+  careers_url: string;
+  runnable: boolean;
+};
+
+type DemoNotebookPage = {
+  id: string;
+  title: string;
+  markdown_body: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  topics: string[];
+};
+
+let demoCompanySources: DemoCompanySource[] = [
+  {
+    id: "dimagi",
+    company: "Dimagi",
+    collect_cn: false,
+    collect_en: true,
+    enabled: true,
+    include_in_run: false,
+    tags: ["health"],
+    note: "CommCare / global health software",
+    careers_url: "https://job-boards.greenhouse.io/dimagi",
+    runnable: true,
+  },
+  {
+    id: "tencent",
+    company: "Tencent",
+    collect_cn: true,
+    collect_en: false,
+    enabled: true,
+    include_in_run: false,
+    tags: ["tech"],
+    note: "CN careers board",
+    careers_url: "",
+    runnable: true,
+  },
+];
+
+let demoNotebookPages: DemoNotebookPage[] = [
+  {
+    id: "nb-1",
+    title: "Interview stories",
+    markdown_body: "Keep a bank of #research stories. Not a template.",
+    sort_order: 0,
+    created_at: "2026-09-01T10:00:00Z",
+    updated_at: "2026-09-02T12:00:00Z",
+    topics: ["research"],
+  },
+];
+
+function demoTopicsFrom(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const match of text.matchAll(/(?<![#\w])#([^\s#]{1,40})/g)) {
+    const topic = match[1]?.trim();
+    if (!topic || seen.has(topic.toLowerCase())) continue;
+    seen.add(topic.toLowerCase());
+    out.push(topic);
+  }
+  return out;
+}
+
+export function listDemoCompanySources(tag?: string): { sources: DemoCompanySource[]; tags: string[] } {
+  const tags = [...new Set(demoCompanySources.flatMap((row) => row.tags))];
+  const wanted = tag?.trim().toLowerCase() ?? "";
+  const sources = wanted
+    ? demoCompanySources.filter((row) => row.tags.some((item) => item.toLowerCase() === wanted))
+    : demoCompanySources;
+  return { sources: sources.map((row) => ({ ...row })), tags };
+}
+
+export function createDemoCompanySource(body: {
+  company: string;
+  collect_cn?: boolean;
+  collect_en?: boolean;
+  enabled?: boolean;
+  include_in_run?: boolean;
+  tags?: string[];
+  note?: string;
+  careers_url?: string;
+}): DemoCompanySource {
+  const id = body.company.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `company-${Date.now()}`;
+  const row: DemoCompanySource = {
+    id,
+    company: body.company.trim(),
+    collect_cn: Boolean(body.collect_cn),
+    collect_en: body.collect_en !== false || Boolean(body.collect_cn) ? Boolean(body.collect_en) : true,
+    enabled: body.enabled !== false,
+    include_in_run: Boolean(body.include_in_run),
+    tags: body.tags ?? [],
+    note: body.note ?? "",
+    careers_url: body.careers_url ?? "",
+    runnable: Boolean(body.careers_url?.trim()),
+  };
+  if (!row.collect_cn && !row.collect_en) row.collect_en = true;
+  demoCompanySources = [...demoCompanySources, row];
+  return { ...row };
+}
+
+export function patchDemoCompanySource(
+  id: string,
+  body: Partial<{
+    company: string;
+    collect_cn: boolean;
+    collect_en: boolean;
+    enabled: boolean;
+    include_in_run: boolean;
+    tags: string[];
+    note: string;
+    careers_url: string;
+  }>,
+): DemoCompanySource | null {
+  const current = demoCompanySources.find((row) => row.id === id);
+  if (!current) return null;
+  const next = { ...current, ...body };
+  demoCompanySources = demoCompanySources.map((row) => (row.id === id ? next : row));
+  return { ...next };
+}
+
+export function listDemoNotebookPages(opts?: {
+  q?: string;
+  topic?: string;
+  sort?: "updated" | "title";
+}): { pages: DemoNotebookPage[]; topics: string[] } {
+  let pages = [...demoNotebookPages];
+  const needle = opts?.q?.trim().toLowerCase() ?? "";
+  if (needle) {
+    pages = pages.filter(
+      (page) =>
+        page.title.toLowerCase().includes(needle) || page.markdown_body.toLowerCase().includes(needle),
+    );
+  }
+  const topic = opts?.topic?.trim().replace(/^#/, "").toLowerCase() ?? "";
+  if (topic) {
+    pages = pages.filter((page) => page.topics.some((item) => item.toLowerCase() === topic));
+  }
+  if (opts?.sort === "title") {
+    pages.sort((a, b) => a.title.localeCompare(b.title));
+  } else {
+    pages.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  }
+  const topics = [...new Set(demoNotebookPages.flatMap((page) => page.topics))];
+  return { pages, topics };
+}
+
+export function createDemoNotebookPage(body?: {
+  title?: string;
+  markdown_body?: string;
+}): DemoNotebookPage {
+  const now = new Date().toISOString();
+  const title = body?.title?.trim() || "Untitled";
+  const markdown_body = body?.markdown_body ?? "";
+  const page: DemoNotebookPage = {
+    id: `nb-${Date.now()}`,
+    title,
+    markdown_body,
+    sort_order: 0,
+    created_at: now,
+    updated_at: now,
+    topics: demoTopicsFrom(`${title}\n${markdown_body}`),
+  };
+  demoNotebookPages = [page, ...demoNotebookPages];
+  return { ...page };
+}
+
+export function patchDemoNotebookPage(
+  id: string,
+  body: { title?: string; markdown_body?: string; sort_order?: number },
+): DemoNotebookPage | null {
+  const current = demoNotebookPages.find((page) => page.id === id);
+  if (!current) return null;
+  const next = {
+    ...current,
+    ...body,
+    title: body.title?.trim() || current.title,
+    updated_at: new Date().toISOString(),
+  };
+  next.topics = demoTopicsFrom(`${next.title}\n${next.markdown_body}`);
+  demoNotebookPages = demoNotebookPages.map((page) => (page.id === id ? next : page));
+  return { ...next };
+}
+
+export function deleteDemoNotebookPage(id: string): boolean {
+  const before = demoNotebookPages.length;
+  demoNotebookPages = demoNotebookPages.filter((page) => page.id !== id);
+  return demoNotebookPages.length < before;
+}

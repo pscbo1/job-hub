@@ -40,6 +40,7 @@ from job_sentinel.core.models import (
     ApplicationStatus,
     ApplicationSubmission,
     CloseReason,
+    CompanySource,
     DocumentKind,
     GeneratedDocument,
     Job,
@@ -51,6 +52,7 @@ from job_sentinel.core.models import (
     MaterialPresetItem,
     MaterialUsePreset,
     MaterialVersion,
+    NotebookPage,
     PacketSnapshot,
     SubmissionMaterialRevision,
     TaskAttachment,
@@ -68,7 +70,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -90,6 +92,8 @@ _MANUAL_APP_REQUESTS_TABLE = "manual_application_requests"
 _MATERIAL_PRESETS_TABLE = "material_use_presets"
 _SUBMISSION_REVISIONS_TABLE = "submission_material_revisions"
 _PROFILE_VERSIONS_TABLE = "profile_versions"
+_SOURCE_REGISTRY_TABLE = "source_registry"
+_NOTEBOOK_PAGES_TABLE = "notebook_pages"
 _DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
 _UNSET: Any = object()
 _APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
@@ -207,6 +211,8 @@ class JobRepository:
         self._ensure_material_use_presets_table()
         self._ensure_submission_material_revisions_table()
         self._ensure_profile_versions_table()
+        self._ensure_source_registry_table()
+        self._ensure_notebook_pages_table()
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -729,6 +735,50 @@ class JobRepository:
             ["version_number"], if_not_exists=True
         )
 
+    def _ensure_source_registry_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_registry (
+                id TEXT PRIMARY KEY,
+                company TEXT NOT NULL,
+                collect_cn INTEGER NOT NULL DEFAULT 0,
+                collect_en INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                include_in_run INTEGER NOT NULL DEFAULT 0,
+                tags TEXT NOT NULL DEFAULT '[]',
+                note TEXT NOT NULL DEFAULT '',
+                careers_url TEXT,
+                runnable INTEGER NOT NULL DEFAULT 1,
+                collector_id TEXT NOT NULL DEFAULT '',
+                integration TEXT NOT NULL DEFAULT 'ats_board',
+                ats TEXT,
+                slug TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        table = self._table(_SOURCE_REGISTRY_TABLE)
+        table.create_index(["company"], if_not_exists=True)
+        from job_sentinel.ingestion.source_registry import seed_source_registry
+
+        seed_source_registry(self)
+
+    def _ensure_notebook_pages_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notebook_pages (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                markdown_body TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self._table(_NOTEBOOK_PAGES_TABLE).create_index(["updated_at"], if_not_exists=True)
+
     def _backfill_binding_material_ids(self) -> None:
         """Resolve version→material_id and drop duplicate packet rows before UNIQUE."""
         seen: dict[tuple[str, str], str] = {}
@@ -1112,6 +1162,9 @@ class JobRepository:
             self._ensure_task_attachments_table()
         if from_version < 20:
             self._ensure_profile_versions_table()
+        if from_version < 21:
+            self._ensure_source_registry_table()
+            self._ensure_notebook_pages_table()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -2959,6 +3012,99 @@ class JobRepository:
         self._table(_DOC_TABLE).delete(doc_id)
         return True
 
+    def list_company_sources(self) -> list[CompanySource]:
+        rows = self._table(_SOURCE_REGISTRY_TABLE).rows_where(
+            "1 = 1", [], order_by="company COLLATE NOCASE ASC"
+        )
+        return [_company_source_from_row(dict(row)) for row in rows]
+
+    def get_company_source(self, source_id: str) -> CompanySource | None:
+        try:
+            row = self._table(_SOURCE_REGISTRY_TABLE).get(source_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        return _company_source_from_row(dict(row))
+
+    def insert_company_source(self, row: CompanySource) -> CompanySource:
+        self._table(_SOURCE_REGISTRY_TABLE).insert(_company_source_to_row(row))
+        stored = self.get_company_source(row.id)
+        return stored if stored is not None else row
+
+    def update_company_source(self, source_id: str, **fields: Any) -> CompanySource | None:
+        if self.get_company_source(source_id) is None:
+            return None
+        payload: dict[str, Any] = {}
+        if "company" in fields:
+            payload["company"] = str(fields["company"]).strip()
+        if "collect_cn" in fields:
+            payload["collect_cn"] = 1 if fields["collect_cn"] else 0
+        if "collect_en" in fields:
+            payload["collect_en"] = 1 if fields["collect_en"] else 0
+        if "enabled" in fields:
+            payload["enabled"] = 1 if fields["enabled"] else 0
+        if "include_in_run" in fields:
+            payload["include_in_run"] = 1 if fields["include_in_run"] else 0
+        if "tags" in fields:
+            payload["tags"] = json.dumps(list(fields["tags"] or []))
+        if "note" in fields:
+            payload["note"] = str(fields["note"] or "")
+        if "careers_url" in fields:
+            payload["careers_url"] = fields["careers_url"] or None
+        if "runnable" in fields:
+            payload["runnable"] = 1 if fields["runnable"] else 0
+        if "collector_id" in fields:
+            payload["collector_id"] = str(fields["collector_id"] or "")
+        if "integration" in fields:
+            payload["integration"] = str(fields["integration"] or "ats_board")
+        if "ats" in fields:
+            payload["ats"] = fields["ats"] or None
+        if "slug" in fields:
+            payload["slug"] = fields["slug"] or None
+        if not payload:
+            return self.get_company_source(source_id)
+        payload["updated_at"] = _now_iso()
+        self._table(_SOURCE_REGISTRY_TABLE).update(source_id, payload)
+        return self.get_company_source(source_id)
+
+    def list_notebook_pages(self, *, sort: str = "updated") -> list[NotebookPage]:
+        order = "title COLLATE NOCASE ASC" if sort == "title" else "updated_at DESC"
+        rows = self._table(_NOTEBOOK_PAGES_TABLE).rows_where("1 = 1", [], order_by=order)
+        return [_notebook_page_from_row(dict(row)) for row in rows]
+
+    def get_notebook_page(self, page_id: str) -> NotebookPage | None:
+        try:
+            row = self._table(_NOTEBOOK_PAGES_TABLE).get(page_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        return _notebook_page_from_row(dict(row))
+
+    def insert_notebook_page(self, page: NotebookPage) -> NotebookPage:
+        self._table(_NOTEBOOK_PAGES_TABLE).insert(_notebook_page_to_row(page))
+        stored = self.get_notebook_page(page.id)
+        return stored if stored is not None else page
+
+    def update_notebook_page(self, page_id: str, **fields: Any) -> NotebookPage | None:
+        if self.get_notebook_page(page_id) is None:
+            return None
+        payload: dict[str, Any] = {}
+        if "title" in fields:
+            payload["title"] = str(fields["title"] or "")
+        if "markdown_body" in fields:
+            payload["markdown_body"] = str(fields["markdown_body"] or "")
+        if "sort_order" in fields:
+            payload["sort_order"] = int(fields["sort_order"] or 0)
+        if not payload:
+            return self.get_notebook_page(page_id)
+        payload["updated_at"] = _now_iso()
+        self._table(_NOTEBOOK_PAGES_TABLE).update(page_id, payload)
+        return self.get_notebook_page(page_id)
+
+    def delete_notebook_page(self, page_id: str) -> bool:
+        if self.get_notebook_page(page_id) is None:
+            return False
+        self._table(_NOTEBOOK_PAGES_TABLE).delete(page_id)
+        return True
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Serialisation helpers
@@ -2967,6 +3113,80 @@ class JobRepository:
 
 def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    return str(value or "").strip() not in {"", "0", "false", "False", "none", "None"}
+
+
+def _company_source_to_row(row: CompanySource) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "company": row.company,
+        "collect_cn": 1 if row.collect_cn else 0,
+        "collect_en": 1 if row.collect_en else 0,
+        "enabled": 1 if row.enabled else 0,
+        "include_in_run": 1 if row.include_in_run else 0,
+        "tags": json.dumps(list(row.tags)),
+        "note": row.note,
+        "careers_url": row.careers_url,
+        "runnable": 1 if row.runnable else 0,
+        "collector_id": row.collector_id,
+        "integration": row.integration,
+        "ats": row.ats,
+        "slug": row.slug,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _company_source_from_row(row: dict[str, Any]) -> CompanySource:
+    from job_sentinel.jobs.tags import parse_stored_tags
+
+    return CompanySource(
+        id=str(row["id"]),
+        company=str(row.get("company") or ""),
+        collect_cn=_as_bool(row.get("collect_cn")),
+        collect_en=_as_bool(row.get("collect_en")),
+        enabled=_as_bool(row.get("enabled", 1)),
+        include_in_run=_as_bool(row.get("include_in_run")),
+        tags=parse_stored_tags(row.get("tags")),
+        note=str(row.get("note") or ""),
+        careers_url=str(row["careers_url"]).strip() or None if row.get("careers_url") else None,
+        runnable=_as_bool(row.get("runnable", 1)),
+        collector_id=str(row.get("collector_id") or row.get("id") or ""),
+        integration=str(row.get("integration") or "ats_board"),
+        ats=str(row["ats"]).strip() or None if row.get("ats") else None,
+        slug=str(row["slug"]).strip() or None if row.get("slug") else None,
+        created_at=_parse_dt(str(row.get("created_at") or "")),
+        updated_at=_parse_dt(str(row.get("updated_at") or "")),
+    )
+
+
+def _notebook_page_to_row(page: NotebookPage) -> dict[str, Any]:
+    return {
+        "id": page.id,
+        "title": page.title,
+        "markdown_body": page.markdown_body,
+        "sort_order": page.sort_order,
+        "created_at": page.created_at.isoformat(),
+        "updated_at": page.updated_at.isoformat(),
+    }
+
+
+def _notebook_page_from_row(row: dict[str, Any]) -> NotebookPage:
+    return NotebookPage(
+        id=str(row["id"]),
+        title=str(row.get("title") or ""),
+        markdown_body=str(row.get("markdown_body") or ""),
+        sort_order=int(row.get("sort_order") or 0),
+        created_at=_parse_dt(str(row.get("created_at") or "")),
+        updated_at=_parse_dt(str(row.get("updated_at") or "")),
+    )
 
 
 def _to_row(job: JobPosting) -> dict[str, Any]:
