@@ -26,7 +26,13 @@ import {
   putIdleCleanupSettings,
   updateApplication,
 } from "@/lib/api";
-import { type ApplicationDrawerTab, nextStepLabel, parseApplicationTab, tabQueryValue } from "@/lib/applicationUi";
+import {
+  type ApplicationDrawerTab,
+  DEFAULT_APPLICATION_TAB,
+  nextStepLabel,
+  parseApplicationTab,
+  tabQueryValue,
+} from "@/lib/applicationUi";
 import { applicationMatchesTags, uniqueApplicationTags } from "@/lib/applicationTags";
 import { applicationWasSubmitted } from "@/lib/applicationLifecycle";
 import { isDateOverdue } from "@/lib/jobPipeline";
@@ -114,7 +120,7 @@ export default function ApplicationsPage() {
   const [knownTags, setKnownTags] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<ApplicationDrawerTab>("overview");
+  const [activeTab, setActiveTab] = useState<ApplicationDrawerTab>(DEFAULT_APPLICATION_TAB);
   const [submitId, setSubmitId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [idle, setIdle] = useState<IdleCleanupSettings>({ enabled: false, idle_days: 14 });
@@ -205,7 +211,7 @@ export default function ApplicationsPage() {
     };
   }, [activeId, apps]);
 
-  function openApp(id: string, tab: ApplicationDrawerTab = "overview") {
+  function openApp(id: string, tab: ApplicationDrawerTab = DEFAULT_APPLICATION_TAB) {
     setActiveId(id);
     setActiveTab(tab);
     replaceAppQuery(id, tab);
@@ -213,9 +219,9 @@ export default function ApplicationsPage() {
 
   function closeDrawer() {
     setActiveId(null);
-    setActiveTab("overview");
+    setActiveTab(DEFAULT_APPLICATION_TAB);
     setFetchedApp(null);
-    replaceAppQuery(null, "overview");
+    replaceAppQuery(null, DEFAULT_APPLICATION_TAB);
   }
 
   function openAdd(event: React.MouseEvent<HTMLButtonElement>) {
@@ -243,7 +249,7 @@ export default function ApplicationsPage() {
     ]);
     setCreatedToast({ hidden });
     setAddOpen(false);
-    openApp(created.application.id, "overview");
+    openApp(created.application.id);
   }
 
   function showCreatedInList() {
@@ -334,7 +340,7 @@ export default function ApplicationsPage() {
       header: "Role / Company",
       sortValue: (a) => a.title.toLowerCase(),
       render: (a) => (
-        <button type="button" className="min-w-0 text-left" onClick={() => openApp(a.id, "overview")}>
+        <button type="button" className="min-w-0 text-left" onClick={() => openApp(a.id)}>
           <div className="font-medium text-ink">{a.title || "Untitled"}</div>
           <div className="text-xs text-muted">{[a.employer, a.location].filter(Boolean).join(" · ")}</div>
         </button>
@@ -371,7 +377,7 @@ export default function ApplicationsPage() {
           <button
             type="button"
             className="w-full min-w-0 text-left"
-            onClick={() => openApp(a.id, "overview")}
+            onClick={() => openApp(a.id)}
           >
             <div className="break-words text-sm text-ink">{nextStepLabel(a.next_step)}</div>
             {a.job_deadline ? (

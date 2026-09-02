@@ -1,6 +1,6 @@
 "use client";
 
-import { ASSIST_NO_APPLY_URL } from "@/lib/applicationUi";
+import { ASSIST_BTN_PRIMARY, ASSIST_NO_APPLY_URL } from "@/lib/applicationUi";
 import { sourceAction } from "@/lib/sourceAction";
 import { cn } from "@/lib/utils";
 
@@ -30,10 +30,7 @@ export function SourceActionLink({
         href={action.href}
         target="_blank"
         rel="noopener noreferrer"
-        className={cn(
-          "inline-flex h-10 items-center rounded-lg bg-ink px-4 text-sm font-medium text-white shadow-sm hover:bg-night",
-          className,
-        )}
+        className={cn(ASSIST_BTN_PRIMARY, className)}
       >
         {action.label}
       </a>

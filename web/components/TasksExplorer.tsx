@@ -427,7 +427,6 @@ export function TasksExplorer() {
                             variant="primary"
                             url={row.job_url}
                             job_url={row.job_url}
-                            className="h-8 px-3 text-xs"
                           />
                         )}
                         <JobActions

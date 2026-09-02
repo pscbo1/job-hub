@@ -9,6 +9,7 @@ import { SourceActionLink } from "@/components/SourceActionLink";
 import { addCommNote, patchHubJob, updateApplication, type Application } from "@/lib/api";
 import {
   type ApplicationDrawerTab,
+  ASSIST_BTN_SECONDARY,
   assistPacketReadiness,
   latestSubmissionLine,
   nextStepLabel,
@@ -32,8 +33,8 @@ import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 
 const TABS: { id: ApplicationDrawerTab; label: string }[] = [
-  { id: "overview", label: "Overview" },
   { id: "materials", label: "Materials" },
+  { id: "overview", label: "Overview" },
   { id: "notes", label: "Notes" },
 ];
 
@@ -392,7 +393,7 @@ export function ApplicationDrawer({
                   <button
                     type="button"
                     onClick={() => onSubmitRequest(shown.id)}
-                    className="h-8 rounded-lg border border-line bg-surface px-3 text-xs font-medium text-ink"
+                    className={ASSIST_BTN_SECONDARY}
                   >
                     Mark submitted
                   </button>
@@ -435,7 +436,7 @@ export function ApplicationDrawer({
                         : "border-transparent text-muted hover:text-ink",
                     )}
                   >
-                      {item.label}{item.id === "materials" && shown.current_material_count != null ? ` (${shown.current_material_count})` : ""}
+                      {item.label}
                   </button>
                 ))}
               </div>
@@ -535,14 +536,14 @@ function OverviewTab({
             <button
               type="button"
               onClick={onOpenMaterials}
-              className="h-10 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink"
+              className={ASSIST_BTN_SECONDARY}
             >
               Open Materials
             </button>
             <button
               type="button"
               onClick={onSubmitRequest}
-              className="h-10 rounded-lg border border-line bg-surface px-4 text-sm font-medium text-ink"
+              className={ASSIST_BTN_SECONDARY}
             >
               Mark submitted
             </button>

@@ -4,18 +4,27 @@ import { formatDateTimeInAppTz } from "@/lib/timezone";
 
 export type ApplicationDrawerTab = "overview" | "materials" | "notes";
 
+/** Opening an application lands on the packet workbench. */
+export const DEFAULT_APPLICATION_TAB: ApplicationDrawerTab = "materials";
+
 export function parseApplicationTab(raw: string | null | undefined): ApplicationDrawerTab {
   const value = (raw ?? "").trim().toLowerCase();
-  if (value === "packet" || value === "materials") return "materials";
+  if (value === "overview") return "overview";
   if (value === "notes") return "notes";
-  return "overview";
+  return "materials";
 }
 
 export function tabQueryValue(tab: ApplicationDrawerTab): string | null {
-  if (tab === "overview") return null;
   if (tab === "materials") return "packet";
   return tab;
 }
+
+/** Shared assist action-row chrome: one filled primary, outline secondaries. */
+export const ASSIST_BTN =
+  "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium disabled:pointer-events-none disabled:opacity-50";
+export const ASSIST_BTN_PRIMARY = `${ASSIST_BTN} bg-ink text-white shadow-sm hover:bg-night`;
+export const ASSIST_BTN_SECONDARY =
+  `${ASSIST_BTN} border border-line bg-surface text-ink hover:border-ink/30`;
 
 export const APPLICATION_ROW_MORE_LABEL = "More actions";
 

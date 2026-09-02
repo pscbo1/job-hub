@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { ASSIST_BTN_SECONDARY } from "@/lib/applicationUi";
 import {
   referenceHubJob,
   saveHubJob,
@@ -129,7 +130,7 @@ export function JobActions({
             if (job.application_id) onOpenMaterials();
             else void onStartApplication(true);
           }}
-          className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-xs font-medium text-ink transition-colors hover:border-ink/30 hover:bg-bg disabled:opacity-50"
+          className={ASSIST_BTN_SECONDARY}
         >
           Open materials
         </button>
