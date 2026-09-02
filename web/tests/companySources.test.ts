@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  COMPANY_SOURCES_COPY,
   MANAGE_SOURCES_COPY,
-  filterManagedSources,
+  VERTICAL_CHANNELS_COPY,
+  companySourceTags,
+  filterCompanySources,
+  filterVerticalChannels,
   isCompanyKind,
-  sourceKindOf,
+  verticalChannelTags,
   type CompanySourceRow,
 } from "@/lib/companySources";
 
@@ -23,31 +27,28 @@ function row(partial: Partial<CompanySourceRow>): CompanySourceRow {
   };
 }
 
-describe("manage sources one table", () => {
-  it("keeps companies and verticals on the same list with a type field", () => {
-    expect(MANAGE_SOURCES_COPY.title).toBe("Manage sources");
-    expect(MANAGE_SOURCES_COPY.subtitle.toLowerCase()).toMatch(/one table/);
-    expect(sourceKindOf({ kind: "wechat" })).toBe("wechat");
-    expect(sourceKindOf({ kind: "vertical", channel_type: "community" })).toBe("community");
+describe("manage sources tabs", () => {
+  it("is one page with Companies and Vertical channels sheets", () => {
+    expect(MANAGE_SOURCES_COPY.companiesTab).toBe("Companies");
+    expect(MANAGE_SOURCES_COPY.verticalsTab).toBe("Vertical channels");
+    expect(COMPANY_SOURCES_COPY.add).toBe("Add company");
+    expect(VERTICAL_CHANNELS_COPY.add).toBe("Add channel");
     expect(isCompanyKind({ kind: "wechat" })).toBe(false);
     expect(isCompanyKind({ kind: "company" })).toBe(true);
   });
 
-  it("filters the shared list by type and tag", () => {
+  it("keeps each tab's table and tag filter separate", () => {
     const rows = [
       row({ id: "a", tags: ["research"] }),
       row({ id: "b", company: "Beta", tags: ["civic"] }),
       row({ id: "w", company: "Research Circle", kind: "wechat", tags: ["research"] }),
-      row({ id: "c", company: "Discord", kind: "community", tags: ["civic"] }),
+      row({ id: "c", company: "Civic Discord", kind: "community", tags: ["civic"] }),
     ];
-    expect(filterManagedSources(rows, { type: "wechat" }).map((item) => item.id)).toEqual(["w"]);
-    expect(filterManagedSources(rows, { type: "company" }).map((item) => item.id)).toEqual([
-      "a",
-      "b",
-    ]);
-    expect(filterManagedSources(rows, { tag: "research" }).map((item) => item.id)).toEqual([
-      "a",
-      "w",
-    ]);
+    expect(filterCompanySources(rows, "").map((item) => item.id)).toEqual(["a", "b"]);
+    expect(filterCompanySources(rows, "research").map((item) => item.id)).toEqual(["a"]);
+    expect(filterVerticalChannels(rows, "").map((item) => item.id)).toEqual(["w", "c"]);
+    expect(filterVerticalChannels(rows, "research").map((item) => item.id)).toEqual(["w"]);
+    expect(companySourceTags(rows)).toEqual(["research", "civic"]);
+    expect(verticalChannelTags(rows)).toEqual(["research", "civic"]);
   });
 });

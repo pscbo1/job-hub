@@ -1,39 +1,61 @@
-/** Manage sources: one table for companies and vertical channels. */
+/** Manage sources: one page, two tabs (Companies | Vertical channels). */
 
 import { normalizeApplicationTags } from "@/lib/applicationTags";
 
-export const SOURCE_KINDS = ["company", "wechat", "community", "other"] as const;
-export type SourceKind = (typeof SOURCE_KINDS)[number];
+export const SOURCE_CLASS_TABS = ["companies", "verticals"] as const;
+export type SourceClassTab = (typeof SOURCE_CLASS_TABS)[number];
+
+export const VERTICAL_CHANNEL_TYPES = ["wechat", "community", "other"] as const;
+export type VerticalChannelType = (typeof VERTICAL_CHANNEL_TYPES)[number];
+export type SourceKind = "company" | VerticalChannelType;
 
 export const MANAGE_SOURCES_COPY = {
   title: "Manage sources",
   subtitle:
-    "One table for companies and vertical channels. Auto Collect still runs only enabled companies you check for this run. WeChat and community rows stay listed so you do not forget them.",
-  add: "Add source",
-  name: "Name",
-  type: "Type",
+    "Two sheets on this page: companies you can collect from, and vertical channels you keep by hand. Auto Collect does not scrape WeChat or community rows.",
+  companiesTab: "Companies",
+  verticalsTab: "Vertical channels",
+} as const;
+
+export const COMPANY_SOURCES_COPY = {
+  title: "Companies",
+  subtitle: "Collect runs only enabled companies you check for this run.",
+  add: "Add company",
+  company: "Company",
   cn: "CN",
   en: "EN",
   enabled: "Enabled",
   thisRun: "This run",
   tags: "Tags",
   note: "Note",
-  handle: "URL or handle (optional)",
-  notePlaceholder: "Who is this source?",
-  typeFilter: "Filter by type",
+  notePlaceholder: "Who is this company?",
   tagFilter: "Filter by tag",
   careersUrl: "Careers URL (optional)",
-  careersHint: "For companies, paste a Greenhouse, Lever, Ashby, or Workday board link.",
-  empty: "No sources yet. Add a company or a vertical channel.",
-  notRunnable: "Listed only — Auto Collect does not scrape this",
+  careersHint: "Paste a Greenhouse, Lever, Ashby, or Workday board link if you want Collect to fetch it.",
+  empty: "No companies yet. Add one to keep it off Collect until you enable it.",
+  notRunnable: "Listed only — no public board to collect",
 } as const;
 
-export const SOURCE_KIND_LABELS: Record<SourceKind, string> = {
-  company: "Company",
+export const VERTICAL_CHANNEL_TYPE_LABELS: Record<VerticalChannelType, string> = {
   wechat: "WeChat",
   community: "Community",
   other: "Other",
 };
+
+export const VERTICAL_CHANNELS_COPY = {
+  title: "Vertical channels",
+  subtitle: "WeChat, community, and other channels you track by hand. Not scraped this round.",
+  add: "Add channel",
+  name: "Name",
+  type: "Type",
+  handle: "URL (optional)",
+  enabled: "Enabled",
+  tags: "Tags",
+  note: "Note",
+  notePlaceholder: "Who runs this channel?",
+  tagFilter: "Filter by tag",
+  empty: "No vertical channels yet. Add as many as you need — they stay on this sheet.",
+} as const;
 
 export interface CompanySourceRow {
   id: string;
@@ -50,8 +72,6 @@ export interface CompanySourceRow {
   note: string;
   careers_url?: string;
   runnable?: boolean;
-  created_at?: string;
-  updated_at?: string;
 }
 
 export function sourceKindOf(row: { kind?: string; channel_type?: string }): SourceKind {
@@ -71,28 +91,37 @@ export function isCompanyKind(row: { kind?: string; channel_type?: string }): bo
   return sourceKindOf(row) === "company";
 }
 
-export function sourceKindLabel(kind: string): string {
-  if (kind === "company" || kind === "wechat" || kind === "community" || kind === "other") {
-    return SOURCE_KIND_LABELS[kind];
+export function verticalTypeLabel(type: string): string {
+  if (type === "wechat" || type === "community" || type === "other") {
+    return VERTICAL_CHANNEL_TYPE_LABELS[type];
   }
-  return kind || SOURCE_KIND_LABELS.other;
+  return type || VERTICAL_CHANNEL_TYPE_LABELS.other;
 }
 
-export function filterManagedSources(
-  rows: readonly CompanySourceRow[],
-  opts: { type?: string; tag?: string } = {},
-): CompanySourceRow[] {
-  const wantedType = (opts.type ?? "").trim().toLowerCase();
-  const wantedTag = (opts.tag ?? "").trim().toLowerCase();
-  return rows.filter((row) => {
-    const kind = sourceKindOf(row);
-    if (wantedType === "vertical" && kind === "company") return false;
-    if (wantedType && wantedType !== "vertical" && kind !== wantedType) return false;
-    if (wantedTag && !row.tags.some((item) => item.toLowerCase() === wantedTag)) return false;
-    return true;
-  });
+export function filterCompanySources<T extends CompanySourceRow>(
+  rows: readonly T[],
+  tag: string,
+): T[] {
+  const companies = rows.filter((row) => isCompanyKind(row));
+  const wanted = tag.trim().toLowerCase();
+  if (!wanted) return [...companies];
+  return companies.filter((row) => row.tags.some((item) => item.toLowerCase() === wanted));
 }
 
-export function managedSourceTags(rows: readonly CompanySourceRow[]): string[] {
-  return normalizeApplicationTags(rows.flatMap((row) => row.tags));
+export function companySourceTags(rows: readonly CompanySourceRow[]): string[] {
+  return normalizeApplicationTags(rows.filter(isCompanyKind).flatMap((row) => row.tags));
+}
+
+export function filterVerticalChannels<T extends CompanySourceRow>(
+  rows: readonly T[],
+  tag: string,
+): T[] {
+  const channels = rows.filter((row) => !isCompanyKind(row));
+  const wanted = tag.trim().toLowerCase();
+  if (!wanted) return [...channels];
+  return channels.filter((row) => row.tags.some((item) => item.toLowerCase() === wanted));
+}
+
+export function verticalChannelTags(rows: readonly CompanySourceRow[]): string[] {
+  return normalizeApplicationTags(rows.filter((row) => !isCompanyKind(row)).flatMap((row) => row.tags));
 }

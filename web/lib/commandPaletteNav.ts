@@ -41,7 +41,7 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
     },
     {
       label: "Manage sources",
-      hint: "One source table: companies and vertical channels",
+      hint: "Companies and vertical channel sheets — not the job list",
       href: "/company-sources",
       keywords: "company sources collect manage vertical channels wechat",
     },
