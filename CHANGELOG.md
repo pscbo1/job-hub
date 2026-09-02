@@ -16,7 +16,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ### Added
 
-- Company Sources (`/company-sources`, Collect → Manage sources): one page with Companies | Vertical channels tabs. Same `source_registry`; `kind` is `company`, `wechat`, `community`, or `other`. YAML seeds companies once; user-added rows persist. Auto Collect still runs only enabled + this-run company adapters.
+- Company Sources (`/company-sources`, Collect → Manage sources): one page with Companies | Vertical channels tabs. UI fields are name, type (vertical), enabled, this-run, tags, note, plus CN/EN on companies. Adapter/config paths stay backend-only. Same `source_registry`; `kind` is `company`, `wechat`, `community`, or `other`. YAML seeds companies once. Auto Collect still runs only enabled + this-run company adapters.
 - Notebook (`/notebook`, More menu): free-writing pages with title, markdown, search, and typed `#topic` hashtags. Not Materials and not added to packets.
 - Job checklist tasks (`job_tasks`), DDL / open-task chips, To Do-first sort, and `job-sentinel archive --force|--dry-run` (ported from unmerged Slice 1 PR #1 onto the sealed model).
 - **Materials + Application lanes (Part 2/3).** Independent Materials library (files and Knowledge templates/answers) binds versions onto applications. Mark submitted freezes a server-side snapshot. Optional lightweight communication notes.

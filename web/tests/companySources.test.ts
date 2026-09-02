@@ -33,6 +33,9 @@ describe("manage sources tabs", () => {
     expect(MANAGE_SOURCES_COPY.verticalsTab).toBe("Vertical channels");
     expect(COMPANY_SOURCES_COPY.add).toBe("Add company");
     expect(VERTICAL_CHANNELS_COPY.add).toBe("Add channel");
+    expect(JSON.stringify({ ...COMPANY_SOURCES_COPY, ...VERTICAL_CHANNELS_COPY })).not.toMatch(
+      /careers|greenhouse|yaml|adapter|scraper|config path|handle/i,
+    );
     expect(isCompanyKind({ kind: "wechat" })).toBe(false);
     expect(isCompanyKind({ kind: "company" })).toBe(true);
   });

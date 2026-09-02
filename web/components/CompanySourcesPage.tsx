@@ -42,13 +42,12 @@ export function CompanySourcesPage() {
     include_in_run: false,
     tags: "",
     note: "",
-    careers_url: "",
   });
   const [channelDraft, setChannelDraft] = useState({
     name: "",
     kind: "wechat" as VerticalChannelType,
-    handle: "",
     enabled: true,
+    include_in_run: false,
     tags: "",
     note: "",
   });
@@ -88,10 +87,9 @@ export function CompanySourcesPage() {
       include_in_run: companyDraft.include_in_run,
       tags: companyDraft.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
       note: companyDraft.note,
-      careers_url: companyDraft.careers_url,
     });
     if (!created) {
-      setMessage("Couldn't add this company. Check the name and careers URL.");
+      setMessage("Couldn't add this company.");
       return;
     }
     setCompanyDraft({
@@ -102,7 +100,6 @@ export function CompanySourcesPage() {
       include_in_run: false,
       tags: "",
       note: "",
-      careers_url: "",
     });
     setAdding(false);
     await refresh();
@@ -113,9 +110,8 @@ export function CompanySourcesPage() {
     const created = await createCompanySource({
       company: channelDraft.name,
       kind: channelDraft.kind,
-      handle: channelDraft.handle,
       enabled: channelDraft.enabled,
-      include_in_run: false,
+      include_in_run: channelDraft.include_in_run,
       tags: channelDraft.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
       note: channelDraft.note,
     });
@@ -126,8 +122,8 @@ export function CompanySourcesPage() {
     setChannelDraft({
       name: "",
       kind: "wechat",
-      handle: "",
       enabled: true,
+      include_in_run: false,
       tags: "",
       note: "",
     });
@@ -234,7 +230,6 @@ function CompaniesSheet({
     include_in_run: boolean;
     tags: string;
     note: string;
-    careers_url: string;
   };
   setDraft: React.Dispatch<React.SetStateAction<typeof draft>>;
   onAdd: () => void;
@@ -306,12 +301,6 @@ function CompaniesSheet({
             onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
             placeholder={COMPANY_SOURCES_COPY.notePlaceholder}
           />
-          <Input
-            value={draft.careers_url}
-            onChange={(event) => setDraft((current) => ({ ...current, careers_url: event.target.value }))}
-            placeholder={COMPANY_SOURCES_COPY.careersUrl}
-          />
-          <p className="text-[11px] text-muted">{COMPANY_SOURCES_COPY.careersHint}</p>
           <Button type="submit" disabled={!draft.company.trim() || (!draft.collect_cn && !draft.collect_en)}>
             Save company
           </Button>
@@ -337,9 +326,6 @@ function CompaniesSheet({
               <tr key={row.id} className="border-b border-line/70 last:border-0">
                 <td className="px-3 py-2">
                   <div className="font-medium text-ink">{row.company}</div>
-                  {!row.runnable && (
-                    <div className="text-[11px] text-muted">{COMPANY_SOURCES_COPY.notRunnable}</div>
-                  )}
                 </td>
                 <td className="px-3 py-2">
                   <input
@@ -377,7 +363,7 @@ function CompaniesSheet({
                   <input
                     type="checkbox"
                     checked={row.include_in_run}
-                    disabled={!row.enabled || row.runnable === false}
+                    disabled={!row.enabled}
                     aria-label={`${row.company} this run`}
                     onChange={(event) => onSave(row.id, { include_in_run: event.target.checked })}
                   />
@@ -429,8 +415,8 @@ function VerticalsSheet({
   draft: {
     name: string;
     kind: VerticalChannelType;
-    handle: string;
     enabled: boolean;
+    include_in_run: boolean;
     tags: string;
     note: string;
   };
@@ -476,19 +462,24 @@ function VerticalsSheet({
               ))}
             </select>
           </label>
-          <Input
-            value={draft.handle}
-            onChange={(event) => setDraft((current) => ({ ...current, handle: event.target.value }))}
-            placeholder={VERTICAL_CHANNELS_COPY.handle}
-          />
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={draft.enabled}
-              onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))}
-            />
-            {VERTICAL_CHANNELS_COPY.enabled}
-          </label>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={draft.enabled}
+                onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))}
+              />
+              {VERTICAL_CHANNELS_COPY.enabled}
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={draft.include_in_run}
+                onChange={(event) => setDraft((current) => ({ ...current, include_in_run: event.target.checked }))}
+              />
+              {VERTICAL_CHANNELS_COPY.thisRun}
+            </label>
+          </div>
           <Input
             value={draft.tags}
             onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))}
@@ -512,8 +503,8 @@ function VerticalsSheet({
             <tr>
               <th className="px-3 py-2 font-medium">{VERTICAL_CHANNELS_COPY.name}</th>
               <th className="px-3 py-2 font-medium">{VERTICAL_CHANNELS_COPY.type}</th>
-              <th className="px-3 py-2 font-medium">{VERTICAL_CHANNELS_COPY.handle}</th>
               <th className="px-3 py-2 font-medium">{VERTICAL_CHANNELS_COPY.enabled}</th>
+              <th className="px-3 py-2 font-medium">{VERTICAL_CHANNELS_COPY.thisRun}</th>
               <th className="px-3 py-2 font-medium">{VERTICAL_CHANNELS_COPY.tags}</th>
               <th className="px-3 py-2 font-medium">{VERTICAL_CHANNELS_COPY.note}</th>
             </tr>
@@ -542,18 +533,19 @@ function VerticalsSheet({
                   </td>
                   <td className="px-3 py-2">
                     <input
-                      defaultValue={row.handle ?? ""}
-                      aria-label={`${row.company || row.name} URL`}
-                      className="h-8 w-40 rounded-md border border-line bg-bg px-2 text-xs"
-                      onBlur={(event) => onSave(row.id, { handle: event.target.value })}
+                      type="checkbox"
+                      checked={row.enabled}
+                      aria-label={`${row.company || row.name} enabled`}
+                      onChange={(event) => onSave(row.id, { enabled: event.target.checked })}
                     />
                   </td>
                   <td className="px-3 py-2">
                     <input
                       type="checkbox"
-                      checked={row.enabled}
-                      aria-label={`${row.company || row.name} enabled`}
-                      onChange={(event) => onSave(row.id, { enabled: event.target.checked })}
+                      checked={row.include_in_run}
+                      disabled={!row.enabled}
+                      aria-label={`${row.company || row.name} this run`}
+                      onChange={(event) => onSave(row.id, { include_in_run: event.target.checked })}
                     />
                   </td>
                   <td className="px-3 py-2">

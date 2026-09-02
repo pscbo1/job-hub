@@ -1521,12 +1521,12 @@ def create_app(
         payload.pop("slug", None)
         payload.pop("collector_id", None)
         payload.pop("integration", None)
-        payload["careers_url"] = payload.get("careers_url") or ""
+        payload.pop("careers_url", None)
+        payload.pop("handle", None)
+        payload.pop("runnable", None)
         payload["name"] = payload.get("company") or ""
         payload["kind"] = payload.get("kind") or "company"
         payload["type"] = payload.get("kind") or "company"
-        payload["channel_type"] = payload.get("channel_type") or ""
-        payload["handle"] = payload.get("handle") or ""
         return payload
 
     def _registry_http(exc: Exception) -> HTTPException:

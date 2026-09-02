@@ -30,10 +30,7 @@ export const COMPANY_SOURCES_COPY = {
   note: "Note",
   notePlaceholder: "Who is this company?",
   tagFilter: "Filter by tag",
-  careersUrl: "Careers URL (optional)",
-  careersHint: "Paste a Greenhouse, Lever, Ashby, or Workday board link if you want Collect to fetch it.",
   empty: "No companies yet. Add one to keep it off Collect until you enable it.",
-  notRunnable: "Listed only — no public board to collect",
 } as const;
 
 export const VERTICAL_CHANNEL_TYPE_LABELS: Record<VerticalChannelType, string> = {
@@ -48,8 +45,8 @@ export const VERTICAL_CHANNELS_COPY = {
   add: "Add channel",
   name: "Name",
   type: "Type",
-  handle: "URL (optional)",
   enabled: "Enabled",
+  thisRun: "This run",
   tags: "Tags",
   note: "Note",
   notePlaceholder: "Who runs this channel?",

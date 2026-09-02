@@ -90,6 +90,8 @@ def test_company_sources_api_and_collect_catalog(tmp_path: Path) -> None:
     ids = {row["id"] for row in body["sources"]}
     assert "dimagi" in ids
     assert "ats" not in body["sources"][0]
+    assert "careers_url" not in body["sources"][0]
+    assert "handle" not in body["sources"][0]
     created = client.post(
         "/api/company-sources",
         json={
