@@ -32,6 +32,8 @@ import { currentMaterialCount, formatAppliedDate, materialCountLabel } from "@/l
 import { formatCalendarDate, todayInAppTz } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 
+import styles from "./page.module.css";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
 function ExportMenu({ count }: { count: number }) {
@@ -261,7 +263,8 @@ export default function ApplicationsPage() {
     {
       key: "select",
       header: "",
-      headerClassName: "w-8",
+      headerClassName: "!px-3",
+      className: "!px-3",
       render: (a) =>
         staleOnly && !a.exclude_from_idle ? (
           <input
@@ -290,6 +293,8 @@ export default function ApplicationsPage() {
     {
       key: "stage",
       header: "Stage",
+      headerClassName: "!px-2 whitespace-nowrap",
+      className: "!px-1 whitespace-nowrap",
       sortValue: (a) => ["draft", "applied", "interview", "offer", "closed"].indexOf(a.stage),
       render: (a) => (
         <PopoverSelect
@@ -313,8 +318,12 @@ export default function ApplicationsPage() {
       render: (a) => {
         const overdue = isDateOverdue(a.job_deadline, todayInAppTz());
         return (
-          <button type="button" className="text-left" onClick={() => openApp(a.id, "overview")}>
-            <div className="text-sm text-ink">{nextStepLabel(a.next_step)}</div>
+          <button
+            type="button"
+            className="w-full min-w-0 text-left"
+            onClick={() => openApp(a.id, "overview")}
+          >
+            <div className="break-words text-sm text-ink">{nextStepLabel(a.next_step)}</div>
             {a.job_deadline ? (
               <div className={cn("text-xs", overdue ? "text-amber-800" : "text-muted")}>
                 DDL {formatCalendarDate(a.job_deadline)}
@@ -327,12 +336,16 @@ export default function ApplicationsPage() {
     {
       key: "applied_date",
       header: "Applied",
+      headerClassName: "!px-2 whitespace-nowrap",
+      className: "!px-2 whitespace-nowrap",
       sortValue: (a) => a.applied_date || "",
       render: (a) => <span className="text-muted">{formatAppliedDate(a.applied_date)}</span>,
     },
     {
       key: "materials",
       header: "Materials",
+      headerClassName: "whitespace-nowrap",
+      className: "whitespace-nowrap",
       sortValue: (a) => currentMaterialCount(a),
       render: (a) => (
         <button
@@ -347,8 +360,8 @@ export default function ApplicationsPage() {
     {
       key: "actions",
       header: "",
-      headerClassName: "w-px text-right",
-      className: "text-right",
+      headerClassName: "!px-[6px] text-right",
+      className: "!px-[6px] text-right",
       render: (a) => (
         <ApplicationRowActions
           app={a}
@@ -373,7 +386,7 @@ export default function ApplicationsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-5 py-12">
+    <div className={cn("mx-auto max-w-[1280px] px-5 py-12", styles.page)}>
       <header className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
         <p className="mt-1 text-sm text-muted">
@@ -381,77 +394,93 @@ export default function ApplicationsPage() {
         </p>
       </header>
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search role, employer, location…"
-          className="h-10 w-full max-w-sm rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm"
-        />
-        <PopoverSelect
-          value={stageFilter}
-          onChange={(v) => setStageFilter(v as ApplicationStage | "all")}
-          aria-label="Stage"
-          className="w-36"
-          options={[
-            { value: "all", label: "All stages" },
-            ...(board === "closed" ? (["closed"] as ApplicationStage[]) : OPEN_STAGES).map((s) => ({
-              value: s,
-              label: s[0].toUpperCase() + s.slice(1),
-            })),
-          ]}
-        />
-        <PopoverSelect
-          value={sourceFilter}
-          onChange={setSourceFilter}
-          aria-label="Source"
-          className="w-40"
-          options={[{ value: "", label: "All sources" }, ...sources.map((s) => ({ value: s, label: s }))]}
-        />
-        <ApplicationViewOptions
-          board={board}
-          staleOnly={staleOnly}
-          idle={idle}
-          idleLabel={idleLabel}
-          availableTags={availableTags}
-          selectedTags={selectedTags}
-          onOpen={() => {
-            setBoard("open");
-            setStaleOnly(false);
-            setStageFilter("all");
-          }}
-          onClosed={() => {
-            setBoard("closed");
-            setStaleOnly(false);
-            setStageFilter("all");
-          }}
-          onStale={() => {
-            setBoard("open");
-            setStaleOnly(true);
-            setStageFilter("all");
-          }}
-          onIdleChange={(next) => {
-            setIdle(next);
-            void putIdleCleanupSettings(next).then(() => refresh());
-          }}
-          onToggleTag={(tag) =>
-            setSelectedTags((current) =>
-              current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
-            )
-          }
-        />
-        {staleOnly && selected.length > 0 && (
-          <button
-            type="button"
-            onClick={() => void onCloseSelected()}
-            className="h-9 rounded-lg border border-ink bg-ink px-3 text-sm text-white"
-          >
-            Close selected ({selected.length})
-          </button>
-        )}
-        <span className="ml-auto text-sm text-muted">{visible.length} shown</span>
-        <ExportMenu count={apps.length} />
+      <div className={cn("mb-4", styles.toolbar)}>
+        <div className={styles.searchGroup}>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search role, employer, location…"
+            className={cn(
+              "h-9 rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm",
+              styles.search,
+            )}
+          />
+        </div>
+        <div className={styles.filters}>
+          <PopoverSelect
+            value={stageFilter}
+            onChange={(v) => setStageFilter(v as ApplicationStage | "all")}
+            aria-label="Stage"
+            className="h-9 w-36"
+            options={[
+              { value: "all", label: "All stages" },
+              ...(board === "closed" ? (["closed"] as ApplicationStage[]) : OPEN_STAGES).map(
+                (s) => ({
+                  value: s,
+                  label: s[0].toUpperCase() + s.slice(1),
+                }),
+              ),
+            ]}
+          />
+          <PopoverSelect
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            aria-label="Source"
+            className="h-9 w-40"
+            options={[
+              { value: "", label: "All sources" },
+              ...sources.map((s) => ({ value: s, label: s })),
+            ]}
+          />
+        </div>
+        <div className={styles.actions}>
+          {staleOnly && selected.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void onCloseSelected()}
+              className="h-9 whitespace-nowrap rounded-lg border border-ink bg-ink px-3 text-sm text-white"
+            >
+              Close selected ({selected.length})
+            </button>
+          )}
+          <span className={cn("text-sm text-muted", styles.count)}>{visible.length} shown</span>
+          <ApplicationViewOptions
+            board={board}
+            staleOnly={staleOnly}
+            idle={idle}
+            idleLabel={idleLabel}
+            availableTags={availableTags}
+            selectedTags={selectedTags}
+            onOpen={() => {
+              setBoard("open");
+              setStaleOnly(false);
+              setStageFilter("all");
+            }}
+            onClosed={() => {
+              setBoard("closed");
+              setStaleOnly(false);
+              setStageFilter("all");
+            }}
+            onStale={() => {
+              setBoard("open");
+              setStaleOnly(true);
+              setStageFilter("all");
+            }}
+            onIdleChange={(next) => {
+              setIdle(next);
+              void putIdleCleanupSettings(next).then(() => refresh());
+            }}
+            onToggleTag={(tag) =>
+              setSelectedTags((current) =>
+                current.includes(tag)
+                  ? current.filter((item) => item !== tag)
+                  : [...current, tag],
+              )
+            }
+          />
+          <ExportMenu count={apps.length} />
+        </div>
       </div>
 
       {(board !== "open" || staleOnly) && (
@@ -477,6 +506,18 @@ export default function ApplicationsPage() {
         rows={visible}
         columns={columns}
         getRowKey={(a) => a.id}
+        tableClassName={styles.table}
+        colGroup={
+          <colgroup>
+            <col className={styles.selectColumn} />
+            <col className={styles.roleColumn} />
+            <col className={styles.stageColumn} />
+            <col className={styles.nextStepColumn} />
+            <col className={styles.appliedColumn} />
+            <col className={styles.materialsColumn} />
+            <col className={styles.actionsColumn} />
+          </colgroup>
+        }
         initialSortKey="title"
         initialSortDir="asc"
         empty={

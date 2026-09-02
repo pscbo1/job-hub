@@ -42,7 +42,7 @@ export function ApplicationViewOptions({
       minWidth={288}
       ariaLabel={APPLICATION_VIEW_OPTIONS_LABEL}
       title={APPLICATION_VIEW_OPTIONS_LABEL}
-      triggerClassName="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-muted hover:border-ink/30 hover:text-ink"
+      triggerClassName="h-9 rounded-lg border border-line bg-surface px-3 text-sm text-muted hover:border-ink/30 hover:text-ink"
       trigger={APPLICATION_VIEW_OPTIONS_LABEL}
     >
       {({ close }) => (

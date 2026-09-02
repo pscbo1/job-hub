@@ -4,6 +4,7 @@ import {
   APPLICATION_ROW_MORE_LABEL,
   APPLICATION_VIEW_OPTIONS_GROUPS,
   APPLICATION_VIEW_OPTIONS_LABEL,
+  applicationRowMoreLabel,
   latestSubmissionLine,
   nextStepLabel,
   parseApplicationTab,
@@ -106,5 +107,9 @@ describe("application toolbar and row overflow copy", () => {
       cleanup: "Cleanup settings",
     });
     expect(APPLICATION_ROW_MORE_LABEL).toBe("More actions");
+    expect(applicationRowMoreLabel("Backend Engineer")).toBe(
+      "More actions for Backend Engineer",
+    );
+    expect(applicationRowMoreLabel("")).toBe("More actions for Untitled");
   });
 });

@@ -18,6 +18,12 @@ export function tabQueryValue(tab: ApplicationDrawerTab): string | null {
 }
 
 export const APPLICATION_ROW_MORE_LABEL = "More actions";
+
+export function applicationRowMoreLabel(title?: string | null): string {
+  const role = (title ?? "").trim() || "Untitled";
+  return `${APPLICATION_ROW_MORE_LABEL} for ${role}`;
+}
+
 export const APPLICATION_VIEW_OPTIONS_LABEL = "View options";
 export const APPLICATION_VIEW_OPTIONS_GROUPS = {
   views: "Views",

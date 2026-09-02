@@ -1,0 +1,115 @@
+.page {
+  container-name: applications;
+  container-type: inline-size;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-areas:
+    "search"
+    "filters"
+    "actions";
+  gap: 12px;
+  align-items: center;
+}
+
+.searchGroup {
+  grid-area: search;
+  min-width: 0;
+}
+
+.search {
+  width: 100%;
+  min-width: 0;
+}
+
+.filters {
+  grid-area: filters;
+  display: flex;
+  min-width: 0;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.actions {
+  grid-area: actions;
+  display: flex;
+  min-width: max-content;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-self: end;
+  gap: 8px;
+}
+
+.count {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.table {
+  min-width: 864px;
+  table-layout: fixed;
+}
+
+.selectColumn {
+  width: 40px;
+}
+
+.roleColumn {
+  width: 240px;
+}
+
+.stageColumn {
+  width: 120px;
+}
+
+.nextStepColumn {
+  width: 200px;
+}
+
+.appliedColumn {
+  width: 96px;
+}
+
+.materialsColumn {
+  width: 120px;
+}
+
+.actionsColumn {
+  width: 48px;
+}
+
+@container applications (min-width: 600px) {
+  .toolbar {
+    grid-template-areas:
+      "search search"
+      "filters actions";
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@container applications (min-width: 1040px) {
+  .toolbar {
+    grid-template-areas: "search filters actions";
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .table {
+    min-width: 1056px;
+  }
+
+  .roleColumn {
+    width: calc(60% - 393.6px);
+  }
+
+  .nextStepColumn {
+    width: calc(40% - 222.4px);
+  }
+
+  .actionsColumn {
+    width: 240px;
+  }
+}
