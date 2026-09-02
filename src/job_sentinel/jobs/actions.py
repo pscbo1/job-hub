@@ -360,6 +360,8 @@ def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:
             status_code=409,
         )
     repo.clear_application_bindings(app.id)
+    if app.job_id:
+        repo.attach_comm_notes_to_job(app.id, app.job_id)
     repo.soft_delete_application(app.id)
     job: Job | None = None
     if app.job_id:

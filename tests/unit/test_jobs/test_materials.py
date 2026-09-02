@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from job_sentinel.api.app import create_app
-from job_sentinel.core.models import Application, Job
+from job_sentinel.core.models import Application, ApplicationCommNote, Job
 from job_sentinel.db.repository import SCHEMA_VERSION, JobRepository
 from job_sentinel.jobs.actions import abandon_draft, mark_submitted, start_application
 from job_sentinel.materials.service import MaterialsError, MaterialsService
@@ -24,8 +24,8 @@ def _service(tmp_path: Path) -> tuple[JobRepository, MaterialsService]:
     return repo, service
 
 
-def test_schema_version_is_11() -> None:
-    assert SCHEMA_VERSION == 11
+def test_schema_version_is_12() -> None:
+    assert SCHEMA_VERSION == 12
 
 
 def test_binding_unique_per_material(tmp_path: Path) -> None:
@@ -105,11 +105,16 @@ def test_cancel_draft_clears_bindings_keeps_library(tmp_path: Path) -> None:
     _row, app = start_application(repo, job.id)
     material = service.create_material(title="Resume", url="https://example.com/r.pdf")
     service.replace_packet(app.id, [material.versions[0].id])
+    repo.create_comm_note(
+        ApplicationCommNote(application_id=app.id, body="Asked for JD", job_id=job.id)
+    )
     abandon_draft(repo, app.id)
     assert repo.list_application_bindings(app.id) == []
     stored = repo.get_material(material.id)
     assert stored is not None
     assert stored.title == "Resume"
+    kept = repo.list_comm_notes_for_job(job.id)
+    assert [note.body for note in kept] == ["Asked for JD"]
     repo.close()
 
 

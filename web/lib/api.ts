@@ -230,6 +230,7 @@ export interface HubJob {
   application_id?: string | null;
   last_activity_at?: string | null;
   tasks?: JobTask[];
+  comm_notes?: ApplicationCommNote[];
   match_score: number | null;
   salary?: string;
   description?: string;
@@ -300,7 +301,7 @@ export function getJobs(
     if (query.hasDraft === true) {
       rows = [];
     }
-    return Promise.resolve(rows.slice(0, limit));
+    return Promise.resolve(rows.slice(0, limit).map(withDemoCommNotes));
   }
   const q = new URLSearchParams({ limit: String(limit), filter_state: filterState });
   if (since) q.set("since", since);
@@ -828,6 +829,18 @@ export async function removePacketBinding(appId: string, bindingId: string): Pro
 
 function demoJobById(jobId: string): HubJob | undefined {
   return demo.demoHubJobs.find((j) => j.id === jobId);
+}
+
+function withDemoCommNotes(job: HubJob): HubJob {
+  return { ...job, comm_notes: demo.listDemoCommNotesForJob(job.id) };
+}
+
+export async function listJobCommNotes(jobId: string): Promise<ApplicationCommNote[]> {
+  if (demo.DEMO) return demo.listDemoCommNotesForJob(jobId);
+  return getJSON<ApplicationCommNote[]>(
+    `/api/jobs/${encodeURIComponent(jobId)}/comm-notes`,
+    [],
+  );
 }
 
 export async function listJobTasks(jobId: string): Promise<JobTask[]> {
@@ -1420,7 +1433,8 @@ export interface ApplicationSubmission {
 
 export interface ApplicationCommNote {
   id: string;
-  application_id: string;
+  application_id?: string | null;
+  job_id?: string | null;
   body: string;
   created_at: string;
 }
@@ -1717,7 +1731,7 @@ export async function closeApplication(
 }
 
 export async function abandonApplication(id: string): Promise<boolean> {
-  if (demo.DEMO) return true;
+  if (demo.DEMO) return demo.abandonDemoApplication(id);
   try {
     const res = await fetch(`${API_BASE}/api/applications/${encodeURIComponent(id)}/abandon`, {
       method: "POST",

@@ -33,6 +33,7 @@ from job_sentinel.api.chat import ChatMessage, ChatReply
 from job_sentinel.api.chat import answer as chat_answer
 from job_sentinel.api.ops import OpsConfigError, OpsConflictError, get_runner
 from job_sentinel.core.models import (
+    ApplicationCommNote,
     ApplicationStage,
     ApplicationStatus,
     CloseReason,
@@ -848,6 +849,18 @@ def create_app(
             if repo.get_hub_job(job_id) is None:
                 raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
             return repo.list_job_tasks(job_id)
+        finally:
+            repo.close()
+
+    @app.get("/api/jobs/{job_id}/comm-notes", response_model=list[ApplicationCommNote])
+    def list_hub_job_comm_notes(job_id: str) -> list[ApplicationCommNote]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            if repo.get_hub_job(job_id) is None:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            return repo.list_comm_notes_for_job(job_id)
         finally:
             repo.close()
 
@@ -1854,7 +1867,6 @@ def create_app(
 
     @app.post("/api/applications/{app_id}/comm-notes")
     def add_comm_note(app_id: str, req: CommNoteWriteRequest) -> dict[str, Any]:
-        from job_sentinel.core.models import ApplicationCommNote
         from job_sentinel.db.repository import JobRepository
 
         body = req.body.strip()

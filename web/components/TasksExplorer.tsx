@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { JobActions } from "@/components/JobActions";
+import { JobCommNotes } from "@/components/JobCommNotes";
 import { JobTasks } from "@/components/JobTasks";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { PopoverSelect } from "@/components/ui/popover-select";
@@ -250,6 +251,7 @@ export function TasksExplorer() {
                           setOverrides((o) => ({ ...o, [j.id]: { ...(o[j.id] ?? row), tasks } }))
                         }
                       />
+                      <JobCommNotes notes={row.comm_notes ?? []} />
                     </Card>
                   );
                 })}

@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -471,13 +471,39 @@ class JobRepository:
             """
             CREATE TABLE IF NOT EXISTS application_comm_notes (
                 id TEXT PRIMARY KEY,
-                application_id TEXT NOT NULL,
+                application_id TEXT,
+                job_id TEXT,
                 body TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             )
             """
         )
+        names = {col.name for col in self._table(_COMM_NOTES_TABLE).columns}
+        if "job_id" not in names:
+            self._db.execute("ALTER TABLE application_comm_notes ADD COLUMN job_id TEXT")
         self._table(_COMM_NOTES_TABLE).create_index(["application_id"], if_not_exists=True)
+        self._table(_COMM_NOTES_TABLE).create_index(["job_id"], if_not_exists=True)
+        self._backfill_comm_note_job_ids()
+
+    def _backfill_comm_note_job_ids(self) -> None:
+        """Copy Application.job_id onto notes that still lack it (idempotent)."""
+        if _COMM_NOTES_TABLE not in self._db.table_names():
+            return
+        names = {col.name for col in self._table(_COMM_NOTES_TABLE).columns}
+        if "job_id" not in names:
+            return
+        self._db.execute(
+            """
+            UPDATE application_comm_notes
+            SET job_id = (
+                SELECT job_id FROM applications
+                WHERE applications.id = application_comm_notes.application_id
+            )
+            WHERE (job_id IS NULL OR job_id = '')
+              AND application_id IS NOT NULL
+              AND application_id != ''
+            """
+        )
 
     def _ensure_application_events_table(self) -> None:
         self._db.execute(
@@ -872,6 +898,8 @@ class JobRepository:
             self._ensure_part3_tables()
         if from_version < 11:
             self._ensure_job_tasks_table()
+        if from_version < 12:
+            self._ensure_part3_tables()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1213,8 +1241,10 @@ class JobRepository:
 
     def _attach_job_tasks(self, jobs: list[Job]) -> list[Job]:
         grouped = self.list_job_tasks_for_jobs([j.id for j in jobs])
+        notes = self.list_comm_notes_for_jobs([j.id for j in jobs])
         for job in jobs:
             job.tasks = grouped.get(job.id, [])
+            job.comm_notes = notes.get(job.id, [])
         return jobs
 
     def list_job_tasks(self, job_id: str) -> list[JobTask]:
@@ -1546,7 +1576,6 @@ class JobRepository:
         self._db.execute(
             "DELETE FROM application_material_bindings WHERE application_id = ?", [app_id]
         )
-        self._db.execute("DELETE FROM application_comm_notes WHERE application_id = ?", [app_id])
         self._table(_APP_TABLE).delete(app_id)
         return True
 
@@ -1623,9 +1652,58 @@ class JobRepository:
         )
         return [_comm_note_from_row(dict(r)) for r in rows]
 
+    def list_comm_notes_for_job(self, job_id: str) -> list[ApplicationCommNote]:
+        if not job_id:
+            return []
+        rows = self._table(_COMM_NOTES_TABLE).rows_where(
+            "job_id = ?",
+            [job_id],
+            order_by="created_at DESC",
+        )
+        return [_comm_note_from_row(dict(r)) for r in rows]
+
+    def list_comm_notes_for_jobs(
+        self, job_ids: Sequence[str]
+    ) -> dict[str, list[ApplicationCommNote]]:
+        grouped: dict[str, list[ApplicationCommNote]] = {jid: [] for jid in job_ids}
+        ids = [jid for jid in job_ids if jid]
+        if not ids:
+            return grouped
+        placeholders = ",".join("?" * len(ids))
+        rows = self._table(_COMM_NOTES_TABLE).rows_where(
+            f"job_id IN ({placeholders})",
+            ids,
+            order_by="created_at DESC",
+        )
+        for row in rows:
+            note = _comm_note_from_row(dict(row))
+            if note.job_id:
+                grouped.setdefault(note.job_id, []).append(note)
+        return grouped
+
+    def attach_comm_notes_to_job(self, application_id: str, job_id: str) -> None:
+        """Ensure cancelled-draft notes keep a Job lookup key. Does not touch created_at."""
+        if not application_id or not job_id:
+            return
+        self._db.execute(
+            """
+            UPDATE application_comm_notes
+            SET job_id = ?
+            WHERE application_id = ?
+              AND (job_id IS NULL OR job_id = '')
+            """,
+            [job_id, application_id],
+        )
+
     def create_comm_note(self, note: ApplicationCommNote) -> ApplicationCommNote:
-        self._table(_COMM_NOTES_TABLE).insert(_comm_note_to_row(note))
-        return note
+        job_id = note.job_id
+        if not job_id and note.application_id:
+            app = self.get_application(note.application_id)
+            if app is not None and app.job_id:
+                job_id = app.job_id
+        stamped = note.model_copy(update={"job_id": job_id})
+        self._table(_COMM_NOTES_TABLE).insert(_comm_note_to_row(stamped))
+        return stamped
 
     def delete_comm_note(self, application_id: str, note_id: str) -> bool:
         try:
@@ -2429,7 +2507,8 @@ def _submission_from_row(row: dict[str, Any]) -> ApplicationSubmission:
 def _comm_note_to_row(item: ApplicationCommNote) -> dict[str, Any]:
     return {
         "id": item.id,
-        "application_id": item.application_id,
+        "application_id": item.application_id or None,
+        "job_id": item.job_id or None,
         "body": item.body,
         "created_at": item.created_at.isoformat(),
     }
@@ -2438,7 +2517,8 @@ def _comm_note_to_row(item: ApplicationCommNote) -> dict[str, Any]:
 def _comm_note_from_row(row: dict[str, Any]) -> ApplicationCommNote:
     return ApplicationCommNote(
         id=row["id"],
-        application_id=row.get("application_id") or "",
+        application_id=_blank_to_none(row.get("application_id")),
+        job_id=_blank_to_none(row.get("job_id")),
         body=row.get("body") or "",
         created_at=_parse_dt(row.get("created_at", "")),
     )

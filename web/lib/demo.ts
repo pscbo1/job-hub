@@ -632,6 +632,7 @@ export function removeDemoPacketBinding(appId: string, bindingId: string): void 
 }
 
 const demoCommNotes: Record<string, import("@/lib/api").ApplicationCommNote[]> = {};
+const demoJobCommNotes: import("@/lib/api").ApplicationCommNote[] = [];
 const demoIdempotency: Record<string, string> = {};
 
 export function recordDemoSubmission(appId: string, notes = ""): Application | null {
@@ -704,13 +705,30 @@ export function recordDemoSubmissionResult(
 }
 
 export function listDemoCommNotes(appId: string): import("@/lib/api").ApplicationCommNote[] {
-  return demoCommNotes[appId] ?? [];
+  return (demoCommNotes[appId] ?? []).map((note) => ({ ...note }));
+}
+
+export function listDemoCommNotesForJob(jobId: string): import("@/lib/api").ApplicationCommNote[] {
+  const fromIndex = Object.values(demoCommNotes)
+    .flat()
+    .filter((note) => note.job_id === jobId);
+  const leftover = demoJobCommNotes.filter((note) => note.job_id === jobId);
+  const seen = new Set<string>();
+  const rows: import("@/lib/api").ApplicationCommNote[] = [];
+  for (const note of [...fromIndex, ...leftover]) {
+    if (seen.has(note.id)) continue;
+    seen.add(note.id);
+    rows.push(note);
+  }
+  return rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 }
 
 export function addDemoCommNote(appId: string, body: string): import("@/lib/api").ApplicationCommNote {
+  const app = demoApplications.find((row) => row.id === appId);
   const note = {
     id: uid(),
     application_id: appId,
+    job_id: app?.job_id ?? null,
     body,
     created_at: new Date().toISOString(),
   };
@@ -720,6 +738,23 @@ export function addDemoCommNote(appId: string, body: string): import("@/lib/api"
 
 export function deleteDemoCommNote(appId: string, noteId: string): boolean {
   demoCommNotes[appId] = (demoCommNotes[appId] ?? []).filter((n) => n.id !== noteId);
+  return true;
+}
+
+export function abandonDemoApplication(id: string): boolean {
+  const index = demoApplications.findIndex((row) => row.id === id);
+  if (index < 0) return false;
+  const app = demoApplications[index];
+  if (app.stage !== "draft" || (app.submissions?.length ?? 0) > 0) return false;
+  const notes = demoCommNotes[id] ?? [];
+  if (app.job_id) {
+    for (const note of notes) {
+      demoJobCommNotes.push({ ...note, job_id: note.job_id ?? app.job_id });
+    }
+  }
+  delete demoCommNotes[id];
+  delete demoPacketIds[id];
+  demoApplications.splice(index, 1);
   return true;
 }
 

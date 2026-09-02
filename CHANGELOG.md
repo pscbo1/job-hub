@@ -31,6 +31,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 - Materials library tabs display **Documents** and **Templates & Answers** (internal ids remain `files` / `knowledge`). Add/search/empty copy follows the active tab.
 - Application Overview can **Add task** onto the same `job_tasks` row Tasks uses (auto-linked Job + Application). Completing a task does not Mark submitted or change stage.
 - Application Materials can search/preview/copy Templates & Answers in place. Application answers may bind or replace a linked version; message templates stay copy-only.
+- Cancel Draft keeps communication notes on the Job (`job_id`). Discover/Tasks show a folded read-only list with the original occurred-at (`created_at`). Materials library stays.
 
 ### Fixed
 

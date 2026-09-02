@@ -124,6 +124,27 @@ class JobTask(BaseModel):
     model_config = {"frozen": False}
 
 
+class ApplicationCommNote(BaseModel):
+    """Lightweight communication note. Not a CRM timeline and never auto-sent.
+
+    ``created_at`` is the occurred-at time and is never rewritten on Cancel Draft.
+    ``job_id`` keeps the note visible from the Job after the Application is gone.
+    """
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    application_id: str | None = Field(default=None)
+    job_id: str | None = Field(default=None)
+    body: str = Field(default="")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+    @field_validator("application_id", "job_id", mode="before")
+    @classmethod
+    def _blank_optional_id(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        return str(v).strip() if isinstance(v, str) else v
+
+
 def compute_job_fingerprint(company: str, title: str, location: str) -> str:
     """SHA-1 of normalized ``company|title|location`` (index helper, not unique)."""
     parts = (
@@ -296,6 +317,10 @@ class Job(BaseModel):
         description="Last user tracking or task edit. Collectors never bump this.",
     )
     tasks: list[JobTask] = Field(default_factory=list)
+    comm_notes: list[ApplicationCommNote] = Field(
+        default_factory=list,
+        description="Job-scoped communication notes, including leftover cancelled-draft notes.",
+    )
     match_score: float | None = Field(default=None)
     market: str = Field(
         default="",
@@ -466,15 +491,6 @@ class ApplicationEvent(BaseModel):
     application_id: str
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
-
-
-class ApplicationCommNote(BaseModel):
-    """Lightweight communication note. Not a CRM timeline and never auto-sent."""
-
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    application_id: str
-    body: str = Field(default="")
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 

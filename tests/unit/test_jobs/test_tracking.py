@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from job_sentinel.api.app import create_app
-from job_sentinel.core.models import ApplicationStage, CloseReason, Job
+from job_sentinel.core.models import ApplicationCommNote, ApplicationStage, CloseReason, Job
 from job_sentinel.db.repository import JobRepository
 from job_sentinel.jobs.actions import (
     TrackingError,
@@ -135,6 +135,64 @@ def test_abandon_draft_does_not_close(tmp_path: Path) -> None:
     assert stats["closed"] == 0
     assert stats["total"] == 0
     repo.close()
+
+
+def test_abandon_draft_keeps_comm_notes_on_job(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    stored = repo.upsert_job(_job(comment="Ask about mixed methods."))
+    _created, app = start_application(repo, stored.id)
+    occurred = datetime(2026, 8, 1, 10, 30, tzinfo=UTC)
+    note = repo.create_comm_note(
+        ApplicationCommNote(
+            application_id=app.id,
+            body="Emailed recruiter about OA",
+            created_at=occurred,
+        )
+    )
+    assert note.job_id == stored.id
+    leftover = abandon_draft(repo, app.id)
+    assert leftover is not None
+    gone = repo.get_application(app.id)
+    assert gone is None or gone.deleted_at is not None
+    assert repo.list_applications() == []
+    kept = repo.list_comm_notes_for_job(stored.id)
+    assert len(kept) == 1
+    assert kept[0].body == "Emailed recruiter about OA"
+    assert kept[0].created_at == occurred
+    assert kept[0].job_id == stored.id
+    job_after = repo.get_hub_job(stored.id)
+    assert job_after is not None
+    assert job_after.comment == "Ask about mixed methods."
+    assert job_after.comm_notes[0].body == "Emailed recruiter about OA"
+    repo.close()
+
+
+def test_abandon_draft_comm_notes_api_uses_original_occurred_at(tmp_path: Path) -> None:
+    db = tmp_path / "api.db"
+    repo = JobRepository(db)
+    stored = repo.upsert_job(_job())
+    _created, app = start_application(repo, stored.id)
+    occurred = datetime(2026, 7, 15, 8, 0, tzinfo=UTC)
+    repo.create_comm_note(
+        ApplicationCommNote(
+            application_id=app.id,
+            body="Pinged on Boss",
+            created_at=occurred,
+        )
+    )
+    repo.close()
+    client = TestClient(create_app(profile_path=tmp_path / "p.yaml", db_path=db))
+    abandoned = client.post(f"/api/applications/{app.id}/abandon")
+    assert abandoned.status_code == 200
+    missing = client.get(f"/api/applications/{app.id}")
+    assert missing.status_code == 404
+    notes = client.get(f"/api/jobs/{stored.id}/comm-notes")
+    assert notes.status_code == 200
+    body = notes.json()
+    assert len(body) == 1
+    assert body[0]["body"] == "Pinged on Boss"
+    assert body[0]["created_at"].startswith("2026-07-15T08:00:00")
+    assert body[0]["job_id"] == stored.id
 
 
 def test_mark_submitted_creates_submission(tmp_path: Path) -> None:

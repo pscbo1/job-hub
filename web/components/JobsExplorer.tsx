@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { JobActions } from "@/components/JobActions";
+import { JobCommNotes } from "@/components/JobCommNotes";
 import {
   JobPoolActionMenu,
   JobPoolUndoToast,
@@ -515,6 +516,7 @@ export function JobsExplorer({
                       onChange={(next) => setOverrides((o) => ({ ...o, [j.id]: next }))}
                     />
                   </div>
+                  <JobCommNotes notes={row.comm_notes ?? []} />
                   {(j.description ||
                     (showSponsorToggle &&
                       showSponsorship &&
