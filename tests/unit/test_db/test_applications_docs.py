@@ -44,7 +44,7 @@ def _doc(**kwargs: object) -> GeneratedDocument:
 
 
 def test_schema_version_is_16() -> None:
-    assert SCHEMA_VERSION == 16
+    assert SCHEMA_VERSION == 20
 
 
 def test_contact_columns_exist(repo: JobRepository) -> None:

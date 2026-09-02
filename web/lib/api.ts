@@ -204,6 +204,17 @@ export interface JobTask {
   notes?: string | null;
   source_url?: string | null;
   reminders?: TaskReminder[];
+  attachments?: TaskAttachment[];
+}
+
+export interface TaskAttachment {
+  id: string;
+  task_id: string;
+  original_filename: string;
+  file_ref: string;
+  content_type: string;
+  byte_size: number;
+  created_at: string;
 }
 
 export interface JobTaskCreateBody {
@@ -314,6 +325,10 @@ export function getJobs(
     } else if (filterState !== "all") {
       rows = rows.filter((j) => !j.dismissed_at && j.filter_state !== "excluded");
     }
+    if (query.market) rows = rows.filter((j) => (j.market || "global") === query.market);
+    if (query.country && query.country !== "all") rows = rows.filter((j) => (j.country || "") === query.country);
+    if (query.remote) rows = rows.filter((j) => j.is_remote || (j.location || "").toLowerCase().includes("remote"));
+    if (query.sources?.length) rows = rows.filter((j) => query.sources?.includes(j.source));
     if (query.view === "tasks" || query.view === "my_jobs") {
       rows = rows.filter((j) => jobBelongsOnTasks(j));
     }
@@ -536,6 +551,7 @@ export interface MaterialVersion {
   material_id: string;
   version_number: number;
   version_label: string;
+  version_date?: string | null;
   purpose: string[];
   file_ref: string;
   original_filename: string;
@@ -553,8 +569,11 @@ export interface Material {
   id: string;
   title: string;
   kind: string;
+  direction?: string | null;
+  language?: "zh" | "en" | null;
   purpose: string[];
   notes: string;
+  is_pinned?: boolean;
   archived_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -604,6 +623,10 @@ export async function createMaterial(body: {
   version_purpose?: string[];
   version_notes?: string;
   content?: string;
+  direction?: string | null;
+  language?: "zh" | "en" | null;
+  version_date?: string | null;
+  request_id?: string;
 }): Promise<Material | null> {
   if (demo.DEMO) {
     const created = demo.makeDemoMaterial(body);
@@ -645,7 +668,7 @@ export async function uploadMaterial(form: FormData): Promise<Material | null> {
 
 export async function patchMaterial(
   id: string,
-  body: { title?: string; kind?: string; purpose?: string[]; notes?: string },
+  body: { title?: string; kind?: string; purpose?: string[]; notes?: string; is_pinned?: boolean },
 ): Promise<Material | null> {
   if (demo.DEMO) {
     const found = demo.demoMaterials.find((m) => m.id === id);
@@ -663,6 +686,121 @@ export async function patchMaterial(
     return (await res.json()) as Material;
   } catch {
     return null;
+  }
+}
+
+export interface MaterialUseItem {
+  material_id: string;
+  material_version_id: string;
+  material_title: string;
+  kind: string;
+  version_label: string;
+  version_date?: string | null;
+  block_key: string | null;
+  block_title: string | null;
+  heading_path: string[];
+  purpose: string[];
+  original_filename: string;
+  has_file: boolean;
+  url: string | null;
+  copy_text: string | null;
+  preview_text: string;
+  is_pinned: boolean;
+  archived: boolean;
+  unavailable_reason: string | null;
+}
+
+export interface MaterialUsePresetItem {
+  material_version_id: string;
+  block_key: string | null;
+}
+
+export interface MaterialUsePreset {
+  id: string;
+  name: string;
+  items: MaterialUsePresetItem[];
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getMaterialUseItems(query: {
+  query?: string;
+  purpose?: string;
+  application_id?: string;
+  preset_id?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ items: MaterialUseItem[]; total: number; has_more: boolean }> {
+  const empty = { items: [], total: 0, has_more: false };
+  if (demo.DEMO) return demo.demoMaterialUseItems(query);
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value) params.set(key, String(value));
+  return getJSON(`/api/material-use-items?${params.toString()}`, empty);
+}
+
+export async function getMaterialVersionUseItems(versionId: string): Promise<MaterialUseItem[]> {
+  if (demo.DEMO) {
+    return demo.demoMaterialUseItems().items.filter((item) => item.material_version_id === versionId);
+  }
+  const data = await getJSON<{ items?: MaterialUseItem[] }>(
+    `/api/material-versions/${encodeURIComponent(versionId)}/use-items`,
+    { items: [] },
+  );
+  return data.items ?? [];
+}
+
+export async function listMaterialUsePresets(): Promise<MaterialUsePreset[]> {
+  if (demo.DEMO) return demo.listDemoMaterialUsePresets();
+  return getJSON<MaterialUsePreset[]>("/api/material-use-presets", []);
+}
+
+export async function createMaterialUsePreset(
+  name: string,
+  items: MaterialUsePresetItem[],
+): Promise<MaterialUsePreset | null> {
+  if (demo.DEMO) return demo.createDemoMaterialUsePreset(name, items);
+  try {
+    const res = await fetch(`${API_BASE}/api/material-use-presets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ name, items }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as MaterialUsePreset;
+  } catch {
+    return null;
+  }
+}
+
+export async function updateMaterialUsePreset(
+  id: string,
+  body: { name: string; items: MaterialUsePresetItem[]; expected_revision: number },
+): Promise<MaterialUsePreset | null> {
+  if (demo.DEMO) return demo.updateDemoMaterialUsePreset(id, body);
+  try {
+    const res = await fetch(`${API_BASE}/api/material-use-presets/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as MaterialUsePreset;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteMaterialUsePreset(id: string, expectedRevision: number): Promise<boolean> {
+  if (demo.DEMO) return demo.deleteDemoMaterialUsePreset(id, expectedRevision);
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/material-use-presets/${encodeURIComponent(id)}?expected_revision=${expectedRevision}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -736,8 +874,14 @@ export function materialVersionFileUrl(versionId: string): string {
   return `${API_BASE}/api/material-versions/${encodeURIComponent(versionId)}/file`;
 }
 
-export function submissionSnapshotFileUrl(appId: string, submissionId: string, index: number): string {
-  return `${API_BASE}/api/applications/${encodeURIComponent(appId)}/submissions/${encodeURIComponent(submissionId)}/items/${index}/file`;
+export function submissionSnapshotFileUrl(
+  appId: string,
+  submissionId: string,
+  index: number,
+  revision?: number,
+): string {
+  const suffix = revision === undefined ? "" : `?revision=${revision}`;
+  return `${API_BASE}/api/applications/${encodeURIComponent(appId)}/submissions/${encodeURIComponent(submissionId)}/items/${index}/file${suffix}`;
 }
 
 export async function getPacket(appId: string): Promise<PacketItem[]> {
@@ -941,7 +1085,7 @@ export async function listReminders(query: {
     today: todayFallback(),
     tz: "Asia/Shanghai",
   };
-  if (demo.DEMO) return empty;
+  if (demo.DEMO) return demo.listDemoReminders(query.view ?? "unread");
   const q = new URLSearchParams({ view: query.view ?? "unread" });
   if (query.market) q.set("market", query.market);
   if (query.limit) q.set("limit", String(query.limit));
@@ -950,7 +1094,7 @@ export async function listReminders(query: {
 }
 
 export async function markReminderRead(reminderId: string): Promise<TaskReminder | null> {
-  if (demo.DEMO) return null;
+  if (demo.DEMO) return demo.markDemoReminderRead(reminderId);
   try {
     const res = await fetch(
       `${API_BASE}/api/reminders/${encodeURIComponent(reminderId)}/read`,
@@ -996,6 +1140,7 @@ export async function createJobTask(
         enabled: true,
         created_at: new Date().toISOString(),
       })),
+      attachments: [],
     };
     if (job) job.tasks = [...(job.tasks ?? []), created];
     notifyRemindersChanged();
@@ -1078,29 +1223,7 @@ export async function deleteJobTask(jobId: string, taskId: string): Promise<bool
 export async function startApplicationForJob(
   jobId: string,
 ): Promise<{ job: HubJob; application: Application } | null> {
-  if (demo.DEMO) {
-    return {
-      job: {
-        id: jobId,
-        title: "",
-        company: "",
-        location: "",
-        source: "",
-        job_url: "",
-        published_at: null,
-        discovered_at: "",
-        engagement: null,
-        status: null,
-        match_score: null,
-      },
-      application: {
-        ...demo.demoApplications[0],
-        id: `demo-${Date.now()}`,
-        job_id: jobId,
-        stage: "draft",
-      },
-    };
-  }
+  if (demo.DEMO) return demo.startDemoApplication(jobId);
   try {
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/start-application`, {
       method: "POST",
@@ -1566,6 +1689,169 @@ export interface ApplicationSubmission {
   };
   notes: string;
   idempotency_key?: string;
+  effective_packet_snapshot?: NonNullable<ApplicationSubmission["packet_snapshot"]>;
+  material_revision?: number;
+  materials_corrected_at?: string | null;
+}
+
+export interface ProfileVersion {
+  id: string;
+  version_number: number;
+  profile?: Profile;
+  profile_schema_version: number;
+  version_label: string;
+  notes: string;
+  version_date: string;
+  created_at: string;
+  request_id: string;
+  request_hash: string;
+}
+
+export function getProfileVersions(limit = 100): Promise<ProfileVersion[]> {
+  if (demo.DEMO) return Promise.resolve([]);
+  return getJSON<ProfileVersion[]>(`/api/profile/versions?limit=${limit}`, []);
+}
+
+export async function createProfileVersion(body: {
+  version_label?: string;
+  notes?: string;
+  version_date?: string;
+  request_id?: string;
+}): Promise<{ version: ProfileVersion | null; status: number }> {
+  if (demo.DEMO) return { version: null, status: 0 };
+  try {
+    const res = await fetch(`${API_BASE}/api/profile/versions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    return {
+      version: res.ok ? ((await res.json()) as ProfileVersion) : null,
+      status: res.status,
+    };
+  } catch {
+    return { version: null, status: 0 };
+  }
+}
+
+export function profileVersionFileUrl(versionId: string): string {
+  return `${API_BASE}/api/profile/versions/${encodeURIComponent(versionId)}/file`;
+}
+
+export async function uploadTaskAttachment(
+  jobId: string,
+  taskId: string,
+  file: File,
+): Promise<TaskAttachment | null> {
+  if (demo.DEMO) return null;
+  const form = new FormData();
+  form.set("file", file);
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}/attachments`,
+      { method: "POST", headers: authHeaders(), body: form },
+    );
+    return res.ok ? ((await res.json()) as TaskAttachment) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteTaskAttachment(
+  jobId: string,
+  taskId: string,
+  attachmentId: string,
+): Promise<boolean> {
+  if (demo.DEMO) return false;
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function taskAttachmentFileUrl(jobId: string, taskId: string, attachmentId: string): string {
+  const taskPath = `/api/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`;
+  return `${API_BASE}${taskPath}/attachments/${encodeURIComponent(attachmentId)}/file`;
+}
+
+export interface SubmissionMaterialHistoryEntry {
+  revision: number;
+  packet_snapshot: NonNullable<ApplicationSubmission["packet_snapshot"]>;
+  created_at: string;
+  note: string;
+}
+
+export interface MaterialRevisionResult {
+  submission_id: string;
+  material_revision: number;
+  packet_snapshot: NonNullable<ApplicationSubmission["packet_snapshot"]>;
+  created_at: string;
+  note: string;
+}
+
+export function effectiveSubmissionSnapshot(
+  submission: ApplicationSubmission,
+): NonNullable<ApplicationSubmission["packet_snapshot"]> {
+  return submission.effective_packet_snapshot ?? submission.packet_snapshot ?? {
+    binding_ids: [],
+    material_version_ids: [],
+    items: [],
+    note: "",
+  };
+}
+
+export async function listSubmissionMaterialRevisions(
+  appId: string,
+  submissionId: string,
+): Promise<SubmissionMaterialHistoryEntry[]> {
+  if (demo.DEMO) return demo.listDemoSubmissionMaterialRevisions(submissionId);
+  const data = await getJSON<{ revisions?: SubmissionMaterialHistoryEntry[] }>(
+    `/api/applications/${encodeURIComponent(appId)}/submissions/${encodeURIComponent(submissionId)}/material-revisions`,
+    { revisions: [] },
+  );
+  return data.revisions ?? [];
+}
+
+export async function createSubmissionMaterialRevision(
+  appId: string,
+  submissionId: string,
+  body: {
+    expected_revision: number;
+    items: Array<{ retain_item_index?: number; material_version_id?: string }>;
+    confirm_empty?: boolean;
+    note?: string;
+    idempotency_key: string;
+  },
+): Promise<{ ok: true; result: MaterialRevisionResult } | { ok: false; code: string; message: string }> {
+  if (demo.DEMO) {
+    return demo.createDemoSubmissionMaterialRevision(
+      submissionId,
+      body.expected_revision,
+      body.items,
+      Boolean(body.confirm_empty),
+      body.note ?? "",
+    );
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/applications/${encodeURIComponent(appId)}/submissions/${encodeURIComponent(submissionId)}/material-revisions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = (await res.json().catch(() => ({}))) as { detail?: { code?: string; message?: string }; [key: string]: unknown };
+    if (!res.ok) return { ok: false, code: data.detail?.code ?? "request_failed", message: data.detail?.message ?? "Could not save correction." };
+    return { ok: true, result: data as unknown as MaterialRevisionResult };
+  } catch {
+    return { ok: false, code: "network_error", message: "Could not save correction." };
+  }
 }
 
 export interface ApplicationCommNote {
@@ -1665,6 +1951,13 @@ export type ManualApplicationCreateResult =
 export async function createManualApplication(
   body: ManualApplicationCreateBody,
 ): Promise<ManualApplicationCreateResult> {
+  if (demo.DEMO) {
+    const created = demo.createDemoManualApplication(body);
+    if (!created) {
+      return { ok: false, kind: "network", message: "Could not create this demo application." };
+    }
+    return { ok: true, ...created };
+  }
   try {
     const response = await fetch(`${API_BASE}/api/applications/manual`, {
       method: "POST",

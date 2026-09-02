@@ -27,6 +27,7 @@ import {
 import { DIRTY_SWITCH_LABELS, isStaleGeneration } from "@/lib/recordDraft";
 import { cn } from "@/lib/utils";
 import type { Material, MaterialKind, MaterialVersion } from "@/lib/api";
+import { Input } from "@/components/ui/input";
 
 type Lane = MaterialLane;
 type SourceKind = "upload" | "link" | "text";
@@ -41,6 +42,9 @@ type CreateDraft = {
   url: string;
   content: string;
   file: File | null;
+  direction: string;
+  language: "" | "zh" | "en";
+  version_date: string;
 };
 
 type VersionDraft = {
@@ -64,6 +68,9 @@ function emptyCreate(kind: MaterialKind): CreateDraft {
     url: "",
     content: "",
     file: null,
+    direction: "",
+    language: "",
+    version_date: "",
   };
 }
 
@@ -90,13 +97,15 @@ export function MaterialsLibrary({
   applicationId,
   packetMode = false,
   onPacketAdd,
+  initialLane = "files",
 }: {
   jobId?: string;
   applicationId?: string;
   packetMode?: boolean;
   onPacketAdd?: (material: Material, version: MaterialVersion) => Promise<void> | void;
+  initialLane?: Lane;
 }) {
-  const [lane, setLane] = useState<Lane>("files");
+  const [lane, setLane] = useState<Lane>(initialLane);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
@@ -118,6 +127,10 @@ export function MaterialsLibrary({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    setLane(initialLane);
+  }, [initialLane]);
 
   const visible = materials.filter((row) => {
     const knowledge = isKnowledgeKind(row.kind);
@@ -147,6 +160,9 @@ export function MaterialsLibrary({
         form.set("kind", createDraft.kind);
         form.set("purpose", JSON.stringify(purpose));
         form.set("notes", createDraft.notes.trim());
+        if (createDraft.direction.trim()) form.set("direction", createDraft.direction.trim());
+        if (createDraft.language) form.set("language", createDraft.language);
+        if (createDraft.version_date) form.set("version_date", createDraft.version_date);
         form.set("version_label", createDraft.version_label.trim());
         form.set("file", createDraft.file);
         created = await uploadMaterial(form);
@@ -159,6 +175,9 @@ export function MaterialsLibrary({
           version_label: createDraft.version_label.trim(),
           url: createDraft.source === "link" ? createDraft.url.trim() : undefined,
           content: createDraft.source === "text" ? createDraft.content : undefined,
+          direction: createDraft.direction.trim() || null,
+          language: createDraft.language || null,
+          version_date: createDraft.version_date || null,
         });
       }
       if (!created) {
@@ -200,14 +219,16 @@ export function MaterialsLibrary({
       </div>
 
       <div>
-        <div className="flex gap-1 rounded-lg border border-border p-1">
+        <div className="flex flex-wrap gap-2">
           {(["files", "knowledge"] as const).map((item) => (
             <button
               key={item}
               type="button"
               className={cn(
-                "rounded-md px-3 py-1.5 text-sm",
-                lane === item ? "bg-foreground text-background" : "text-muted-foreground",
+                "rounded-md border px-4 py-2 text-sm font-medium transition-colors",
+                lane === item
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-background text-foreground hover:border-foreground/50",
               )}
               onClick={() => setLane(item)}
             >
@@ -385,6 +406,11 @@ function CreateForm({
           className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2"
         />
       </label>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="text-sm">Direction<Input value={draft.direction} onChange={(event) => onChange({ ...draft, direction: event.target.value })} placeholder="e.g. backend" /></label>
+        <label className="text-sm">Language<select value={draft.language} onChange={(event) => onChange({ ...draft, language: event.target.value as CreateDraft["language"] })} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm"><option value="">Any</option><option value="zh">Chinese</option><option value="en">English</option></select></label>
+        <label className="text-sm">Version date<input type="date" value={draft.version_date} onChange={(event) => onChange({ ...draft, version_date: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm" /></label>
+      </div>
       {isKnowledgeKind(draft.kind) ? (
         <label className="block text-sm">
           Content
@@ -456,7 +482,10 @@ function SourceFields({
         </button>
       </div>
       {source === "upload" ? (
-        <input type="file" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
+        <div>
+          <input type="file" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
+          {file ? <p className="mt-1 text-xs text-muted-foreground">{file.name}</p> : null}
+        </div>
       ) : (
         <input
           required

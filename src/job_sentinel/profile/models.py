@@ -21,6 +21,9 @@ Design notes
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, date, datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -119,3 +122,18 @@ class Profile(BaseModel):
         return not (
             self.basics.name or self.education or self.experience or self.projects or self.skills
         )
+
+
+class ProfileVersion(BaseModel):
+    """A user-created immutable snapshot of the current master profile."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    version_number: int = Field(default=1, ge=1)
+    profile: Profile
+    profile_schema_version: int = Field(default=1, ge=1)
+    version_label: str = ""
+    notes: str = ""
+    version_date: date
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    request_id: str
+    request_hash: str

@@ -17,11 +17,18 @@ import type {
   LlmStatus,
   MatchResult,
   Material,
+  MaterialUseItem,
+  MaterialUsePreset,
+  MaterialUsePresetItem,
+  MaterialRevisionResult,
+  SubmissionMaterialHistoryEntry,
   MaterialVersion,
   OpsStatus,
   PacketItem,
   Profile,
+  ReminderInbox,
   SearchResponse,
+  TaskReminder,
   TailorResult,
 } from "@/lib/api";
 
@@ -153,6 +160,8 @@ export const demoHubJobs: HubJob[] = [
     company: "北京三快在线科技有限公司",
     location: "北京",
     source: "zhaopin",
+    market: "cn",
+    country: "CN",
     job_url: "http://www.zhaopin.com/jobdetail/CC383625320J40878294709.htm",
     published_at: null,
     discovered_at: "2026-08-25T00:00:00Z",
@@ -170,6 +179,8 @@ export const demoHubJobs: HubJob[] = [
     company: "美团",
     location: "北京-望京",
     source: "liepin",
+    market: "cn",
+    country: "CN",
     job_url: "https://www.liepin.com/job/1985138523.shtml",
     published_at: null,
     discovered_at: "2026-08-25T00:00:00Z",
@@ -202,6 +213,8 @@ export const demoHubJobs: HubJob[] = [
     company: "Stripe",
     location: "Remote",
     source: "remoteok",
+    market: "en",
+    country: "US",
     job_url: "https://example.com/job/stripe-backend",
     published_at: null,
     discovered_at: "2026-06-01T00:00:00Z",
@@ -504,6 +517,267 @@ const demoPacketIds: Record<string, string[]> = {
   [demoApplications[0].id]: ["ver-en-2", "ver-port-1"],
   [demoApplications[2].id]: ["ver-en-1"],
 };
+
+const demoPresets: MaterialUsePreset[] = [
+  {
+    id: "demo-preset-research",
+    name: "Research application",
+    items: [
+      { material_version_id: "ver-en-2", block_key: null },
+      { material_version_id: "ver-port-1", block_key: null },
+      { material_version_id: "ver-ans-1", block_key: null },
+    ],
+    revision: 1,
+    created_at: "2026-06-04T10:00:00Z",
+    updated_at: "2026-06-12T10:00:00Z",
+  },
+];
+
+export function startDemoApplication(jobId: string): { job: HubJob; application: Application } | null {
+  const job = demoHubJobs.find((row) => row.id === jobId);
+  if (!job) return null;
+  const existing = demoApplications.find((row) => row.job_id === jobId);
+  if (existing) return { job: { ...job, application_id: existing.id }, application: { ...existing } };
+  const application = app(job.title, job.company, job.location, job.source, "draft", {
+    job_id: job.id,
+    url: job.job_url,
+    job_url: job.job_url,
+    apply_url: job.job_url,
+    next_step: job.next_step ?? "",
+    job_deadline: job.deadline ?? "",
+    job_description: job.description ?? "",
+    job_comment: job.comment ?? "",
+  });
+  demoApplications.unshift(application);
+  job.application_id = application.id;
+  return { job: { ...job }, application: { ...application } };
+}
+
+export function createDemoManualApplication(body: {
+  title: string;
+  company: string;
+  job_url?: string;
+  location?: string;
+  source_note?: string;
+  market?: "cn" | "en";
+  create_separately?: boolean;
+}): { job: HubJob; application: Application; replayed: boolean } | null {
+  const title = body.title.trim();
+  const company = body.company.trim();
+  const jobUrl = (body.job_url ?? "").trim();
+  const existing = !body.create_separately && jobUrl
+    ? demoHubJobs.find((row) => row.job_url === jobUrl && row.application_id)
+    : null;
+  if (existing?.application_id) {
+    const application = demoApplications.find((row) => row.id === existing.application_id);
+    if (application) return { job: { ...existing }, application: { ...application }, replayed: true };
+  }
+
+  const now = new Date().toISOString();
+  const jobId = uid();
+  const job: HubJob = {
+    id: jobId,
+    title,
+    company,
+    location: (body.location ?? "").trim(),
+    source: "manual",
+    market: body.market ?? "en",
+    country: body.market === "cn" ? "CN" : "US",
+    job_url: jobUrl,
+    published_at: null,
+    discovered_at: now,
+    engagement: null,
+    status: null,
+    favorite: false,
+    reference: false,
+    match_score: null,
+    description: "",
+    comment: (body.source_note ?? "").trim(),
+  };
+  const application = app(title, company, job.location, "manual", "draft", {
+    job_id: jobId,
+    url: jobUrl,
+    job_url: jobUrl,
+    apply_url: jobUrl,
+    job_comment: job.comment ?? "",
+  });
+  job.application_id = application.id;
+  demoHubJobs.unshift(job);
+  demoApplications.unshift(application);
+  return { job: { ...job }, application: { ...application }, replayed: false };
+}
+
+const demoSubmissionRevisions: Record<string, SubmissionMaterialHistoryEntry[]> = {};
+
+let demoReminderRead = false;
+
+export function listDemoReminders(view: "unread" | "all" = "unread"): ReminderInbox {
+  const job = demoHubJobs.find((row) => row.id === "demo-hub-2");
+  const task = job?.tasks?.find((row) => row.id === "demo-task-oa");
+  const item = job && task ? {
+    id: "demo-reminder-oa",
+    task_id: task.id,
+    job_id: job.id,
+    task_title: task.title,
+    job_title: job.title,
+    company: job.company,
+    reminder_on: "2026-09-03",
+    due_date: "2026-09-05",
+    kind: "advance" as const,
+    due_status: "upcoming" as const,
+    read_at: demoReminderRead ? new Date().toISOString() : null,
+    in_app_triggered_at: null,
+    market: job.market,
+  } : null;
+  const items = item && (view === "all" || !demoReminderRead) ? [item] : [];
+  return {
+    items,
+    unread_count: item && !demoReminderRead ? 1 : 0,
+    total: item ? 1 : 0,
+    today: "2026-09-02",
+    tz: "Asia/Shanghai",
+  };
+}
+
+export function markDemoReminderRead(id: string): TaskReminder | null {
+  if (id !== "demo-reminder-oa") return null;
+  demoReminderRead = true;
+  return {
+    id,
+    task_id: "demo-task-oa",
+    due_date: "2026-09-05",
+    reminder_on: "2026-09-03",
+    kind: "advance",
+    enabled: true,
+    created_at: "2026-09-01T10:00:00Z",
+    read_at: new Date().toISOString(),
+  };
+}
+
+export function demoMaterialUseItems(options: {
+  query?: string;
+  purpose?: string;
+  application_id?: string;
+  preset_id?: string;
+} = {}): { items: MaterialUseItem[]; total: number; has_more: boolean } {
+  const bound = options.application_id ? new Set(demoPacketFor(options.application_id).map((item) => item.binding.material_id)) : null;
+  const preset = options.preset_id ? demoPresets.find((row) => row.id === options.preset_id) : null;
+  const refs = preset?.items ?? null;
+  const rows: MaterialUseItem[] = [];
+  for (const material of demoMaterials) {
+    if (material.archived_at) continue;
+    const version = refs
+      ? material.versions.find((candidate) => refs.some((item) => item.material_version_id === candidate.id))
+      : bound?.has(material.id)
+        ? demoPacketFor(options.application_id || "").find((item) => item.binding.material_id === material.id)?.version
+        : material.versions.find((candidate) => !candidate.archived_at);
+    if (!version || version.archived_at) continue;
+    if (!refs && material.kind !== "message_template" && material.kind !== "application_answer") continue;
+    const text = version.text?.trim() || version.url || version.original_filename || "";
+    const purpose = [...material.purpose, ...version.purpose];
+    rows.push({
+      material_id: material.id,
+      material_version_id: version.id,
+      material_title: material.title,
+      kind: material.kind,
+      version_label: version.display_label || `v${version.version_number}`,
+      version_date: null,
+      block_key: null,
+      block_title: null,
+      heading_path: [],
+      purpose,
+      original_filename: version.original_filename,
+      has_file: Boolean(version.file_ref),
+      url: version.url || null,
+      copy_text: version.text?.trim() || null,
+      preview_text: text.slice(0, 500),
+      is_pinned: Boolean(material.is_pinned),
+      archived: false,
+      unavailable_reason: null,
+    });
+  }
+  const terms = (options.query || "").normalize("NFKC").toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+  const purpose = (options.purpose || "").normalize("NFKC").toLocaleLowerCase().trim();
+  const filtered = rows.filter((row) => {
+    if (purpose && !row.purpose.some((value) => value.normalize("NFKC").toLocaleLowerCase() === purpose)) return false;
+    const haystack = [row.material_title, row.version_label, row.preview_text, ...row.purpose].join(" ").normalize("NFKC").toLocaleLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  });
+  if (refs) {
+    const order = new Map(refs.map((item, index) => [item.material_version_id, index]));
+    filtered.sort((a, b) => (order.get(a.material_version_id) ?? 0) - (order.get(b.material_version_id) ?? 0));
+  } else {
+    filtered.sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned) || a.material_title.localeCompare(b.material_title));
+  }
+  return { items: filtered, total: filtered.length, has_more: false };
+}
+
+export function listDemoMaterialUsePresets(): MaterialUsePreset[] {
+  return demoPresets.map((row) => ({ ...row, items: row.items.map((item) => ({ ...item })) }));
+}
+
+export function createDemoMaterialUsePreset(name: string, items: MaterialUsePresetItem[]): MaterialUsePreset {
+  const preset: MaterialUsePreset = {
+    id: uid(), name: name.trim(), items: items.map((item) => ({ ...item })), revision: 1,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  };
+  demoPresets.unshift(preset);
+  return preset;
+}
+
+export function updateDemoMaterialUsePreset(
+  id: string,
+  body: { name: string; items: MaterialUsePresetItem[]; expected_revision: number },
+): MaterialUsePreset | null {
+  const preset = demoPresets.find((row) => row.id === id);
+  if (!preset || preset.revision !== body.expected_revision) return null;
+  preset.name = body.name.trim();
+  preset.items = body.items.map((item) => ({ ...item }));
+  preset.revision += 1;
+  preset.updated_at = new Date().toISOString();
+  return { ...preset, items: preset.items.map((item) => ({ ...item })) };
+}
+
+export function deleteDemoMaterialUsePreset(id: string, expectedRevision: number): boolean {
+  const index = demoPresets.findIndex((row) => row.id === id);
+  if (index < 0 || demoPresets[index].revision !== expectedRevision) return false;
+  demoPresets.splice(index, 1);
+  return true;
+}
+
+export function listDemoSubmissionMaterialRevisions(submissionId: string): SubmissionMaterialHistoryEntry[] {
+  const submission = demoApplications.flatMap((app) => app.submissions ?? []).find((row) => row.id === submissionId);
+  const original: SubmissionMaterialHistoryEntry = submission ? {
+    revision: 0,
+    packet_snapshot: submission.packet_snapshot ?? { binding_ids: [], material_version_ids: [], items: [], note: "" },
+    created_at: submission.submitted_at,
+    note: submission.notes,
+  } : { revision: 0, packet_snapshot: { binding_ids: [], material_version_ids: [], items: [], note: "" }, created_at: new Date().toISOString(), note: "" };
+  return [original, ...(demoSubmissionRevisions[submissionId] ?? [])];
+}
+
+export function createDemoSubmissionMaterialRevision(
+  submissionId: string,
+  expectedRevision: number,
+  items: Array<{ retain_item_index?: number; material_version_id?: string }>,
+  confirmEmpty: boolean,
+  note: string,
+): { ok: true; result: MaterialRevisionResult } | { ok: false; code: string; message: string } {
+  const history = listDemoSubmissionMaterialRevisions(submissionId);
+  const current = history[history.length - 1];
+  if (current.revision !== expectedRevision) return { ok: false, code: "revision_conflict", message: "Materials were corrected in another window." };
+  if (!items.length && !confirmEmpty) return { ok: false, code: "empty_materials", message: "Confirm empty materials to save." };
+  const rows = items.flatMap((item) => {
+    if (item.retain_item_index !== undefined) return current.packet_snapshot.items?.[item.retain_item_index] ? [current.packet_snapshot.items[item.retain_item_index]] : [];
+    const found = demoMaterialUseItems({}).items.find((row) => row.material_version_id === item.material_version_id);
+    const material = demoMaterials.find((row) => row.id === found?.material_id);
+    const version = material?.versions.find((row) => row.id === item.material_version_id);
+    return material && version ? [{ binding_id: "", material_id: material.id, material_version_id: version.id, title: material.title, kind: material.kind, version_number: version.version_number, version_label: version.version_label, original_filename: version.original_filename, file_ref: version.file_ref, url: version.url, material_purpose: material.purpose, version_purpose: version.purpose, material_notes: material.notes, version_notes: version.notes }] : [];
+  });
+  const next = { revision: expectedRevision + 1, packet_snapshot: { binding_ids: [], material_version_ids: rows.map((row) => row.material_version_id), items: rows, note }, created_at: new Date().toISOString(), note } as SubmissionMaterialHistoryEntry;
+  demoSubmissionRevisions[submissionId] = [...(demoSubmissionRevisions[submissionId] ?? []), next];
+  return { ok: true, result: { submission_id: submissionId, material_revision: next.revision, packet_snapshot: next.packet_snapshot, created_at: next.created_at, note } };
+}
 
 demoApplications[0].current_material_count = 2;
 demoApplications[2].current_material_count = 1;

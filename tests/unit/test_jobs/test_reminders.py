@@ -46,8 +46,8 @@ def _client(tmp_path: Path) -> tuple[TestClient, Path]:
     return client, db
 
 
-def test_schema_version_is_16() -> None:
-    assert SCHEMA_VERSION == 16
+def test_schema_version_is_current() -> None:
+    assert SCHEMA_VERSION == 20
 
 
 def test_dated_task_gets_due_node_only(tmp_path: Path) -> None:

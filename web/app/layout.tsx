@@ -75,7 +75,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <main id="content" className="min-h-screen">
               {children}
             </main>
-            <footer className="border-t border-line bg-surface">
+            <footer className="hidden">
           <div className="mx-auto max-w-6xl px-6 py-10">
             <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
               <p className="flex max-w-xs items-center gap-2 text-sm text-muted">

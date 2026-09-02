@@ -35,6 +35,14 @@ const TABS: { id: ApplicationDrawerTab; label: string }[] = [
   { id: "notes", label: "Notes" },
 ];
 
+const STAGE_STYLES: Record<Application["stage"], string> = {
+  draft: "bg-amber-50 text-amber-800",
+  applied: "bg-sky-50 text-sky-800",
+  interview: "bg-violet-50 text-violet-800",
+  offer: "bg-emerald-50 text-emerald-800",
+  closed: "bg-stone-100 text-stone-600",
+};
+
 export function ApplicationDrawer({
   requestedApp,
   requestedTab,
@@ -357,9 +365,10 @@ export function ApplicationDrawer({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 className="text-lg font-semibold text-ink">{shown.title || "Untitled"}</h2>
-                  <p className="text-sm text-muted">
-                    {[shown.employer, shown.location, shown.stage].filter(Boolean).join(" · ")}
-                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted">
+                    <span>{[shown.employer, shown.location].filter(Boolean).join(" · ")}</span>
+                    <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", STAGE_STYLES[shown.stage])}>{shown.stage}</span>
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -419,7 +428,7 @@ export function ApplicationDrawer({
                         : "border-transparent text-muted hover:text-ink",
                     )}
                   >
-                    {item.label}
+                      {item.label}{item.id === "materials" && shown.current_material_count != null ? ` (${shown.current_material_count})` : ""}
                   </button>
                 ))}
               </div>
@@ -497,7 +506,16 @@ function OverviewTab({
 
   return (
     <div className="space-y-5">
-      <section>
+      {app.stage === "draft" && (
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand/30 bg-brand/5 p-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-brand">Next action</p>
+            <p className="mt-1 text-base font-semibold text-ink">Prepare materials</p>
+          </div>
+          <button type="button" onClick={onOpenMaterials} className="h-10 rounded-lg bg-ink px-4 text-sm font-medium text-white shadow-sm">Open Materials</button>
+        </section>
+      )}
+      <section className="rounded-lg border border-line bg-bg p-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Source</h3>
         <div className="mt-1">
           <SourceActionLink apply_url={app.apply_url} url={app.url} job_url={app.job_url} />
@@ -506,21 +524,11 @@ function OverviewTab({
           )}
         </div>
       </section>
-      <section>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Contact</h3>
-        <textarea
-          value={contactDraft}
-          onChange={(e) => onContactChange(e.target.value)}
-          placeholder="Name, email, WeChat, or a link"
-          rows={3}
-          className="mt-2 w-full select-text resize-y rounded-lg border border-line bg-bg px-3 py-2 text-sm text-ink"
-        />
-        <p className="mt-1 text-xs text-muted">
-          Optional. Select the text to copy. Not required to mark submitted.
-        </p>
-      </section>
-      <section>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Next step</h3>
+      <section className="rounded-lg border border-line bg-bg p-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Next step</h3>
+          {overdue && <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-800">Overdue</span>}
+        </div>
         {app.job_id ? (
           <div className="mt-2 space-y-2">
             <input
@@ -555,57 +563,51 @@ function OverviewTab({
           </p>
         )}
       </section>
-      <ApplicationAddTask key={app.id} app={app} />
-      <section>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Templates & answers
-        </h3>
-        <p className="mt-1 text-sm text-muted">Copy or link answers without leaving this application.</p>
-        <button
-          type="button"
-          onClick={onOpenMaterials}
-          className="mt-2 h-9 rounded-lg border border-line px-3 text-sm font-medium text-ink"
-        >
-          Use templates & answers
-        </button>
-      </section>
       {summary && app.stage !== "draft" && (
-        <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Applied</h3>
-          <p className="mt-1 text-sm text-ink">{summary}</p>
+        <section className="rounded-lg border border-sky-200 bg-sky-50/60 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-sky-800">Latest submission</p>
+          <p className="mt-1 text-sm font-medium text-ink">{summary}</p>
         </section>
       )}
-      <section>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Job description</h3>
-        {jd ? (
-          <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{jd}</p>
-        ) : (
-          <div className="mt-2 rounded-lg border border-dashed border-line p-3 text-sm text-muted">
-            Full JD not saved.
+      <details className="rounded-lg border border-line bg-bg p-3">
+        <summary className="cursor-pointer text-sm font-medium text-ink">More details</summary>
+        <div className="mt-4 space-y-5">
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Contact <span className="font-normal">(optional)</span></h3>
+            <textarea
+              value={contactDraft}
+              onChange={(e) => onContactChange(e.target.value)}
+              placeholder="Name, email, WeChat, or a link"
+              rows={3}
+              className="mt-2 w-full select-text resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink"
+            />
+          </section>
+          <ApplicationAddTask key={app.id} app={app} />
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Job description</h3>
+            {jd ? (
+              <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{jd}</p>
+            ) : (
+              <div className="mt-2 rounded-lg border border-dashed border-line p-3 text-sm text-muted">
+                Full JD not saved.
+                <div className="mt-2">
+                  <SourceActionLink apply_url={app.apply_url} url={app.url} job_url={app.job_url} />
+                </div>
+              </div>
+            )}
+          </section>
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Research notes</h3>
+            {comment ? <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{comment}</p> : <p className="mt-2 text-sm text-muted">No research notes.</p>}
+          </section>
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Tags{tagsDraft.length > 0 ? <span className="ml-2 tabular-nums font-normal text-muted">{tagsDraft.length}</span> : null}
+            </h3>
             <div className="mt-2">
-              <SourceActionLink apply_url={app.apply_url} url={app.url} job_url={app.job_url} />
+              <ApplicationTagsEditor tags={tagsDraft} knownTags={knownTags} onChange={onTagsChange} />
             </div>
-          </div>
-        )}
-      </section>
-      <details className="rounded-lg border border-line bg-bg p-3">
-        <summary className="cursor-pointer text-sm font-medium text-ink">Research notes</summary>
-        <p className="mt-1 text-xs text-muted">Stored on the job. Separate from application notes.</p>
-        {comment ? (
-          <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{comment}</p>
-        ) : (
-          <p className="mt-2 text-sm text-muted">No research notes on this job.</p>
-        )}
-      </details>
-      <details className="rounded-lg border border-line bg-bg p-3">
-        <summary className="cursor-pointer text-sm font-medium text-ink">
-          Tags
-          {tagsDraft.length > 0 ? (
-            <span className="ml-2 tabular-nums font-normal text-muted">{tagsDraft.length}</span>
-          ) : null}
-        </summary>
-        <div className="mt-2">
-          <ApplicationTagsEditor tags={tagsDraft} knownTags={knownTags} onChange={onTagsChange} />
+          </section>
         </div>
       </details>
     </div>

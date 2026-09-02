@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { ApplicationKnowledgeUse } from "@/components/ApplicationKnowledgeUse";
 import {
   addCommNote,
   changePacketVersion,
+  createSubmissionMaterialRevision,
   createMaterial,
   deleteCommNote,
   getMaterials,
+  effectiveSubmissionSnapshot,
+  listSubmissionMaterialRevisions,
   loadCommNotes,
   loadPacket,
   materialVersionFileUrl,
@@ -21,6 +24,7 @@ import {
   type Material,
   type PacketItem,
   type PacketSnapshotItem,
+  type SubmissionMaterialHistoryEntry,
 } from "@/lib/api";
 import { latestVersion, snapshotItemLabel } from "@/lib/materialsUi";
 import { isStaleGeneration } from "@/lib/recordDraft";
@@ -162,13 +166,21 @@ export function MaterialsArea({
   const [items, setItems] = useState<PacketItem[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [picker, setPicker] = useState(false);
+  const [correctingSub, setCorrectingSub] = useState<string | null>(null);
   const [openSub, setOpenSub] = useState<string | null>(null);
+  const [materialsView, setMaterialsView] = useState<"prepare" | "history">("prepare");
+  const [showLibrary, setShowLibrary] = useState(false);
   const [retry, setRetry] = useState(0);
   const gen = useRef(0);
   const canEdit = app.stage !== "closed";
   const submitted = (app.submissions?.length ?? 0) > 0;
   const subs = [...(app.submissions ?? [])].reverse();
   const latest = subs[0] ?? null;
+
+  useEffect(() => {
+    setMaterialsView(submitted ? "history" : "prepare");
+    setShowLibrary(false);
+  }, [app.id, submitted]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -207,119 +219,125 @@ export function MaterialsArea({
 
   return (
     <div className="space-y-4">
-      {app.stage === "draft" ? (
-        <p className="text-sm text-ink">
-          Link the materials you plan to send. Mark submitted snapshots these bindings.
-        </p>
-      ) : latest ? (
-        <div className="rounded-lg border border-line bg-bg p-3 text-sm">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Latest submission
-          </p>
-          <p className="mt-1 text-ink">
-            {formatDateTimeInAppTz(latest.submitted_at)}
-            {" · "}
-            {(latest.packet_snapshot?.items?.length ?? 0) === 0
-              ? "当次材料未记录"
-              : `${latest.packet_snapshot?.items?.length} used in that submission`}
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-3">
+        <div>
+          <h2 className="text-base font-semibold text-ink">Application packet</h2>
+          <p className="mt-1 text-xs text-muted">
+            {submitted
+              ? `${subs.length} submission${subs.length === 1 ? "" : "s"}`
+              : `${items?.length ?? 0} material${items?.length === 1 ? "" : "s"} selected`}
           </p>
         </div>
-      ) : null}
-
-      <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Linked materials</h3>
-        <p className="mt-1 text-xs text-muted">
-          Current bindings. Editing these does not change past submission snapshots.
-        </p>
-        {failed ? (
-          <div className="mt-2 rounded-lg border border-line bg-bg p-3 text-sm text-muted">
-            Could not load linked materials.
-            <button type="button" className="ml-2 text-ink underline" onClick={() => setRetry((n) => n + 1)}>
-              Retry
+        <div className="flex rounded-lg border border-line bg-bg p-0.5" role="tablist" aria-label="Application packet views">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={materialsView === "prepare"}
+            onClick={() => setMaterialsView("prepare")}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "prepare" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
+          >
+            Prepare
+          </button>
+          {submitted && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={materialsView === "history"}
+              onClick={() => setMaterialsView("history")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium ${materialsView === "history" ? "bg-surface text-ink shadow-sm" : "text-muted"}`}
+            >
+              Submission history
             </button>
-          </div>
-        ) : items === null ? (
-          <p className="mt-2 text-sm text-muted">Loading materials…</p>
-        ) : items.length === 0 ? (
-          <div className="mt-2 rounded-lg border border-dashed border-line p-3 text-sm text-muted">
-            No materials bound to this application.
-            {canEdit && (
-              <button type="button" onClick={() => setPicker(true)} className="ml-2 text-ink underline">
-                Add materials
+          )}
+        </div>
+      </header>
+
+      {materialsView === "prepare" ? (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-ink">Selected materials</h3>
+            {canEdit && items !== null && (
+              <button type="button" onClick={() => setPicker(true)} className="h-8 rounded-lg border border-line px-3 text-xs font-medium text-ink">
+                Choose materials
               </button>
             )}
           </div>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {items.map((item) => (
-              <CurrentMaterialRow
-                key={item.binding.id}
-                app={app}
-                item={item}
-                canEdit={canEdit}
-                onRefresh={refresh}
-              />
-            ))}
-          </ul>
-        )}
-        {canEdit && items && items.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setPicker(true)}
-            className="mt-2 h-9 rounded-lg border border-line px-3 text-sm"
-          >
-            Add materials
-          </button>
-        )}
-      </div>
+          {failed ? (
+            <div className="rounded-lg border border-line bg-bg p-3 text-sm text-muted">
+              Could not load materials.
+              <button type="button" className="ml-2 text-ink underline" onClick={() => setRetry((n) => n + 1)}>
+                Retry
+              </button>
+            </div>
+          ) : items === null ? (
+            <p className="text-sm text-muted">Loading materials…</p>
+          ) : items.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-line p-4 text-sm text-muted">
+              No materials selected.
+              {canEdit && <button type="button" onClick={() => setPicker(true)} className="ml-2 text-ink underline">Choose one</button>}
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {items.map((item) => (
+                <CurrentMaterialRow key={item.binding.id} app={app} item={item} canEdit={canEdit} onRefresh={refresh} />
+              ))}
+            </ul>
+          )}
 
-      <ApplicationKnowledgeUse
-        app={app}
-        items={failed ? null : items}
-        canEdit={canEdit}
-        onBound={() => void refresh(true)}
-      />
-
-      {submitted && (
-        <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Submissions</h3>
-          <p className="mt-1 text-xs text-muted">Read-only snapshots from each Mark submitted.</p>
-          <ul className="mt-2 space-y-2">
+          <div className="border-t border-line pt-3">
+            <button
+              type="button"
+              onClick={() => setShowLibrary((value) => !value)}
+              className="text-sm font-medium text-ink"
+              aria-expanded={showLibrary}
+            >
+              {showLibrary ? "Hide templates & answers" : "Find a template or answer"}
+            </button>
+            {showLibrary && (
+              <div className="mt-3">
+                <ApplicationKnowledgeUse app={app} items={failed ? null : items} canEdit={canEdit} onBound={() => void refresh(true)} />
+              </div>
+            )}
+          </div>
+        </section>
+      ) : (
+        <section className="space-y-3">
+          {latest && (
+            <div className="rounded-lg border border-line bg-bg p-3 text-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Latest submission</p>
+              <p className="mt-1 font-medium text-ink">{formatDateTimeInAppTz(latest.submitted_at)}</p>
+              <p className="mt-1 text-xs text-muted">
+                {(latest.packet_snapshot?.items?.length ?? 0) === 0 ? "No materials recorded" : `${latest.packet_snapshot?.items?.length} materials recorded`}
+              </p>
+            </div>
+          )}
+          <ul className="space-y-2">
             {subs.map((row, index) => {
-              const itemsSnap = row.packet_snapshot?.items ?? [];
+              const itemsSnap = effectiveSubmissionSnapshot(row).items ?? [];
+              const corrected = (row.material_revision ?? 0) > 0;
               const open = openSub === row.id;
               return (
                 <li key={row.id} className="rounded-lg border border-line px-3 py-2 text-sm">
-                  <button
-                    type="button"
-                    className="w-full text-left font-medium"
-                    onClick={() => setOpenSub(open ? null : row.id)}
-                  >
-                    Submission #{subs.length - index} · {formatDateTimeInAppTz(row.submitted_at)}
+                  <button type="button" className="flex w-full items-center justify-between gap-2 text-left font-medium" onClick={() => setOpenSub(open ? null : row.id)}>
+                    <span>Submission #{subs.length - index}</span>
+                    <span className="text-xs font-normal text-muted">{formatDateTimeInAppTz(row.submitted_at)}{corrected ? " · Corrected" : ""}</span>
                   </button>
                   {open && (
-                    <div className="mt-2 space-y-1 text-xs text-muted">
-                      <p className="font-medium text-ink">Materials used in this submission</p>
-                      {itemsSnap.length === 0 ? (
-                        <p>当次材料未记录</p>
-                      ) : (
-                        itemsSnap.map((snap, snapIndex) => (
-                          <SnapshotRow
-                            key={`${row.id}-${snapIndex}`}
-                            appId={app.id}
-                            submissionId={row.id}
-                            index={snapIndex}
-                            item={snap}
-                          />
-                        ))
-                      )}
+                    <div className="mt-3 space-y-2 border-t border-line pt-3">
+                      {itemsSnap.length === 0 ? <p className="text-xs text-muted">No materials recorded</p> : itemsSnap.map((snap, snapIndex) => (
+                        <SnapshotRow key={`${row.id}-${snapIndex}`} appId={app.id} submissionId={row.id} index={snapIndex} item={snap} />
+                      ))}
+                      <div className="flex flex-wrap gap-3 pt-1">
+                        <button type="button" className="text-xs font-medium text-ink underline" onClick={() => setCorrectingSub(row.id)}>Correct materials record</button>
+                        {corrected ? <CorrectionHistoryLink appId={app.id} submissionId={row.id} /> : null}
+                      </div>
                     </div>
                   )}
                 </li>
               );
             })}
           </ul>
-        </div>
+        </section>
       )}
       {picker && items && (
         <PacketPicker
@@ -334,6 +352,14 @@ export function MaterialsArea({
           }}
         />
       )}
+      {correctingSub ? (
+        <CorrectMaterialsDialog
+          app={app}
+          submissionId={correctingSub}
+          onClose={() => setCorrectingSub(null)}
+          onSaved={() => { setCorrectingSub(null); onChanged(); setRetry((n) => n + 1); }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -350,7 +376,21 @@ function CurrentMaterialRow({
   onRefresh: (notify?: boolean) => Promise<void>;
 }) {
   const [more, setMore] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const version = item.version;
+  const copyTarget = version?.text?.trim() || version?.url?.trim() || "";
+
+  async function copyMaterial() {
+    if (!copyTarget) return;
+    try {
+      await navigator.clipboard.writeText(copyTarget);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+    window.setTimeout(() => setCopyState("idle"), 1800);
+  }
+
   return (
     <li className="rounded-lg border border-line px-3 py-2 text-sm">
       <div className="font-medium text-ink">{item.material?.title ?? "Material"}</div>
@@ -368,9 +408,20 @@ function CurrentMaterialRow({
           </a>
         )}
         {version?.file_ref && (
-          <a href={materialVersionFileUrl(version.id)} className="text-xs text-brand">
+          <a href={materialVersionFileUrl(version.id)} download={version.original_filename || undefined} className="text-xs text-brand">
             Download
           </a>
+        )}
+        {copyTarget && (
+          <button type="button" onClick={() => void copyMaterial()} className="text-xs text-brand">
+            {copyState === "copied"
+              ? "Copied"
+              : copyState === "failed"
+                ? "Copy failed"
+                : version?.url && !version?.text
+                  ? "Copy link"
+                  : "Copy text"}
+          </button>
         )}
         {canEdit && item.material && (
           <label className="flex items-center gap-1 text-xs text-muted">
@@ -439,6 +490,81 @@ function SnapshotRow({
       ) : !item.url ? (
         <span> · 当次材料未记录</span>
       ) : null}
+    </div>
+  );
+}
+
+function CorrectionHistoryLink({ appId, submissionId }: { appId: string; submissionId: string }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<SubmissionMaterialHistoryEntry[] | null>(null);
+  async function toggle() {
+    if (!open && rows === null) setRows(await listSubmissionMaterialRevisions(appId, submissionId));
+    setOpen((value) => !value);
+  }
+  return (
+    <span>
+      <button type="button" className="text-xs text-muted underline" onClick={() => void toggle()}>View correction history</button>
+      {open && rows ? <span className="ml-2 text-xs text-muted">{rows.map((row) => `v${row.revision}${row.note ? `: ${row.note}` : ""}`).join(" · ")}</span> : null}
+    </span>
+  );
+}
+
+function CorrectMaterialsDialog({
+  app,
+  submissionId,
+  onClose,
+  onSaved,
+}: {
+  app: Application;
+  submissionId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const submission = app.submissions?.find((row) => row.id === submissionId);
+  const snapshot = submission ? effectiveSubmissionSnapshot(submission) : null;
+  const [keep, setKeep] = useState<boolean[]>(() => snapshot?.items?.map(() => true) ?? []);
+  const [library, setLibrary] = useState<Material[]>([]);
+  const [addVersion, setAddVersion] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const requestId = useId().replace(/:/g, "");
+
+  useEffect(() => { void getMaterials().then(setLibrary); }, []);
+  if (!submission || !snapshot) return null;
+  const currentSubmission = submission;
+  const snapshotItems = snapshot.items ?? [];
+  const options = library.flatMap((material) => material.versions.filter((version) => !version.archived_at && material.kind !== "message_template").map((version) => ({ material, version })));
+  const selectedCount = keep.filter(Boolean).length + (addVersion ? 1 : 0);
+  async function save() {
+    if (busy) return;
+    if (selectedCount === 0 && !window.confirm("This will record the submission as having no materials. Continue?")) return;
+    setBusy(true); setError("");
+    const result = await createSubmissionMaterialRevision(app.id, submissionId, {
+      expected_revision: currentSubmission.material_revision ?? 0,
+      items: [
+        ...keep.flatMap((value, index) => value ? [{ retain_item_index: index }] : []),
+        ...(addVersion ? [{ material_version_id: addVersion }] : []),
+      ],
+      confirm_empty: selectedCount === 0,
+      note,
+      idempotency_key: `ui-${requestId}-${currentSubmission.material_revision ?? 0}`,
+    });
+    setBusy(false);
+    if (!result.ok) { setError(result.message); return; }
+    onSaved();
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="correct-materials-title">
+      <div className="max-h-[90vh] w-full max-w-xl overflow-auto rounded-lg border border-line bg-surface p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-4"><div><h2 id="correct-materials-title" className="text-lg font-semibold text-ink">Correct materials record</h2><p className="mt-1 text-sm text-muted">{app.employer} · {app.title} · {formatDateTimeInAppTz(currentSubmission.submitted_at)}</p></div><button type="button" onClick={onClose} className="text-sm text-muted underline">Close</button></div>
+        <p className="mt-4 text-sm text-muted">Update the materials recorded for this submission. Current linked materials are not loaded here.</p>
+        <ul className="mt-3 space-y-2">{snapshotItems.map((item, index) => <li key={`${item.material_version_id}-${index}`} className="flex items-start gap-2 rounded border border-line p-2 text-sm"><input type="checkbox" checked={keep[index] ?? false} onChange={(e) => setKeep((rows) => rows.map((value, i) => i === index ? e.target.checked : value))} /><span><span className="font-medium text-ink">{item.title || "Material"}</span><span className="ml-2 text-xs text-muted">{item.version_label || `v${item.version_number}`}</span></span></li>)}</ul>
+        <label className="mt-4 block text-sm text-ink">Add or replace with another version<select value={addVersion} onChange={(e) => setAddVersion(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-bg px-2 text-sm"><option value="">No additional material</option>{options.map(({ material, version }) => <option key={version.id} value={version.id}>{material.title} · {version.display_label || `v${version.version_number}`}</option>)}</select></label>
+        <label className="mt-3 block text-sm text-ink">Correction note<textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} className="mt-1 w-full rounded border border-line bg-bg p-2 text-sm" placeholder="Optional explanation" /></label>
+        {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={onClose} className="h-9 rounded border border-line px-3 text-sm">Cancel</button><button type="button" disabled={busy} onClick={() => void save()} className="h-9 rounded bg-ink px-3 text-sm text-white disabled:opacity-50">{busy ? "Saving…" : `Save correction (${selectedCount})`}</button></div>
+      </div>
     </div>
   );
 }
@@ -512,7 +638,7 @@ function PacketPicker({
   return (
     <div className="rounded-xl border border-line bg-bg p-3">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Select materials</h3>
+        <h3 className="text-sm font-semibold">Attach materials</h3>
         <span className="text-xs text-muted">
           {app.employer} · {app.title}
         </span>
@@ -607,13 +733,13 @@ function PacketPicker({
         </button>
       </div>
       <div className="mt-3 flex items-center gap-2">
-        <span className="text-xs text-muted">Selected {Object.keys(chosen).length}</span>
+        <span className="text-xs text-muted">{Object.keys(chosen).length} selected</span>
         <button
           type="button"
           onClick={() => void onSave(Object.values(chosen))}
           className="h-8 rounded-lg bg-ink px-3 text-xs text-white"
         >
-          Save selection
+          Attach selected
         </button>
         <button type="button" onClick={onClose} className="h-8 text-xs text-muted">
           Cancel

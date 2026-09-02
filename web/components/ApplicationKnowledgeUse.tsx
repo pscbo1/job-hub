@@ -6,9 +6,13 @@ import {
   addPacketBinding,
   changePacketVersion,
   getMaterials,
+  getMaterialUseItems,
+  listMaterialUsePresets,
   type Application,
   type Material,
   type PacketItem,
+  type MaterialUseItem,
+  type MaterialUsePreset,
 } from "@/lib/api";
 import {
   copyFeedback,
@@ -32,7 +36,12 @@ export function ApplicationKnowledgeUse({
 }) {
   const [library, setLibrary] = useState<Material[] | null>(null);
   const [query, setQuery] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [presetId, setPresetId] = useState("");
+  const [useItems, setUseItems] = useState<MaterialUseItem[] | null>(null);
+  const [presets, setPresets] = useState<MaterialUsePreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "Copied" | "Copy failed">("idle");
   const [bindMsg, setBindMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -47,12 +56,36 @@ export function ApplicationKnowledgeUse({
     };
   }, [app.id]);
 
-  const knowledge = useMemo(
-    () => searchKnowledgeItems(library ?? [], query),
-    [library, query],
-  );
-  const selected = knowledge.find((row) => row.id === selectedId) ?? null;
-  const preview = selected ? knowledgePreviewText(selected) : "";
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      getMaterialUseItems({ query, purpose, application_id: app.id, preset_id: presetId || undefined }),
+      listMaterialUsePresets(),
+    ]).then(([result, available]) => {
+      if (cancelled) return;
+      setUseItems(result.items);
+      setPresets(available);
+    });
+    return () => { cancelled = true; };
+  }, [app.id, query, purpose, presetId]);
+
+  const knowledge = useMemo(() => searchKnowledgeItems(library ?? [], query), [library, query]);
+  const visibleItems = useItems ?? knowledge.map((row) => {
+    const version = latestVersion(row);
+    return {
+      material_id: row.id, material_version_id: version?.id ?? "", material_title: row.title,
+      kind: row.kind, version_label: version?.display_label ?? "", version_date: null,
+      block_key: null, block_title: null, heading_path: [], purpose: row.purpose,
+      original_filename: version?.original_filename ?? "", has_file: Boolean(version?.file_ref),
+      url: version?.url || null, copy_text: version?.text ?? null,
+      preview_text: knowledgePreviewText(row), is_pinned: Boolean(row.is_pinned), archived: false,
+      unavailable_reason: null,
+    } satisfies MaterialUseItem;
+  });
+  const selected = library?.find((row) => row.id === selectedId) ?? null;
+  const selectedItem = visibleItems.find((row) => row.material_version_id === selectedVersionId) ??
+    visibleItems.find((row) => row.material_id === selectedId) ?? null;
+  const preview = selectedItem?.copy_text || selectedItem?.preview_text || (selected ? knowledgePreviewText(selected) : "");
   const decision = selected
     ? knowledgeBindDecision({ kind: selected.kind, items, materialId: selected.id })
     : "copy_only";
@@ -71,16 +104,16 @@ export function ApplicationKnowledgeUse({
 
   async function bind() {
     if (!selected || busy || !canEdit) return;
-    const latest = latestVersion(selected);
-    if (!latest || (decision !== "bind_new" && decision !== "replace_version")) return;
+    const versionId = selectedItem?.material_version_id || latestVersion(selected)?.id;
+    if (!versionId || (decision !== "bind_new" && decision !== "replace_version")) return;
     setBusy(true);
     setBindMsg("");
     let ok = false;
     if (decision === "replace_version") {
       const existing = items?.find((row) => row.binding.material_id === selected.id);
-      if (existing) ok = await changePacketVersion(app.id, existing.binding.id, latest.id);
+      if (existing) ok = await changePacketVersion(app.id, existing.binding.id, versionId);
     } else {
-      ok = await addPacketBinding(app.id, latest.id);
+      ok = await addPacketBinding(app.id, versionId);
     }
     setBusy(false);
     if (ok) {
@@ -109,28 +142,48 @@ export function ApplicationKnowledgeUse({
         aria-label="Search templates and answers"
         className="mt-2 h-9 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink"
       />
-      {library === null ? (
+      <div className="mt-2 flex flex-wrap gap-2">
+        <select value={presetId} onChange={(e) => setPresetId(e.target.value)} className="h-9 rounded-lg border border-line bg-surface px-2 text-sm" aria-label="Use preset">
+          <option value="">All materials</option>
+          {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+        </select>
+        <select value={purpose} onChange={(e) => setPurpose(e.target.value)} className="h-9 rounded-lg border border-line bg-surface px-2 text-sm" aria-label="Filter by purpose">
+          <option value="">All purposes</option>
+          {Array.from(new Set(visibleItems.flatMap((row) => row.purpose))).map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+      </div>
+      {library === null || useItems === null ? (
         <p className="mt-2 text-sm text-muted">Loading templates and answers…</p>
-      ) : knowledge.length === 0 ? (
+      ) : visibleItems.length === 0 ? (
         <p className="mt-2 text-sm text-muted">No templates or answers match.</p>
       ) : (
         <ul className="mt-2 space-y-1">
-          {knowledge.map((row) => (
-            <li key={row.id}>
+          {visibleItems.map((row) => (
+            <li key={`${row.material_version_id}:${row.block_key ?? "root"}`}>
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedId(row.id);
+                  setSelectedId(row.material_id);
+                  setSelectedVersionId(row.material_version_id);
                   setCopyState("idle");
                   setBindMsg("");
                 }}
                 className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
-                  selectedId === row.id ? "border-ink bg-surface text-ink" : "border-line text-ink"
+                  selectedVersionId === row.material_version_id ? "border-ink bg-surface text-ink" : "border-line text-ink"
                 }`}
               >
-                <span className="font-medium">{row.title}</span>
-                <span className="ml-2 text-xs text-muted">{formatKind(row.kind)}</span>
+                <span className="font-medium">{row.material_title}</span>
+                {row.block_title ? <span className="ml-2 text-xs text-muted">{row.block_title}</span> : null}
+                <span className="ml-2 text-xs text-muted">{row.version_label || formatKind(row.kind)}</span>
+                <span className="mt-1 block truncate text-xs text-muted">{row.preview_text}</span>
               </button>
+              <div className="mt-1 flex items-center gap-2 px-3">
+                <button type="button" className="text-xs font-medium text-ink underline" onClick={() => {
+                  setSelectedId(row.material_id); setSelectedVersionId(row.material_version_id); void navigator.clipboard.writeText(row.copy_text || row.preview_text);
+                  setCopyState("Copied");
+                }}>Copy</button>
+                {row.is_pinned ? <span className="text-[11px] text-muted">Pinned</span> : null}
+              </div>
             </li>
           ))}
         </ul>

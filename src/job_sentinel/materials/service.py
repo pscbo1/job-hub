@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
+import json
+import unicodedata
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -17,6 +20,7 @@ from job_sentinel.core.models import (
     PacketSnapshotItem,
 )
 from job_sentinel.materials.storage import MaterialStorage, StorageError, sanitize_filename
+from job_sentinel.materials.blocks import MaterialBlock, parse_material_blocks
 
 if TYPE_CHECKING:
     from job_sentinel.db.repository import JobRepository
@@ -64,6 +68,38 @@ def _require_kind(kind: str) -> str:
     return value
 
 
+def _clean_direction(value: str | None) -> str | None:
+    text = (value or "").strip()
+    return text or None
+
+
+def _clean_language(value: str | None) -> str | None:
+    text = (value or "").strip().lower()
+    if text in {"cn", "zh"}:
+        return "zh"
+    if text in {"en"}:
+        return "en"
+    if not text:
+        return None
+    raise MaterialsError("Language must be zh, en, or empty")
+
+
+def _parse_version_date(value: date | str | None) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as exc:
+        raise MaterialsError("Version date must be YYYY-MM-DD") from exc
+
+
+def _request_hash(payload: dict[str, object]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 class MaterialsService:
     def __init__(self, repo: JobRepository, storage: MaterialStorage) -> None:
         self.repo = repo
@@ -88,6 +124,10 @@ class MaterialsService:
         data: bytes | None = None,
         content_type: str = "",
         content: str = "",
+        direction: str | None = None,
+        language: str | None = None,
+        version_date: date | str | None = None,
+        request_id: str | None = None,
     ) -> Material:
         name = title.strip()
         kind_value = _require_kind(kind)
@@ -106,7 +146,24 @@ class MaterialsService:
             kind=kind_value,
             purpose=_clean_purpose(purpose),
             notes=notes.strip(),
+            direction=_clean_direction(direction),
+            language=_clean_language(language),
         )
+        parsed_version_date = _parse_version_date(version_date)
+        request_hash = _request_hash({
+            "op": "create_material", "title": name, "kind": kind_value,
+            "direction": material.direction, "language": material.language,
+            "purpose": material.purpose, "notes": material.notes,
+            "url": url.strip(), "content": content, "file_sha256": hashlib.sha256(payload or b"").hexdigest(),
+        })
+        if request_id:
+            existing = self.repo.find_material_version_by_request_id(request_id)
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise MaterialsError("request_conflict", status_code=409)
+                stored_existing = self.repo.get_material(existing.material_id, include_archived=True)
+                if stored_existing is not None:
+                    return self.hydrate_material(stored_existing)
         self.repo.create_material(material)
         try:
             self.add_version(
@@ -118,6 +175,9 @@ class MaterialsService:
                 filename=payload_name,
                 data=payload,
                 content_type=payload_type,
+                version_date=parsed_version_date,
+                request_id=request_id,
+                request_hash=request_hash,
             )
         except Exception:
             self.repo.hard_delete_material(material.id)
@@ -139,6 +199,9 @@ class MaterialsService:
         data: bytes | None = None,
         content_type: str = "",
         content: str = "",
+        version_date: date | str | None = None,
+        request_id: str | None = None,
+        request_hash: str | None = None,
     ) -> MaterialVersion:
         material = self.repo.get_material(material_id, include_archived=True)
         if material is None:
@@ -150,6 +213,19 @@ class MaterialsService:
             raise MaterialsError("A version needs a file, a URL, or text")
         if payload and url.strip():
             url = ""
+        parsed_version_date = _parse_version_date(version_date)
+        computed_hash = request_hash or _request_hash({
+            "op": "add_version", "material_id": material.id,
+            "version_label": version_label.strip(), "purpose": _clean_purpose(purpose),
+            "notes": notes.strip(), "url": url.strip(), "content": content,
+            "file_sha256": hashlib.sha256(payload or b"").hexdigest(),
+        })
+        if request_id:
+            existing = self.repo.find_material_version_by_request_id(request_id)
+            if existing is not None:
+                if existing.request_hash != computed_hash:
+                    raise MaterialsError("request_conflict", status_code=409)
+                return self.hydrate_version(existing)
         file_ref = ""
         original = ""
         size = 0
@@ -157,10 +233,13 @@ class MaterialsService:
             material_id=material.id,
             version_number=self.repo.next_version_number(material.id),
             version_label=version_label.strip(),
+            version_date=parsed_version_date,
             purpose=_clean_purpose(purpose),
             notes=notes.strip(),
             url=_clean_url(url) if url else "",
             content_type=payload_type,
+            request_id=request_id,
+            request_hash=computed_hash,
         )
         if payload is not None:
             try:
@@ -189,6 +268,9 @@ class MaterialsService:
         kind: str | None = None,
         purpose: list[str] | None = None,
         notes: str | None = None,
+        is_pinned: bool | None = None,
+        direction: str | None = None,
+        language: str | None = None,
     ) -> Material:
         material = self.repo.get_material(material_id, include_archived=True)
         if material is None:
@@ -205,6 +287,12 @@ class MaterialsService:
             fields["purpose"] = _clean_purpose(purpose)
         if notes is not None:
             fields["notes"] = notes.strip()
+        if is_pinned is not None:
+            fields["is_pinned"] = bool(is_pinned)
+        if direction is not None:
+            fields["direction"] = _clean_direction(direction)
+        if language is not None:
+            fields["language"] = _clean_language(language)
         self.repo.update_material(material_id, **fields)
         stored = self.repo.get_material(material_id, include_archived=True)
         if stored is None:
@@ -218,6 +306,7 @@ class MaterialsService:
         version_label: str | None = None,
         purpose: list[str] | None = None,
         notes: str | None = None,
+        version_date: date | str | None = None,
     ) -> MaterialVersion:
         version = self.repo.get_material_version(version_id)
         if version is None:
@@ -229,6 +318,8 @@ class MaterialsService:
             fields["purpose"] = _clean_purpose(purpose)
         if notes is not None:
             fields["notes"] = notes.strip()
+        if version_date is not None:
+            fields["version_date"] = _parse_version_date(version_date)
         self.repo.update_material_version(version_id, **fields)
         self.repo.touch_material(version.material_id)
         stored = self.repo.get_material_version(version_id)
@@ -405,6 +496,81 @@ class MaterialsService:
     def clear_bindings(self, application_id: str) -> None:
         self.repo.replace_application_bindings(application_id, [])
 
+    def material_use_items(
+        self,
+        *,
+        query: str = "",
+        purpose: str = "",
+        application_id: str = "",
+        preset_id: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, object]], int]:
+        """Resolve searchable material units from one consistent version source."""
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+        selected: list[tuple[MaterialVersion, MaterialBlock | None, bool]] = []
+        if preset_id:
+            preset = self.repo.get_material_preset(preset_id)
+            if preset is None:
+                raise MaterialsError("Preset not found", status_code=404)
+            for entry in preset.items:
+                version = self.repo.get_material_version(entry.material_version_id)
+                if version is None:
+                    continue
+                material = self.repo.get_material(version.material_id, include_archived=True)
+                if material is None:
+                    continue
+                version = self.hydrate_version(version)
+                block = _find_block(version, entry.block_key)
+                selected.append((version, block, bool(material.is_pinned)))
+        else:
+            bound: dict[str, str] = {}
+            if application_id:
+                for binding in self.repo.list_application_bindings(application_id):
+                    bound[binding.material_id] = binding.material_version_id
+            for material in self.repo.list_materials(include_archived=False):
+                if material.kind not in KNOWLEDGE_MATERIAL_KINDS:
+                    continue
+                version_id = bound.get(material.id)
+                version = (
+                    self.repo.get_material_version(version_id)
+                    if version_id
+                    else (self.repo.list_material_versions(material.id, include_archived=False) or [None])[0]
+                )
+                if version is None:
+                    continue
+                version = self.hydrate_version(version)
+                blocks = parse_material_blocks(version.id, version.text) if version.text else []
+                if blocks:
+                    selected.extend((version, block, bool(material.is_pinned)) for block in blocks)
+                else:
+                    selected.append((version, None, bool(material.is_pinned)))
+        rows = [_resolved_use_item(self.repo, version, block, pinned) for version, block, pinned in selected]
+        terms = [_normalize(part) for part in query.split() if _normalize(part)]
+        wanted = _normalize(purpose)
+        if wanted:
+            rows = [row for row in rows if wanted in {_normalize(v) for v in row["purpose"]}]  # type: ignore[index]
+        if terms:
+            rows = [row for row in rows if all(_matches_use_item(row, term) for term in terms)]
+        rows.sort(key=lambda row: (-int(bool(row["is_pinned"])), _match_rank(row, terms), _normalize(str(row["material_title"])), str(row["material_version_id"]), str(row["block_key"] or "")))
+        total = len(rows)
+        return rows[offset : offset + limit], total
+
+    def material_version_use_items(self, version_id: str) -> list[dict[str, object]]:
+        """Return all copyable units for one explicitly selected version."""
+        version = self.repo.get_material_version(version_id)
+        if version is None:
+            raise MaterialsError("Version not found", status_code=404)
+        material = self.repo.get_material(version.material_id, include_archived=True)
+        if material is None:
+            raise MaterialsError("Material not found", status_code=404)
+        version = self.hydrate_version(version)
+        blocks = parse_material_blocks(version.id, version.text) if version.text else []
+        if blocks:
+            return [_resolved_use_item(self.repo, version, block, bool(material.is_pinned)) for block in blocks]
+        return [_resolved_use_item(self.repo, version, None, bool(material.is_pinned))]
+
 
 def _content_payload(
     *,
@@ -426,6 +592,69 @@ def _is_text_version(version: MaterialVersion) -> bool:
     return version.content_type in {"text/markdown", "text/plain"} or name.endswith(
         (".md", ".txt", KNOWLEDGE_FILENAME)
     )
+
+
+def _normalize(value: str) -> str:
+    return unicodedata.normalize("NFKC", value or "").casefold().strip()
+
+
+def _find_block(version: MaterialVersion, key: str | None) -> MaterialBlock | None:
+    if not key or not version.text:
+        return None
+    return next(
+        (block for block in parse_material_blocks(version.id, version.text) if block.key == key),
+        None,
+    )
+
+
+def _resolved_use_item(
+    repo: JobRepository,
+    version: MaterialVersion,
+    block: MaterialBlock | None,
+    pinned: bool,
+) -> dict[str, object]:
+    material = repo.get_material(version.material_id, include_archived=True)
+    title = material.title if material else "Material"
+    purpose = list(material.purpose if material else []) + list(version.purpose)
+    copy_text = block.copy_text if block else (version.text.strip() or None)
+    preview = (copy_text or version.url or version.original_filename or "").strip()
+    return {
+        "material_id": version.material_id,
+        "material_version_id": version.id,
+        "material_title": title,
+        "kind": material.kind if material else "other",
+        "version_label": version.display_label,
+        "block_key": block.key if block else None,
+        "block_title": block.title if block else None,
+        "heading_path": list(block.heading_path) if block else [],
+        "purpose": purpose,
+        "original_filename": version.original_filename,
+        "has_file": bool(version.file_ref),
+        "url": version.url or None,
+        "copy_text": copy_text,
+        "preview_text": preview[:500],
+        "is_pinned": pinned,
+        "archived": bool(version.archived_at or (material and material.archived_at)),
+        "unavailable_reason": None,
+    }
+
+
+def _matches_use_item(row: dict[str, object], term: str) -> bool:
+    fields = [
+        str(row.get("material_title") or ""),
+        str(row.get("block_title") or ""),
+        str(row.get("preview_text") or ""),
+        str(row.get("version_label") or ""),
+        " ".join(str(value) for value in (row.get("purpose") or [])),
+    ]
+    return any(term in _normalize(value) for value in fields)
+
+
+def _match_rank(row: dict[str, object], terms: list[str]) -> int:
+    if not terms:
+        return 0
+    title = _normalize(f"{row.get('material_title', '')} {row.get('block_title', '')}")
+    return 0 if all(term in title for term in terms) else 1
 
 
 def _stem(filename: str) -> str:

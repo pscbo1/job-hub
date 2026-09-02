@@ -24,8 +24,8 @@ def _service(tmp_path: Path) -> tuple[JobRepository, MaterialsService]:
     return repo, service
 
 
-def test_schema_version_is_16() -> None:
-    assert SCHEMA_VERSION == 16
+def test_schema_version_is_current() -> None:
+    assert SCHEMA_VERSION == 20
 
 
 def test_binding_unique_per_material(tmp_path: Path) -> None:
@@ -164,7 +164,7 @@ def test_api_rejects_duplicate_material_in_packet(tmp_path: Path) -> None:
         "/api/materials",
         json={"title": "Resume", "url": "https://example.com/a.pdf"},
     )
-    assert first.status_code == 200
+    assert first.status_code == 201
     mid = first.json()["id"]
     v1 = first.json()["versions"][0]["id"]
     v2 = client.post(

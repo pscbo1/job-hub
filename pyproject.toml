@@ -78,6 +78,7 @@ dependencies = [
 
   # ── Resume import (PDF text extraction) ───────────────────────────────
   "pypdf>=4.0",
+  "markdown-it-py>=3.0",
 ]
 
 [project.optional-dependencies]

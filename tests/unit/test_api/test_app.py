@@ -59,6 +59,28 @@ def test_put_then_get_profile_round_trips(tmp_path: Path) -> None:
     assert client.get("/api/profile/summary").json()["experience"] == 1
 
 
+def test_profile_versions_are_idempotent_and_downloadable(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    client.put("/api/profile", json={"basics": {"name": "Ada Lovelace"}})
+    payload = {"request_id": "profile-request-1", "version_label": "Baseline"}
+    first = client.post("/api/profile/versions", json=payload)
+    replay = client.post("/api/profile/versions", json=payload)
+    conflict = client.post(
+        "/api/profile/versions",
+        json={**payload, "version_label": "Different"},
+    )
+    assert first.status_code == 201
+    assert replay.status_code == 200
+    assert replay.json()["id"] == first.json()["id"]
+    assert conflict.status_code == 409
+    listed = client.get("/api/profile/versions")
+    assert listed.status_code == 200
+    assert listed.json()[0]["version_number"] == 1
+    download = client.get(f"/api/profile/versions/{first.json()['id']}/file")
+    assert download.status_code == 200
+    assert download.json()["basics"]["name"] == "Ada Lovelace"
+
+
 def test_jobs_empty_without_db(tmp_path: Path) -> None:
     resp = _client(tmp_path).get("/api/jobs")
     assert resp.status_code == 200

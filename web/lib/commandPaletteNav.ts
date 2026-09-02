@@ -22,16 +22,22 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
       keywords: "tracker pipeline applied interview offer closed packet",
     },
     {
+      label: "Materials",
+      hint: "Documents, templates, and application answers",
+      href: "/materials",
+      keywords: "materials documents templates answers",
+    },
+    {
+      label: "Career Archive",
+      hint: "Master profile and resume versions",
+      href: "/career-archive",
+      keywords: "career archive profile resume versions",
+    },
+    {
       label: "Tasks",
       hint: "Next steps, deadlines, drafts",
       href: "/tasks",
       keywords: "tasks next step deadline draft",
-    },
-    {
-      label: "Materials",
-      hint: "Documents, templates, and application packets",
-      href: "/materials",
-      keywords: "files documents templates answers packet resume cover letter portfolio",
     },
     {
       label: "Dashboard",

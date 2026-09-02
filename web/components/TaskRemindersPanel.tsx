@@ -22,11 +22,13 @@ export function TaskRemindersPanel() {
   const [error, setError] = useState("");
   const [pendingId, setPendingId] = useState("");
   const [failed, setFailed] = useState<ReminderInboxItem | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   async function load(nextView = view) {
     setError("");
     const inbox = await listReminders({ view: nextView, limit: 100 });
     setItems(inbox.items);
+    setUnreadCount(inbox.unread_count);
     setLoaded(true);
   }
 
@@ -57,12 +59,19 @@ export function TaskRemindersPanel() {
       align="end"
       role="dialog"
       minWidth={340}
-      ariaLabel="Reminders"
+      ariaLabel="Follow-ups"
       triggerClassName="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink"
-      trigger="Reminders"
+      trigger="Follow-ups"
     >
       {() => (
         <div className="px-1 py-1">
+          <div className="flex items-start justify-between gap-3 px-2 pb-2">
+            <div>
+              <p className="text-sm font-semibold text-ink">Follow-ups</p>
+              <p className="mt-0.5 text-xs text-muted">Dates set before a task deadline.</p>
+            </div>
+            {unreadCount > 0 && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">{unreadCount} unread</span>}
+          </div>
           <div className="flex gap-1 px-2 pb-2">
             {(["unread", "all"] as const).map((key) => (
               <button

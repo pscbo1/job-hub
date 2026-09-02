@@ -34,6 +34,7 @@ from job_sentinel.api.chat import ChatMessage, ChatReply
 from job_sentinel.api.chat import answer as chat_answer
 from job_sentinel.api.ops import OpsConfigError, OpsConflictError, get_runner
 from job_sentinel.core.models import (
+    Application,
     ApplicationCommNote,
     ApplicationStage,
     ApplicationStatus,
@@ -43,8 +44,12 @@ from job_sentinel.core.models import (
     Job,
     JobEngagement,
     JobPosting,
+    ApplicationSubmissionResponse,
     JobTask,
+    MaterialPresetItem,
+    MaterialUsePreset,
     PacketSnapshot,
+    TaskAttachment,
 )
 from job_sentinel.documents.match import MatchResult, match_profile_to_job
 from job_sentinel.documents.tailor import KeywordTailor, TailorResult
@@ -67,6 +72,24 @@ _LOCAL_ORIGIN_REGEX = (
     r"|chrome-extension://[a-p]{32}"
     r"|moz-extension://[0-9a-f-]+"
 )
+
+
+def _application_payload(repo: Any, app: Application) -> dict[str, Any]:
+    """Serialize an application with the latest effective submission packets."""
+    payload = app.model_dump(mode="json")
+    submissions: list[dict[str, Any]] = []
+    for submission in app.submissions:
+        latest = repo.latest_submission_material_revision(submission.id)
+        effective = latest.packet_snapshot if latest else submission.packet_snapshot
+        response = ApplicationSubmissionResponse(
+            **submission.model_dump(),
+            effective_packet_snapshot=effective,
+            material_revision=latest.revision if latest else 0,
+            materials_corrected_at=latest.created_at if latest else None,
+        )
+        submissions.append(response.model_dump(mode="json"))
+    payload["submissions"] = submissions
+    return payload
 
 
 class HealthResponse(BaseModel):
@@ -441,6 +464,10 @@ class MaterialWriteRequest(BaseModel):
     version_purpose: list[str] = Field(default_factory=list)
     version_notes: str = ""
     content: str = ""
+    direction: str | None = None
+    language: str | None = None
+    version_date: date | None = None
+    request_id: str | None = None
 
 
 class MaterialPatchRequest(BaseModel):
@@ -448,6 +475,9 @@ class MaterialPatchRequest(BaseModel):
     kind: str | None = None
     purpose: list[str] | None = None
     notes: str | None = None
+    is_pinned: bool | None = None
+    direction: str | None = None
+    language: str | None = None
 
 
 class MaterialVersionWriteRequest(BaseModel):
@@ -456,12 +486,22 @@ class MaterialVersionWriteRequest(BaseModel):
     purpose: list[str] = Field(default_factory=list)
     notes: str = ""
     content: str = ""
+    version_date: date | None = None
+    request_id: str | None = None
 
 
 class MaterialVersionPatchRequest(BaseModel):
     version_label: str | None = None
     purpose: list[str] | None = None
     notes: str | None = None
+    version_date: date | None = None
+
+
+class ProfileVersionWriteRequest(BaseModel):
+    version_label: str = ""
+    notes: str = ""
+    version_date: date | None = None
+    request_id: str | None = None
 
 
 class PacketReplaceRequest(BaseModel):
@@ -470,6 +510,28 @@ class PacketReplaceRequest(BaseModel):
 
 class PacketBindRequest(BaseModel):
     material_version_id: str
+
+
+class MaterialPresetWriteRequest(BaseModel):
+    name: str
+    items: list[MaterialPresetItem] = Field(default_factory=list)
+
+
+class MaterialPresetPatchRequest(MaterialPresetWriteRequest):
+    expected_revision: int = Field(ge=1)
+
+
+class SubmissionMaterialRevisionItemRequest(BaseModel):
+    retain_item_index: int | None = None
+    material_version_id: str | None = None
+
+
+class SubmissionMaterialRevisionRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    items: list[SubmissionMaterialRevisionItemRequest] = Field(default_factory=list)
+    confirm_empty: bool = False
+    note: str = ""
+    idempotency_key: str
 
 
 class CommNoteWriteRequest(BaseModel):
@@ -682,6 +744,94 @@ def create_app(
         """Replace the stored profile (validated by pydantic) and persist it."""
         save_profile(profile, profile_path)
         return profile
+
+    @app.get("/api/profile/versions")
+    def list_profile_versions(limit: int = 100) -> list[dict[str, Any]]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            versions = repo.list_profile_versions(limit=max(1, min(limit, 500)))
+            return [version.model_dump(mode="json", exclude={"profile"}) for version in versions]
+        finally:
+            repo.close()
+
+    @app.post("/api/profile/versions")
+    def create_profile_version(req: ProfileVersionWriteRequest) -> JSONResponse:
+        import hashlib
+        import json
+
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.profile import ProfileVersion
+
+        request_id = (req.request_id or uuid.uuid4().hex).strip()
+        if not request_id:
+            raise HTTPException(status_code=422, detail="request_id must not be empty")
+        profile = load_profile(profile_path)
+        version = ProfileVersion(
+            profile=profile,
+            version_label=req.version_label.strip(),
+            notes=req.notes.strip(),
+            version_date=req.version_date or date.today(),
+            request_id=request_id,
+            request_hash="",
+        )
+        canonical = json.dumps(
+            {
+                "profile": profile.model_dump(mode="json"),
+                "version_label": version.version_label,
+                "notes": version.notes,
+                "version_date": version.version_date.isoformat(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        version.request_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        repo = JobRepository(db_path)
+        try:
+            try:
+                existing = repo.create_profile_version(version)
+            except ValueError as exc:
+                if str(exc) == "request_conflict":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="request_id was already used with different data",
+                    ) from exc
+                raise
+            status = 200 if existing.id != version.id else 201
+            return JSONResponse(existing.model_dump(mode="json"), status_code=status)
+        finally:
+            repo.close()
+
+    @app.get("/api/profile/versions/{version_id}")
+    def get_profile_version(version_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            version = repo.get_profile_version(version_id)
+            if version is None:
+                raise HTTPException(status_code=404, detail="Profile version not found")
+            return version.model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.get("/api/profile/versions/{version_id}/file")
+    def download_profile_version(version_id: str) -> JSONResponse:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            version = repo.get_profile_version(version_id)
+            if version is None:
+                raise HTTPException(status_code=404, detail="Profile version not found")
+            response = JSONResponse(version.profile.model_dump(mode="json"))
+            response.headers["Content-Disposition"] = (
+                f'attachment; filename="profile-v{version.version_number}.json"'
+            )
+            return response
+        finally:
+            repo.close()
 
     @app.post("/api/profile/import-resume", response_model=Profile)
     async def import_resume(file: UploadFile, ai: bool = True) -> Profile:
@@ -972,15 +1122,108 @@ def create_app(
     @app.delete("/api/jobs/{job_id}/tasks/{task_id}")
     def delete_hub_job_task(job_id: str, task_id: str) -> dict[str, bool]:
         from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.storage import MaterialStorage
 
         repo = JobRepository(db_path)
         try:
+            attachments = repo.list_task_attachments(task_id)
             deleted = repo.delete_job_task(job_id, task_id)
         finally:
             repo.close()
         if not deleted:
             raise HTTPException(status_code=404, detail="Task not found")
+        storage = MaterialStorage(materials_dir)
+        for attachment in attachments:
+            try:
+                path = storage.resolve(attachment.file_ref)
+                if path.is_file():
+                    path.unlink()
+            except Exception:
+                logger.warning("Could not remove task attachment file {}", attachment.file_ref)
         return {"ok": True}
+
+    @app.post("/api/jobs/{job_id}/tasks/{task_id}/attachments", response_model=TaskAttachment)
+    async def upload_task_attachment(job_id: str, task_id: str, file: UploadFile) -> TaskAttachment:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.storage import MaterialStorage, StorageError
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.get_job_task(task_id)
+            if task is None or task.job_id != job_id:
+                raise HTTPException(status_code=404, detail="Task not found")
+            data = await file.read()
+            attachment = TaskAttachment(
+                task_id=task_id,
+                original_filename=file.filename or "upload",
+                content_type=file.content_type or "application/octet-stream",
+                byte_size=len(data),
+            )
+            try:
+                attachment.file_ref = MaterialStorage(materials_dir).write_bytes(
+                    "task-attachments",
+                    f"{task_id}/{attachment.id}",
+                    attachment.original_filename,
+                    data,
+                )
+            except StorageError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            repo.create_task_attachment(attachment)
+            return attachment
+        finally:
+            repo.close()
+
+    @app.delete("/api/jobs/{job_id}/tasks/{task_id}/attachments/{attachment_id}")
+    def delete_task_attachment(job_id: str, task_id: str, attachment_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.get_job_task(task_id)
+            if task is None or task.job_id != job_id:
+                raise HTTPException(status_code=404, detail="Task not found")
+            attachment = repo.delete_task_attachment(task_id, attachment_id)
+        finally:
+            repo.close()
+        if attachment is None:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        try:
+            from job_sentinel.materials.storage import MaterialStorage
+
+            path = MaterialStorage(materials_dir).resolve(attachment.file_ref)
+            if path.is_file():
+                path.unlink()
+        except Exception:
+            logger.warning("Could not remove task attachment file {}", attachment.file_ref)
+        return {"ok": True}
+
+    @app.get("/api/jobs/{job_id}/tasks/{task_id}/attachments/{attachment_id}/file")
+    def task_attachment_file(job_id: str, task_id: str, attachment_id: str) -> FileResponse:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.materials.storage import MaterialStorage, StorageError
+
+        repo = JobRepository(db_path)
+        try:
+            task = repo.get_job_task(task_id)
+            attachment = next(
+                (a for a in repo.list_task_attachments(task_id) if a.id == attachment_id),
+                None,
+            )
+        finally:
+            repo.close()
+        if task is None or task.job_id != job_id or attachment is None:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        try:
+            path = MaterialStorage(materials_dir).resolve(attachment.file_ref)
+        except StorageError as exc:
+            raise HTTPException(status_code=404, detail="File not found") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(
+            path,
+            media_type=attachment.content_type,
+            filename=attachment.original_filename,
+        )
 
     @app.post("/api/reminders/sync")
     def sync_in_app_reminders_route() -> dict[str, Any]:
@@ -1379,17 +1622,17 @@ def create_app(
         try:
             apps = repo.list_applications(stage=stage, limit=limit)
             apps = [enrich_application_stale(repo, a) for a in apps]
+            if view_key == "open":
+                apps = [a for a in apps if a.stage in OPEN_APPLICATION_STAGES]
+            elif view_key == "closed":
+                apps = [a for a in apps if a.stage == ApplicationStage.CLOSED]
+            if stale_applied:
+                apps = [a for a in apps if a.stale_applied]
+            if tag.strip():
+                apps = [a for a in apps if application_matches_tags(a, [tag])]
+            return [_application_payload(repo, a) for a in apps]
         finally:
             repo.close()
-        if view_key == "open":
-            apps = [a for a in apps if a.stage in OPEN_APPLICATION_STAGES]
-        elif view_key == "closed":
-            apps = [a for a in apps if a.stage == ApplicationStage.CLOSED]
-        if stale_applied:
-            apps = [a for a in apps if a.stale_applied]
-        if tag.strip():
-            apps = [a for a in apps if application_matches_tags(a, [tag])]
-        return [a.model_dump(mode="json") for a in apps]
 
     @app.get("/api/applications/tags")
     def list_application_tags() -> dict[str, list[str]]:
@@ -1427,7 +1670,7 @@ def create_app(
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         finally:
             repo.close()
-        return app.model_dump(mode="json")
+        return _application_payload(repo, app)
 
     @app.post("/api/applications/manual")
     def create_manual_application_route(
@@ -1576,11 +1819,11 @@ def create_app(
         repo = JobRepository(db_path)
         try:
             app = repo.get_application(app_id)
+            if app is None or app.deleted_at is not None:
+                raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
+            return _application_payload(repo, app)
         finally:
             repo.close()
-        if app is None or app.deleted_at is not None:
-            raise HTTPException(status_code=404, detail=f"Application {app_id} not found.")
-        return app.model_dump(mode="json")
 
     @app.post("/api/applications/{app_id}/submit")
     def submit_application(app_id: str, req: MarkSubmittedRequest) -> dict[str, Any]:
@@ -1599,6 +1842,7 @@ def create_app(
                 expected_version_ids=req.expected_version_ids,
                 idempotency_key=req.idempotency_key,
             )
+            return _application_payload(repo, app)
         except TrackingError as err:
             detail: object = err.message
             if err.code:
@@ -1606,7 +1850,6 @@ def create_app(
             raise HTTPException(status_code=err.status_code, detail=detail) from err
         finally:
             repo.close()
-        return app.model_dump(mode="json")
 
     @app.post("/api/applications/{app_id}/close")
     def close_application_route(app_id: str, req: CloseApplicationRequest) -> dict[str, Any]:
@@ -1730,12 +1973,146 @@ def create_app(
             repo.close()
         return [m.model_dump(mode="json") for m in rows]
 
+    @app.get("/api/material-use-items")
+    def list_material_use_items(
+        query: str = "",
+        purpose: str = "",
+        application_id: str = "",
+        preset_id: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        repo, service = _materials()
+        try:
+            rows, total = service.material_use_items(
+                query=query,
+                purpose=purpose,
+                application_id=application_id,
+                preset_id=preset_id,
+                limit=limit,
+                offset=offset,
+            )
+        except Exception as exc:
+            if hasattr(exc, "status_code"):
+                raise HTTPException(
+                    status_code=int(getattr(exc, "status_code")),
+                    detail={"code": "not_found", "message": str(exc), "context": {}},
+                ) from exc
+            raise
+        finally:
+            repo.close()
+        return {"items": rows, "total": total, "has_more": offset + len(rows) < total}
+
+    @app.get("/api/material-versions/{version_id}/use-items")
+    def list_version_use_items(version_id: str) -> dict[str, Any]:
+        repo, service = _materials()
+        try:
+            try:
+                rows = service.material_version_use_items(version_id)
+            except Exception as exc:
+                if hasattr(exc, "status_code"):
+                    raise HTTPException(
+                        status_code=int(getattr(exc, "status_code")),
+                        detail={"code": "not_found", "message": str(exc), "context": {}},
+                    ) from exc
+                raise
+        finally:
+            repo.close()
+        return {"items": rows, "total": len(rows), "has_more": False}
+
+    @app.get("/api/material-use-presets")
+    def list_material_use_presets() -> list[dict[str, Any]]:
+        repo, _service = _materials()
+        try:
+            rows = repo.list_material_presets()
+        finally:
+            repo.close()
+        return [row.model_dump(mode="json") for row in rows]
+
+    def _validate_preset(repo: Any, name: str, items: list[MaterialPresetItem]) -> str:
+        normalized = " ".join(name.strip().casefold().split())
+        if not normalized or len(name.strip()) > 80:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_request", "message": "Preset name is required (max 80 characters).", "context": {}},
+            )
+        seen: set[tuple[str, str | None]] = set()
+        material_versions: dict[str, str] = {}
+        from job_sentinel.materials.blocks import parse_material_blocks
+
+        for item in items:
+            version = repo.get_material_version(item.material_version_id)
+            if version is None:
+                raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Material version not found", "context": {}})
+            key = (item.material_version_id, item.block_key)
+            if key in seen:
+                raise HTTPException(status_code=422, detail={"code": "invalid_item", "message": "Duplicate preset item", "context": {}})
+            seen.add(key)
+            previous = material_versions.get(version.material_id)
+            if previous is not None and previous != version.id:
+                raise HTTPException(status_code=422, detail={"code": "invalid_item", "message": "A preset may use one version per material", "context": {}})
+            material_versions[version.material_id] = version.id
+            if item.block_key:
+                material = repo.get_material(version.material_id, include_archived=True)
+                if material is None:
+                    raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Material not found", "context": {}})
+                service = _materials()[1]
+                hydrated = service.hydrate_version(version)
+                if item.block_key not in {block.key for block in parse_material_blocks(version.id, hydrated.text)}:
+                    raise HTTPException(status_code=422, detail={"code": "invalid_item", "message": "Block does not belong to version", "context": {}})
+        return normalized
+
+    @app.post("/api/material-use-presets")
+    def create_material_use_preset(req: MaterialPresetWriteRequest) -> dict[str, Any]:
+        repo, _service = _materials()
+        try:
+            normalized = _validate_preset(repo, req.name, req.items)
+            if any(row.name.strip().casefold() == normalized for row in repo.list_material_presets()):
+                raise HTTPException(status_code=409, detail={"code": "preset_name_conflict", "message": "Preset name already exists", "context": {}})
+            preset = MaterialUsePreset(name=req.name.strip(), items=req.items)
+            repo.create_material_preset(preset)
+            return preset.model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.patch("/api/material-use-presets/{preset_id}")
+    def patch_material_use_preset(preset_id: str, req: MaterialPresetPatchRequest) -> dict[str, Any]:
+        repo, _service = _materials()
+        try:
+            preset = repo.get_material_preset(preset_id)
+            if preset is None:
+                raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Preset not found", "context": {}})
+            normalized = _validate_preset(repo, req.name, req.items)
+            for row in repo.list_material_presets():
+                if row.id != preset_id and row.name.strip().casefold() == normalized:
+                    raise HTTPException(status_code=409, detail={"code": "preset_name_conflict", "message": "Preset name already exists", "context": {}})
+            updated = repo.update_material_preset(preset_id, name=req.name.strip(), normalized_name=normalized, items=req.items, expected_revision=req.expected_revision)
+            if updated is None:
+                raise HTTPException(status_code=409, detail={"code": "revision_conflict", "message": "Preset changed in another window", "context": {}})
+            return updated.model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.delete("/api/material-use-presets/{preset_id}")
+    def delete_material_use_preset(preset_id: str, expected_revision: int) -> dict[str, bool]:
+        repo, _service = _materials()
+        try:
+            deleted = repo.delete_material_preset(preset_id, expected_revision)
+            if deleted is False:
+                raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Preset not found", "context": {}})
+            if deleted is None:
+                raise HTTPException(status_code=409, detail={"code": "revision_conflict", "message": "Preset changed in another window", "context": {}})
+            return {"ok": True}
+        finally:
+            repo.close()
+
     @app.post("/api/materials")
-    def create_material(req: MaterialWriteRequest) -> dict[str, Any]:
+    def create_material(req: MaterialWriteRequest) -> JSONResponse:
         from job_sentinel.materials.service import MaterialsError
 
         repo, service = _materials()
         try:
+            replay = bool(req.request_id and repo.find_material_version_by_request_id(req.request_id))
             material = service.create_material(
                 title=req.title,
                 kind=req.kind,
@@ -1746,12 +2123,16 @@ def create_app(
                 version_purpose=req.version_purpose,
                 version_notes=req.version_notes,
                 content=req.content,
+                direction=req.direction,
+                language=req.language,
+                version_date=req.version_date,
+                request_id=req.request_id,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         finally:
             repo.close()
-        return _json_object(material)
+        return JSONResponse(_json_object(material), status_code=200 if replay else 201)
 
     @app.post("/api/materials/upload")
     async def upload_material(
@@ -1763,6 +2144,10 @@ def create_app(
         version_label: str = Form(""),
         version_purpose: str = Form("[]"),
         version_notes: str = Form(""),
+        direction: str | None = Form(None),
+        language: str | None = Form(None),
+        version_date: str | None = Form(None),
+        request_id: str | None = Form(None),
     ) -> dict[str, Any]:
         from job_sentinel.materials.service import MaterialsError
 
@@ -1777,6 +2162,10 @@ def create_app(
                 version_label=version_label,
                 version_purpose=_parse_purpose_json(version_purpose),
                 version_notes=version_notes,
+                direction=direction,
+                language=language,
+                version_date=version_date,
+                request_id=request_id,
                 filename=file.filename or "upload",
                 data=data,
                 content_type=file.content_type or "",
@@ -1810,6 +2199,9 @@ def create_app(
                 kind=req.kind,
                 purpose=req.purpose,
                 notes=req.notes,
+                is_pinned=req.is_pinned,
+                direction=req.direction,
+                language=req.language,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -1838,11 +2230,12 @@ def create_app(
         return _json_object(material)
 
     @app.post("/api/materials/{material_id}/versions")
-    def add_material_version(material_id: str, req: MaterialVersionWriteRequest) -> dict[str, Any]:
+    def add_material_version(material_id: str, req: MaterialVersionWriteRequest) -> JSONResponse:
         from job_sentinel.materials.service import MaterialsError
 
         repo, service = _materials()
         try:
+            replay = bool(req.request_id and repo.find_material_version_by_request_id(req.request_id))
             version = service.add_version(
                 material_id,
                 url=req.url,
@@ -1850,12 +2243,14 @@ def create_app(
                 purpose=req.purpose,
                 notes=req.notes,
                 content=req.content,
+                version_date=req.version_date,
+                request_id=req.request_id,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         finally:
             repo.close()
-        return _json_object(version)
+        return JSONResponse(_json_object(version), status_code=200 if replay else 201)
 
     @app.post("/api/materials/{material_id}/versions/upload")
     async def upload_material_version(
@@ -1864,6 +2259,8 @@ def create_app(
         version_label: str = Form(""),
         purpose: str = Form("[]"),
         notes: str = Form(""),
+        version_date: str | None = Form(None),
+        request_id: str | None = Form(None),
     ) -> dict[str, Any]:
         from job_sentinel.materials.service import MaterialsError
 
@@ -1878,6 +2275,8 @@ def create_app(
                 filename=file.filename or "upload",
                 data=data,
                 content_type=file.content_type or "",
+                version_date=version_date,
+                request_id=request_id,
             )
         except MaterialsError as extra:
             raise HTTPException(status_code=extra.status_code, detail=extra.message) from extra
@@ -1896,6 +2295,7 @@ def create_app(
                 version_label=req.version_label,
                 purpose=req.purpose,
                 notes=req.notes,
+                version_date=req.version_date,
             )
         except MaterialsError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -2028,19 +2428,89 @@ def create_app(
             repo.close()
         return {"ok": True}
 
+    @app.post("/api/applications/{app_id}/submissions/{sub_id}/material-revisions")
+    def create_submission_material_revision(
+        app_id: str, sub_id: str, req: SubmissionMaterialRevisionRequest
+    ) -> JSONResponse:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.jobs.actions import TrackingError, correct_submission_materials
+
+        repo = JobRepository(db_path)
+        try:
+            revision = correct_submission_materials(
+                repo,
+                app_id,
+                sub_id,
+                expected_revision=req.expected_revision,
+                items=[item.model_dump(exclude_none=True) for item in req.items],
+                confirm_empty=req.confirm_empty,
+                note=req.note,
+                idempotency_key=req.idempotency_key,
+                materials_dir=materials_dir,
+            )
+            status = 200 if revision.revision <= req.expected_revision else 201
+            return JSONResponse(
+                status_code=status,
+                content=revision.model_dump(mode="json"),
+            )
+        except TrackingError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code or "request_failed", "message": exc.message, "context": {}},
+            ) from exc
+        finally:
+            repo.close()
+
+    @app.get("/api/applications/{app_id}/submissions/{sub_id}/material-revisions")
+    def list_submission_material_revisions(app_id: str, sub_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            submission = repo.get_application_submission(app_id, sub_id)
+            if submission is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "not_found", "message": "Submission not found", "context": {}},
+                )
+            rows = [
+                {
+                    "revision": 0,
+                    "packet_snapshot": submission.packet_snapshot.model_dump(mode="json"),
+                    "created_at": submission.created_at.isoformat(),
+                    "note": submission.notes,
+                }
+            ]
+            rows.extend(row.model_dump(mode="json", exclude={"id", "submission_id", "idempotency_key", "request_hash"}) for row in repo.list_submission_material_revisions(sub_id))
+            return {"revisions": rows}
+        finally:
+            repo.close()
+
     @app.get("/api/applications/{app_id}/submissions/{sub_id}/items/{index}/file")
-    def submission_snapshot_file(app_id: str, sub_id: str, index: int) -> FileResponse:
+    def submission_snapshot_file(
+        app_id: str, sub_id: str, index: int, revision: int | None = None
+    ) -> FileResponse:
         from job_sentinel.db.repository import JobRepository
         from job_sentinel.materials.storage import MaterialStorage, StorageError
 
         repo = JobRepository(db_path)
         try:
             submission = repo.get_application_submission(app_id, sub_id)
+            revision_row = (
+                repo.get_submission_material_revision(sub_id, revision)
+                if revision is not None and revision > 0
+                else None
+            )
         finally:
             repo.close()
         if submission is None:
             raise HTTPException(status_code=404, detail="当次材料未记录")
-        items = submission.packet_snapshot.items
+        snapshot = submission.packet_snapshot
+        if revision is not None and revision > 0:
+            if revision_row is None:
+                raise HTTPException(status_code=404, detail="当次材料未记录")
+            snapshot = revision_row.packet_snapshot
+        items = snapshot.items
         if index < 0 or index >= len(items):
             raise HTTPException(status_code=404, detail="当次材料未记录")
         item = items[index]

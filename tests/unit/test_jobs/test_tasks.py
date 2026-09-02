@@ -86,6 +86,50 @@ def test_task_api_roundtrip(tmp_path: Path) -> None:
     assert job.status_code == 200
 
 
+def test_task_attachment_upload_and_delete(tmp_path: Path) -> None:
+    db = tmp_path / "api.db"
+    repo = JobRepository(db)
+    stored = repo.upsert_job(_job())
+    task = repo.create_job_task(stored.id, title="Take-home")
+    assert task is not None
+    repo.close()
+    client = TestClient(
+        create_app(
+            profile_path=tmp_path / "p.yaml",
+            db_path=db,
+            materials_dir=tmp_path / "files",
+        )
+    )
+    uploaded = client.post(
+        f"/api/jobs/{stored.id}/tasks/{task.id}/attachments",
+        files={"file": ("prompt.txt", b"read me", "text/plain")},
+    )
+    assert uploaded.status_code == 200
+    attachment = uploaded.json()
+    assert attachment["original_filename"] == "prompt.txt"
+    listed = client.get(f"/api/jobs/{stored.id}/tasks")
+    assert listed.json()[0]["attachments"][0]["id"] == attachment["id"]
+    downloaded = client.get(
+        f"/api/jobs/{stored.id}/tasks/{task.id}/attachments/{attachment['id']}/file"
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"read me"
+    removed = client.delete(
+        f"/api/jobs/{stored.id}/tasks/{task.id}/attachments/{attachment['id']}"
+    )
+    assert removed.status_code == 200
+    uploaded_again = client.post(
+        f"/api/jobs/{stored.id}/tasks/{task.id}/attachments",
+        files={"file": ("prompt.txt", b"read me", "text/plain")},
+    )
+    assert uploaded_again.status_code == 200
+    second_attachment = uploaded_again.json()
+    deleted_task = client.delete(f"/api/jobs/{stored.id}/tasks/{task.id}")
+    assert deleted_task.status_code == 200
+    assert client.get(f"/api/jobs/{stored.id}/tasks").json() == []
+    assert not (tmp_path / "files" / second_attachment["file_ref"]).exists()
+
+
 def test_task_from_application_stores_shared_fields(tmp_path: Path) -> None:
     repo = JobRepository(tmp_path / "j.db")
     stored = repo.upsert_job(_job())

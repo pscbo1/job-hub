@@ -124,6 +124,12 @@ export default function ApplicationsPage() {
   const [createdToast, setCreatedToast] = useState<{ hidden: boolean } | null>(null);
   const addTriggerRef = useRef<HTMLButtonElement | null>(null);
 
+  useEffect(() => {
+    if (!createdToast) return;
+    const timeout = window.setTimeout(() => setCreatedToast(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [createdToast]);
+
   async function refresh() {
     const [list, catalog] = await Promise.all([
       getApplications(undefined, 500, {
@@ -438,13 +444,21 @@ export default function ApplicationsPage() {
             Track applications, next steps, and the materials you send.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openAdd}
-          className="h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white shadow-sm"
-        >
-          Add application
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <a
+            href="/applications/materials"
+            className="h-9 rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink shadow-sm hover:border-ink/30"
+          >
+            Manage materials
+          </a>
+          <button
+            type="button"
+            onClick={openAdd}
+            className="h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white shadow-sm"
+          >
+            Add application
+          </button>
+        </div>
       </header>
 
       <div className={cn("mb-4", styles.toolbar)}>
@@ -637,8 +651,8 @@ export default function ApplicationsPage() {
           <div className="flex items-center gap-3">
             <span>
               {createdToast.hidden
-                ? "Draft created. Hidden by current filters."
-                : "Draft created."}
+                ? "Application draft created. Hidden by current filters."
+                : "Application draft created."}
             </span>
             {createdToast.hidden && (
               <button type="button" onClick={showCreatedInList} className="font-medium underline">
@@ -647,7 +661,7 @@ export default function ApplicationsPage() {
             )}
             <button
               type="button"
-              aria-label="Dismiss Draft created message"
+              aria-label="Dismiss application draft message"
               onClick={() => setCreatedToast(null)}
               className="text-muted"
             >

@@ -23,7 +23,7 @@ import hashlib
 import uuid
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
@@ -108,6 +108,18 @@ class TaskReminder(BaseModel):
     model_config = {"frozen": False}
 
 
+class TaskAttachment(BaseModel):
+    """File attached to one checklist task (interview or take-home material)."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    task_id: str = Field(..., min_length=1)
+    original_filename: str = Field(default="")
+    file_ref: str = Field(default="")
+    content_type: str = Field(default="application/octet-stream")
+    byte_size: int = Field(default=0, ge=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
 class JobTask(BaseModel):
     """Checklist item on a Job (OA, interview prep). Not an Application stage.
 
@@ -126,6 +138,7 @@ class JobTask(BaseModel):
     notes: str | None = Field(default=None)
     source_url: str | None = Field(default=None)
     reminders: list[TaskReminder] = Field(default_factory=list)
+    attachments: list[TaskAttachment] = Field(default_factory=list)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -517,6 +530,45 @@ class ApplicationSubmission(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
+class SubmissionMaterialRevision(BaseModel):
+    """Immutable correction of one submission's recorded materials."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    submission_id: str
+    revision: int = Field(ge=1)
+    packet_snapshot: PacketSnapshot = Field(default_factory=PacketSnapshot)
+    note: str = Field(default="")
+    idempotency_key: str
+    request_hash: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
+class ApplicationSubmissionResponse(ApplicationSubmission):
+    """API projection that exposes the effective corrected packet."""
+
+    effective_packet_snapshot: PacketSnapshot = Field(default_factory=PacketSnapshot)
+    material_revision: int = Field(default=0, ge=0)
+    materials_corrected_at: datetime | None = Field(default=None)
+
+
+class MaterialPresetItem(BaseModel):
+    """One immutable material version or text block referenced by a preset."""
+
+    material_version_id: str
+    block_key: str | None = None
+
+
+class MaterialUsePreset(BaseModel):
+    """Named, ordered references to reusable material units."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    name: str
+    items: list[MaterialPresetItem] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
 class ApplicationEvent(BaseModel):
     """Append-only stage / close history. Current Application fields are a projection."""
 
@@ -691,6 +743,7 @@ class MaterialVersion(BaseModel):
     material_id: str
     version_number: int = Field(default=1, ge=1)
     version_label: str = Field(default="")
+    version_date: date | None = Field(default=None)
     purpose: list[str] = Field(default_factory=list)
     file_ref: str = Field(default="")
     original_filename: str = Field(default="")
@@ -698,6 +751,8 @@ class MaterialVersion(BaseModel):
     byte_size: int = Field(default=0, ge=0)
     url: str = Field(default="")
     notes: str = Field(default="")
+    request_id: str | None = Field(default=None)
+    request_hash: str | None = Field(default=None)
     text: str = Field(
         default="",
         description="Loaded markdown body for Knowledge versions (content.md). Not a DB column.",
@@ -718,8 +773,11 @@ class Material(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     title: str = Field(default="")
     kind: str = Field(default="other")
+    direction: str | None = Field(default=None)
+    language: Literal["zh", "en"] | None = Field(default=None)
     purpose: list[str] = Field(default_factory=list)
     notes: str = Field(default="")
+    is_pinned: bool = Field(default=False)
     archived_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))

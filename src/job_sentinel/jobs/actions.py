@@ -5,7 +5,11 @@ Business rules live here, not in route handlers or UI components.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +24,8 @@ from job_sentinel.core.models import (
     Job,
     JobRaw,
     PacketSnapshot,
+    PacketSnapshotItem,
+    SubmissionMaterialRevision,
     compute_job_fingerprint,
 )
 from job_sentinel.ingestion.filters import (
@@ -477,6 +483,140 @@ def mark_submitted(
     if stored is None:
         raise TrackingError("Application missing after submit", status_code=500)
     return stored
+
+
+def correct_submission_materials(
+    repo: JobRepository,
+    application_id: str,
+    submission_id: str,
+    *,
+    expected_revision: int,
+    items: list[dict[str, object]],
+    confirm_empty: bool,
+    note: str,
+    idempotency_key: str,
+    materials_dir: Path,
+) -> SubmissionMaterialRevision:
+    """Append an immutable material correction for one submission."""
+    key = idempotency_key.strip()
+    if not re.fullmatch(r"[\x21-\x7e]{8,128}", key):
+        raise TrackingError("Invalid idempotency key", status_code=422, code="invalid_request")
+    submission = repo.get_application_submission(application_id, submission_id)
+    if submission is None:
+        raise TrackingError("Submission not found", status_code=404, code="not_found")
+    current = repo.latest_submission_material_revision(submission_id)
+    current_revision = current.revision if current else 0
+    effective = current.packet_snapshot if current else submission.packet_snapshot
+    normalized_items: list[dict[str, object]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise TrackingError("Invalid correction item", status_code=422, code="invalid_item")
+        has_retain = "retain_item_index" in item
+        has_version = "material_version_id" in item
+        if has_retain == has_version:
+            raise TrackingError("Correction item must choose one source", status_code=422, code="invalid_item")
+        if has_retain:
+            index = item.get("retain_item_index")
+            if not isinstance(index, int) or index < 0 or index >= len(effective.items):
+                raise TrackingError("Retained item index is invalid", status_code=422, code="invalid_item")
+            normalized_items.append({"retain_item_index": index})
+        else:
+            version_id = str(item.get("material_version_id") or "").strip()
+            if not version_id:
+                raise TrackingError("Material version is required", status_code=422, code="invalid_item")
+            normalized_items.append({"material_version_id": version_id})
+    canonical = {
+        "contract": "material-revision-v1",
+        "application_id": application_id,
+        "submission_id": submission_id,
+        "expected_revision": expected_revision,
+        "items": normalized_items,
+        "confirm_empty": bool(confirm_empty),
+        "note": note.replace("\r\n", "\n").replace("\r", "\n").strip(),
+    }
+    request_hash = hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    existing = repo.find_submission_revision_by_key(submission_id, key)
+    if existing is not None:
+        if existing.request_hash != request_hash:
+            raise TrackingError("Idempotency key was used for another request", status_code=409, code="idempotency_conflict")
+        return existing
+    if expected_revision != current_revision:
+        raise TrackingError("Materials were corrected in another window", status_code=409, code="revision_conflict")
+    if not normalized_items and not confirm_empty:
+        raise TrackingError("Confirm empty materials to save", status_code=409, code="empty_materials")
+
+    from job_sentinel.materials.service import MaterialsService
+    from job_sentinel.materials.storage import MaterialStorage
+
+    storage = MaterialStorage(materials_dir)
+    service = MaterialsService(repo, storage)
+    snapshot_items: list[PacketSnapshotItem] = []
+    seen_materials: set[str] = set()
+    for item in normalized_items:
+        if "retain_item_index" in item:
+            retained = effective.items[int(item["retain_item_index"])]
+            if retained.material_id and retained.material_id in seen_materials:
+                raise TrackingError("Duplicate material", status_code=422, code="duplicate_material")
+            if retained.material_id:
+                seen_materials.add(retained.material_id)
+            snapshot_items.append(retained.model_copy())
+            continue
+        version = repo.get_material_version(str(item["material_version_id"]))
+        material = repo.get_material(version.material_id, include_archived=True) if version else None
+        if version is None or material is None:
+            raise TrackingError("Material version is unavailable", status_code=409, code="material_unavailable")
+        if material.kind == "message_template":
+            raise TrackingError("Message templates cannot be submission materials", status_code=422, code="invalid_item")
+        if material.id in seen_materials:
+            raise TrackingError("Duplicate material", status_code=422, code="duplicate_material")
+        if version.file_ref and not storage.exists(version.file_ref):
+            raise TrackingError("Material file is unavailable", status_code=409, code="material_unavailable")
+        seen_materials.add(material.id)
+        snapshot_items.append(
+            PacketSnapshotItem(
+                material_id=material.id,
+                material_version_id=version.id,
+                title=material.title,
+                kind=material.kind,
+                version_number=version.version_number,
+                version_label=version.version_label,
+                original_filename=version.original_filename,
+                file_ref=version.file_ref,
+                url=version.url,
+                material_purpose=list(material.purpose),
+                version_purpose=list(version.purpose),
+                material_notes=material.notes,
+                version_notes=version.notes,
+            )
+        )
+    snapshot = PacketSnapshot(
+        binding_ids=[item.binding_id for item in snapshot_items if item.binding_id],
+        material_version_ids=[item.material_version_id for item in snapshot_items if item.material_version_id],
+        items=snapshot_items,
+        note=note.strip(),
+    )
+    if snapshot.model_dump(mode="json") == effective.model_dump(mode="json"):
+        raise TrackingError("Materials did not change", status_code=422, code="no_material_changes")
+    revision = SubmissionMaterialRevision(
+        submission_id=submission_id,
+        revision=expected_revision + 1,
+        packet_snapshot=service.freeze_snapshot(
+            f"{submission_id}/revisions/{uuid.uuid4().hex}", snapshot
+        ),
+        note=note.strip(),
+        idempotency_key=key,
+        request_hash=request_hash,
+    )
+    status, stored = repo.insert_submission_material_revision(revision, expected_revision)
+    if status == "existing" and stored is not None:
+        if stored.request_hash != request_hash:
+            raise TrackingError("Idempotency key was used for another request", status_code=409, code="idempotency_conflict")
+        return stored
+    if status == "conflict":
+        raise TrackingError("Materials were corrected in another window", status_code=409, code="revision_conflict")
+    return revision
 
 
 def abandon_draft(repo: JobRepository, application_id: str) -> Job | None:

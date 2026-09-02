@@ -14,6 +14,8 @@ personal data). ``example_profile()`` seeds a realistic starting point.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -52,10 +54,20 @@ def save_profile(profile: Profile, path: Path | None = None) -> Path:
     path = path or DEFAULT_PROFILE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     data = profile.model_dump(mode="json", exclude_defaults=True)
-    path.write_text(
-        yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False),
-        encoding="utf-8",
+    payload = yaml.safe_dump(
+        data, sort_keys=False, allow_unicode=True, default_flow_style=False
     )
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temporary).replace(path)
+    finally:
+        temporary_path = Path(temporary)
+        if temporary_path.exists():
+            temporary_path.unlink()
     return path
 
 

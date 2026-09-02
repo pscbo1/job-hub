@@ -48,14 +48,19 @@ from job_sentinel.core.models import (
     JobRaw,
     JobTask,
     Material,
+    MaterialPresetItem,
+    MaterialUsePreset,
     MaterialVersion,
     PacketSnapshot,
+    SubmissionMaterialRevision,
+    TaskAttachment,
     TaskReminder,
     TaskReminderKind,
     compute_job_fingerprint,
     source_job_id_from_canonical_url,
 )
 from job_sentinel.sponsorship.models import SponsorshipInfo
+from job_sentinel.profile.models import Profile, ProfileVersion
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -63,7 +68,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 20
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -72,6 +77,7 @@ _JOBS_TABLE = "jobs"
 _JOBS_RAW_TABLE = "jobs_raw"
 _JOB_TASKS_TABLE = "job_tasks"
 _TASK_REMINDERS_TABLE = "task_reminders"
+_TASK_ATTACHMENTS_TABLE = "task_attachments"
 _SPONSOR_EMPLOYERS = "sponsor_employers"
 _SPONSOR_SYNC = "sponsor_registry_sync"
 _SUBMISSIONS_TABLE = "application_submissions"
@@ -81,6 +87,9 @@ _MATERIAL_VERSIONS_TABLE = "material_versions"
 _APP_BINDINGS_TABLE = "application_material_bindings"
 _COMM_NOTES_TABLE = "application_comm_notes"
 _MANUAL_APP_REQUESTS_TABLE = "manual_application_requests"
+_MATERIAL_PRESETS_TABLE = "material_use_presets"
+_SUBMISSION_REVISIONS_TABLE = "submission_material_revisions"
+_PROFILE_VERSIONS_TABLE = "profile_versions"
 _DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
 _UNSET: Any = object()
 _APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
@@ -193,7 +202,11 @@ class JobRepository:
         self._ensure_prd02_tables()
         self._ensure_job_tasks_table()
         self._ensure_task_reminders_table()
+        self._ensure_task_attachments_table()
         self._ensure_manual_application_requests_table()
+        self._ensure_material_use_presets_table()
+        self._ensure_submission_material_revisions_table()
+        self._ensure_profile_versions_table()
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -609,6 +622,14 @@ class JobRepository:
             self._db.execute("ALTER TABLE materials ADD COLUMN purpose TEXT NOT NULL DEFAULT '[]'")
         if "archived_at" not in material_cols:
             self._db.execute("ALTER TABLE materials ADD COLUMN archived_at TEXT")
+        if "direction" not in material_cols:
+            self._db.execute("ALTER TABLE materials ADD COLUMN direction TEXT")
+        if "language" not in material_cols:
+            self._db.execute("ALTER TABLE materials ADD COLUMN language TEXT")
+        if "is_pinned" not in material_cols:
+            self._db.execute(
+                "ALTER TABLE materials ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
+            )
         version_cols = {col.name for col in self._table(_MATERIAL_VERSIONS_TABLE).columns}
         version_alters = {
             "version_number": (
@@ -628,6 +649,9 @@ class JobRepository:
                 "ALTER TABLE material_versions ADD COLUMN byte_size INTEGER NOT NULL DEFAULT 0"
             ),
             "archived_at": "ALTER TABLE material_versions ADD COLUMN archived_at TEXT",
+            "version_date": "ALTER TABLE material_versions ADD COLUMN version_date TEXT",
+            "request_id": "ALTER TABLE material_versions ADD COLUMN request_id TEXT",
+            "request_hash": "ALTER TABLE material_versions ADD COLUMN request_hash TEXT",
         }
         for name, sql in version_alters.items():
             if name not in version_cols:
@@ -644,6 +668,66 @@ class JobRepository:
                 "ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
             )
         self._backfill_binding_material_ids()
+
+    def _ensure_material_use_presets_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS material_use_presets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                items TEXT NOT NULL DEFAULT '[]',
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self._table(_MATERIAL_PRESETS_TABLE).create_index(
+            ["normalized_name"], if_not_exists=True
+        )
+
+    def _ensure_submission_material_revisions_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS submission_material_revisions (
+                id TEXT PRIMARY KEY,
+                submission_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                packet_snapshot TEXT NOT NULL DEFAULT '{}',
+                note TEXT NOT NULL DEFAULT '',
+                idempotency_key TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(submission_id, revision),
+                UNIQUE(submission_id, idempotency_key)
+            )
+            """
+        )
+        table = self._table(_SUBMISSION_REVISIONS_TABLE)
+        table.create_index(["submission_id"], if_not_exists=True)
+        table.create_index(["submission_id", "request_hash"], if_not_exists=True)
+
+    def _ensure_profile_versions_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS profile_versions (
+                id TEXT PRIMARY KEY,
+                version_number INTEGER NOT NULL UNIQUE,
+                profile_json TEXT NOT NULL,
+                profile_schema_version INTEGER NOT NULL DEFAULT 1,
+                version_label TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                version_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,
+                request_hash TEXT NOT NULL
+            )
+            """
+        )
+        self._table(_PROFILE_VERSIONS_TABLE).create_index(
+            ["version_number"], if_not_exists=True
+        )
 
     def _backfill_binding_material_ids(self) -> None:
         """Resolve version→material_id and drop duplicate packet rows before UNIQUE."""
@@ -924,6 +1008,22 @@ class JobRepository:
         reminders.create_index(["due_date"], if_not_exists=True)
         reminders.create_index(["in_app_triggered_at"], if_not_exists=True)
 
+    def _ensure_task_attachments_table(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_attachments (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                file_ref TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                byte_size INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._table(_TASK_ATTACHMENTS_TABLE).create_index(["task_id"], if_not_exists=True)
+
     def _backfill_due_reminder_nodes(self) -> None:
         """Existing dated tasks get an On-due node only; no bulk advance dates."""
         now = _now_iso()
@@ -1003,6 +1103,15 @@ class JobRepository:
         if from_version < 16:
             self._ensure_task_reminders_table()
             self._backfill_due_reminder_nodes()
+        if from_version < 17:
+            self._ensure_materials_stub_tables()
+            self._ensure_material_use_presets_table()
+        if from_version < 18:
+            self._ensure_submission_material_revisions_table()
+        if from_version < 19:
+            self._ensure_task_attachments_table()
+        if from_version < 20:
+            self._ensure_profile_versions_table()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1358,7 +1467,9 @@ class JobRepository:
             [job_id],
             order_by="sort_order ASC, created_at ASC",
         )
-        return self._attach_task_reminders([_job_task_from_row(dict(r)) for r in rows])
+        return self._attach_task_attachments(
+            self._attach_task_reminders([_job_task_from_row(dict(r)) for r in rows])
+        )
 
     def list_job_tasks_for_jobs(self, job_ids: Sequence[str]) -> dict[str, list[JobTask]]:
         grouped: dict[str, list[JobTask]] = {jid: [] for jid in job_ids}
@@ -1371,7 +1482,9 @@ class JobRepository:
             list(ids),
             order_by="sort_order ASC, created_at ASC",
         )
-        tasks = self._attach_task_reminders([_job_task_from_row(dict(row)) for row in rows])
+        tasks = self._attach_task_attachments(
+            self._attach_task_reminders([_job_task_from_row(dict(row)) for row in rows])
+        )
         for task in tasks:
             grouped.setdefault(task.job_id, []).append(task)
         return grouped
@@ -1437,8 +1550,38 @@ class JobRepository:
             row = self._table(_JOB_TASKS_TABLE).get(task_id)
         except sqlite_utils.db.NotFoundError:
             return None
-        attached = self._attach_task_reminders([_job_task_from_row(dict(row))])
+        attached = self._attach_task_attachments(
+            self._attach_task_reminders([_job_task_from_row(dict(row))])
+        )
         return attached[0] if attached else None
+
+    def list_task_attachments(self, task_id: str) -> list[TaskAttachment]:
+        rows = self._table(_TASK_ATTACHMENTS_TABLE).rows_where(
+            "task_id = ?", [task_id], order_by="created_at ASC, id ASC"
+        )
+        return [_task_attachment_from_row(dict(row)) for row in rows]
+
+    def create_task_attachment(self, attachment: TaskAttachment) -> TaskAttachment:
+        self._table(_TASK_ATTACHMENTS_TABLE).insert(_task_attachment_to_row(attachment), pk="id")
+        task_row = self._table(_JOB_TASKS_TABLE).get(attachment.task_id)
+        if task_row:
+            self.touch_hub_job_activity(str(task_row["job_id"]))
+        return attachment
+
+    def delete_task_attachment(self, task_id: str, attachment_id: str) -> TaskAttachment | None:
+        rows = list(
+            self._table(_TASK_ATTACHMENTS_TABLE).rows_where(
+                "id = ? AND task_id = ?", [attachment_id, task_id]
+            )
+        )
+        if not rows:
+            return None
+        attachment = _task_attachment_from_row(dict(rows[0]))
+        task_row = self._table(_JOB_TASKS_TABLE).get(task_id)
+        self._table(_TASK_ATTACHMENTS_TABLE).delete(attachment_id)
+        if task_row:
+            self.touch_hub_job_activity(str(task_row["job_id"]))
+        return attachment
 
     def update_job_task(
         self,
@@ -1503,6 +1646,7 @@ class JobRepository:
         task = self.get_job_task(task_id)
         if task is None or task.job_id != job_id:
             return False
+        self._db.execute("DELETE FROM task_attachments WHERE task_id = ?", [task_id])
         self._table(_JOB_TASKS_TABLE).delete(task_id)
         self.touch_hub_job_activity(job_id)
         return True
@@ -1519,6 +1663,11 @@ class JobRepository:
             ]
             rows.sort(key=lambda row: (row.reminder_on, row.id))
             task.reminders = rows
+        return tasks
+
+    def _attach_task_attachments(self, tasks: list[JobTask]) -> list[JobTask]:
+        for task in tasks:
+            task.attachments = self.list_task_attachments(task.id)
         return tasks
 
     def list_reminders_for_tasks(self, task_ids: Sequence[str]) -> dict[str, list[TaskReminder]]:
@@ -2420,6 +2569,49 @@ class JobRepository:
     # Materials Library
     # ─────────────────────────────────────────────────────────────────────
 
+    def create_profile_version(self, version: ProfileVersion) -> ProfileVersion:
+        """Insert a master-profile snapshot and allocate its sequence atomically."""
+        conn = self._db.conn
+        rows = list(
+            self._table(_PROFILE_VERSIONS_TABLE).rows_where(
+                "request_id = ?", [version.request_id], limit=1
+            )
+        )
+        if rows:
+            existing = _profile_version_from_row(dict(rows[0]))
+            if existing.request_hash != version.request_hash:
+                raise ValueError("request_conflict")
+            return existing
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT COALESCE(MAX(version_number), 0) FROM profile_versions").fetchone()
+            allocated = int(current[0] or 0) + 1 if current else 1
+            version = version.model_copy(update={"version_number": allocated})
+            conn.execute(
+                "INSERT INTO profile_versions "
+                "(id, version_number, profile_json, profile_schema_version, version_label, notes, version_date, created_at, request_id, request_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                list(_profile_version_to_row(version).values()),
+            )
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        return version
+
+    def get_profile_version(self, version_id: str) -> ProfileVersion | None:
+        try:
+            row = self._table(_PROFILE_VERSIONS_TABLE).get(version_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        return _profile_version_from_row(dict(row))
+
+    def list_profile_versions(self, *, limit: int = 500) -> list[ProfileVersion]:
+        rows = self._table(_PROFILE_VERSIONS_TABLE).rows_where(
+            "1 = 1", order_by="version_number DESC", limit=limit
+        )
+        return [_profile_version_from_row(dict(row)) for row in rows]
+
     def create_material(self, material: Material) -> Material:
         self._table(_MATERIALS_TABLE).insert(_material_to_row(material))
         return material
@@ -2466,6 +2658,79 @@ class JobRepository:
         self._table(_MATERIALS_TABLE).update(material_id, fields)
         return True
 
+    def create_material_preset(self, preset: MaterialUsePreset) -> MaterialUsePreset:
+        self._table(_MATERIAL_PRESETS_TABLE).insert(_preset_to_row(preset))
+        return preset
+
+    def get_material_preset(self, preset_id: str) -> MaterialUsePreset | None:
+        try:
+            row = self._table(_MATERIAL_PRESETS_TABLE).get(preset_id)
+        except sqlite_utils.db.NotFoundError:
+            return None
+        return _preset_from_row(dict(row))
+
+    def list_material_presets(self) -> list[MaterialUsePreset]:
+        rows = self._table(_MATERIAL_PRESETS_TABLE).rows_where(
+            "1 = 1", [], order_by="updated_at DESC"
+        )
+        return [_preset_from_row(dict(row)) for row in rows]
+
+    def update_material_preset(
+        self,
+        preset_id: str,
+        *,
+        name: str,
+        normalized_name: str,
+        items: list[MaterialPresetItem],
+        expected_revision: int,
+    ) -> MaterialUsePreset | None:
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT * FROM {_MATERIAL_PRESETS_TABLE} WHERE id = ?", [preset_id]
+            ).fetchone()
+            if row is None or int(row["revision"] or 0) != expected_revision:
+                conn.rollback()
+                return None
+            now = _now_iso()
+            conn.execute(
+                f"UPDATE {_MATERIAL_PRESETS_TABLE} SET name = ?, normalized_name = ?, items = ?, revision = ?, updated_at = ? WHERE id = ?",
+                [
+                    name,
+                    normalized_name,
+                    json.dumps([item.model_dump(mode="json") for item in items]),
+                    expected_revision + 1,
+                    now,
+                    preset_id,
+                ],
+            )
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        return self.get_material_preset(preset_id)
+
+    def delete_material_preset(self, preset_id: str, expected_revision: int) -> bool | None:
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT revision FROM {_MATERIAL_PRESETS_TABLE} WHERE id = ?", [preset_id]
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                return False
+            if int(row[0] or 0) != expected_revision:
+                conn.rollback()
+                return None
+            conn.execute(f"DELETE FROM {_MATERIAL_PRESETS_TABLE} WHERE id = ?", [preset_id])
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        return True
+
     def touch_material(self, material_id: str) -> None:
         if self.get_material(material_id, include_archived=True) is None:
             return
@@ -2488,6 +2753,14 @@ class JobRepository:
     def create_material_version(self, version: MaterialVersion) -> MaterialVersion:
         self._table(_MATERIAL_VERSIONS_TABLE).insert(_version_to_row(version))
         return version
+
+    def find_material_version_by_request_id(self, request_id: str) -> MaterialVersion | None:
+        rows = list(
+            self._table(_MATERIAL_VERSIONS_TABLE).rows_where(
+                "request_id = ?", [request_id], limit=1
+            )
+        )
+        return _version_from_row(dict(rows[0])) if rows else None
 
     def get_material_version(self, version_id: str) -> MaterialVersion | None:
         try:
@@ -2521,6 +2794,9 @@ class JobRepository:
                 fields["archived_at"] = value.isoformat()
             elif value is None:
                 fields["archived_at"] = None
+        if "version_date" in fields:
+            value = fields["version_date"]
+            fields["version_date"] = value.isoformat() if isinstance(value, date) else value
         self._table(_MATERIAL_VERSIONS_TABLE).update(version_id, fields)
         return True
 
@@ -2532,6 +2808,77 @@ class JobRepository:
         except sqlite3.IntegrityError as exc:
             raise ValueError("Each material can appear once in a packet") from exc
         return binding
+
+    def append_submission_material_revision(self, revision: SubmissionMaterialRevision) -> None:
+        self._table(_SUBMISSION_REVISIONS_TABLE).insert(_revision_to_row(revision))
+
+    def insert_submission_material_revision(
+        self, revision: SubmissionMaterialRevision, expected_revision: int
+    ) -> tuple[str, SubmissionMaterialRevision | None]:
+        """Insert a correction while atomically checking key and revision."""
+        conn = self._db.conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing_row = conn.execute(
+                f"SELECT * FROM {_SUBMISSION_REVISIONS_TABLE} WHERE submission_id = ? AND idempotency_key = ?",
+                [revision.submission_id, revision.idempotency_key],
+            ).fetchone()
+            if existing_row is not None:
+                conn.commit()
+                return "existing", _revision_from_row(dict(existing_row))
+            row = conn.execute(
+                f"SELECT COALESCE(MAX(revision), 0) FROM {_SUBMISSION_REVISIONS_TABLE} WHERE submission_id = ?",
+                [revision.submission_id],
+            ).fetchone()
+            current = int(row[0] or 0) if row else 0
+            if current != expected_revision:
+                conn.rollback()
+                return "conflict", None
+            conn.execute(
+                f"INSERT INTO {_SUBMISSION_REVISIONS_TABLE} ({', '.join(_revision_to_row(revision).keys())}) VALUES ({', '.join('?' for _ in _revision_to_row(revision))})",
+                list(_revision_to_row(revision).values()),
+            )
+            conn.commit()
+            return "inserted", revision
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+
+    def get_submission_material_revision(
+        self, submission_id: str, revision: int
+    ) -> SubmissionMaterialRevision | None:
+        rows = list(
+            self._table(_SUBMISSION_REVISIONS_TABLE).rows_where(
+                "submission_id = ? AND revision = ?", [submission_id, revision], limit=1
+            )
+        )
+        return _revision_from_row(dict(rows[0])) if rows else None
+
+    def list_submission_material_revisions(
+        self, submission_id: str
+    ) -> list[SubmissionMaterialRevision]:
+        rows = self._table(_SUBMISSION_REVISIONS_TABLE).rows_where(
+            "submission_id = ?", [submission_id], order_by="revision DESC"
+        )
+        return [_revision_from_row(dict(row)) for row in rows]
+
+    def find_submission_revision_by_key(
+        self, submission_id: str, key: str
+    ) -> SubmissionMaterialRevision | None:
+        rows = list(
+            self._table(_SUBMISSION_REVISIONS_TABLE).rows_where(
+                "submission_id = ? AND idempotency_key = ?", [submission_id, key], limit=1
+            )
+        )
+        return _revision_from_row(dict(rows[0])) if rows else None
+
+    def latest_submission_material_revision(self, submission_id: str) -> SubmissionMaterialRevision | None:
+        rows = list(
+            self._table(_SUBMISSION_REVISIONS_TABLE).rows_where(
+                "submission_id = ?", [submission_id], order_by="revision DESC", limit=1
+            )
+        )
+        return _revision_from_row(dict(rows[0])) if rows else None
 
     def get_application_binding(self, binding_id: str) -> ApplicationMaterialBinding | None:
         try:
@@ -3066,6 +3413,85 @@ def _submission_from_row(row: dict[str, Any]) -> ApplicationSubmission:
     )
 
 
+def _preset_to_row(item: MaterialUsePreset) -> dict[str, Any]:
+    normalized = " ".join(item.name.strip().casefold().split())
+    return {
+        "id": item.id,
+        "name": item.name.strip(),
+        "normalized_name": normalized,
+        "items": json.dumps([entry.model_dump(mode="json") for entry in item.items]),
+        "revision": item.revision,
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+    }
+
+
+def _task_attachment_to_row(attachment: TaskAttachment) -> dict[str, Any]:
+    return {
+        "id": attachment.id,
+        "task_id": attachment.task_id,
+        "original_filename": attachment.original_filename,
+        "file_ref": attachment.file_ref,
+        "content_type": attachment.content_type,
+        "byte_size": attachment.byte_size,
+        "created_at": attachment.created_at.isoformat(),
+    }
+
+
+def _task_attachment_from_row(row: dict[str, Any]) -> TaskAttachment:
+    return TaskAttachment(
+        id=str(row.get("id") or ""),
+        task_id=str(row.get("task_id") or ""),
+        original_filename=str(row.get("original_filename") or ""),
+        file_ref=str(row.get("file_ref") or ""),
+        content_type=str(row.get("content_type") or "application/octet-stream"),
+        byte_size=int(row.get("byte_size") or 0),
+        created_at=_parse_dt(str(row.get("created_at") or "")),
+    )
+
+
+def _preset_from_row(row: dict[str, Any]) -> MaterialUsePreset:
+    raw = row.get("items") or "[]"
+    parsed = json.loads(raw) if isinstance(raw, str) else raw
+    entries = parsed if isinstance(parsed, list) else []
+    return MaterialUsePreset(
+        id=row["id"],
+        name=row.get("name") or "",
+        items=[MaterialPresetItem.model_validate(entry) for entry in entries if isinstance(entry, dict)],
+        revision=int(row.get("revision") or 1),
+        created_at=_parse_dt(row.get("created_at", "")),
+        updated_at=_parse_dt(row.get("updated_at", "")),
+    )
+
+
+def _revision_to_row(item: SubmissionMaterialRevision) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "submission_id": item.submission_id,
+        "revision": item.revision,
+        "packet_snapshot": json.dumps(item.packet_snapshot.model_dump(mode="json")),
+        "note": item.note,
+        "idempotency_key": item.idempotency_key,
+        "request_hash": item.request_hash,
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+def _revision_from_row(row: dict[str, Any]) -> SubmissionMaterialRevision:
+    raw = row.get("packet_snapshot") or "{}"
+    parsed = json.loads(raw) if isinstance(raw, str) else raw
+    return SubmissionMaterialRevision(
+        id=row["id"],
+        submission_id=row.get("submission_id", ""),
+        revision=int(row.get("revision") or 1),
+        packet_snapshot=PacketSnapshot.model_validate(parsed if isinstance(parsed, dict) else {}),
+        note=row.get("note") or "",
+        idempotency_key=row.get("idempotency_key") or "",
+        request_hash=row.get("request_hash") or "",
+        created_at=_parse_dt(row.get("created_at", "")),
+    )
+
+
 def _comm_note_to_row(item: ApplicationCommNote) -> dict[str, Any]:
     return {
         "id": item.id,
@@ -3126,8 +3552,11 @@ def _material_to_row(item: Material) -> dict[str, Any]:
         "id": item.id,
         "title": item.title,
         "kind": item.kind,
+        "direction": item.direction,
+        "language": item.language,
         "purpose": json.dumps(list(item.purpose)),
         "notes": item.notes,
+        "is_pinned": int(item.is_pinned),
         "archived_at": _optional_iso(item.archived_at),
         "created_at": item.created_at.isoformat(),
         "updated_at": item.updated_at.isoformat(),
@@ -3139,8 +3568,11 @@ def _material_from_row(row: dict[str, Any]) -> Material:
         id=row["id"],
         title=row.get("title") or "",
         kind=row.get("kind") or "other",
+        direction=(str(row.get("direction")).strip() or None) if row.get("direction") is not None else None,
+        language=row.get("language") or None,
         purpose=_purpose_from_row(row.get("purpose")),
         notes=row.get("notes") or "",
+        is_pinned=bool(row.get("is_pinned") or 0),
         archived_at=_parse_optional_dt(row.get("archived_at")),
         created_at=_parse_dt(row.get("created_at", "")),
         updated_at=_parse_dt(row.get("updated_at", "")),
@@ -3153,6 +3585,7 @@ def _version_to_row(item: MaterialVersion) -> dict[str, Any]:
         "material_id": item.material_id,
         "version_number": item.version_number,
         "version_label": item.version_label,
+        "version_date": item.version_date.isoformat() if item.version_date else None,
         "purpose": json.dumps(list(item.purpose)),
         "file_ref": item.file_ref,
         "original_filename": item.original_filename,
@@ -3160,6 +3593,8 @@ def _version_to_row(item: MaterialVersion) -> dict[str, Any]:
         "byte_size": item.byte_size,
         "url": item.url,
         "notes": item.notes,
+        "request_id": item.request_id,
+        "request_hash": item.request_hash,
         "archived_at": _optional_iso(item.archived_at),
         "created_at": item.created_at.isoformat(),
     }
@@ -3171,6 +3606,7 @@ def _version_from_row(row: dict[str, Any]) -> MaterialVersion:
         material_id=row.get("material_id", ""),
         version_number=int(row.get("version_number") or 1),
         version_label=row.get("version_label") or "",
+        version_date=date.fromisoformat(str(row["version_date"])[:10]) if row.get("version_date") else None,
         purpose=_purpose_from_row(row.get("purpose")),
         file_ref=row.get("file_ref") or "",
         original_filename=row.get("original_filename") or "",
@@ -3178,8 +3614,42 @@ def _version_from_row(row: dict[str, Any]) -> MaterialVersion:
         byte_size=int(row.get("byte_size") or 0),
         url=row.get("url") or "",
         notes=row.get("notes") or "",
+        request_id=row.get("request_id") or None,
+        request_hash=row.get("request_hash") or None,
         archived_at=_parse_optional_dt(row.get("archived_at")),
         created_at=_parse_dt(row.get("created_at", "")),
+    )
+
+
+def _profile_version_to_row(item: ProfileVersion) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "version_number": item.version_number,
+        "profile_json": item.profile.model_dump_json(),
+        "profile_schema_version": item.profile_schema_version,
+        "version_label": item.version_label,
+        "notes": item.notes,
+        "version_date": item.version_date.isoformat(),
+        "created_at": item.created_at.isoformat(),
+        "request_id": item.request_id,
+        "request_hash": item.request_hash,
+    }
+
+
+def _profile_version_from_row(row: dict[str, Any]) -> ProfileVersion:
+    raw = row.get("profile_json") or "{}"
+    parsed = json.loads(raw) if isinstance(raw, str) else raw
+    return ProfileVersion(
+        id=row["id"],
+        version_number=int(row.get("version_number") or 1),
+        profile=Profile.model_validate(parsed if isinstance(parsed, dict) else {}),
+        profile_schema_version=int(row.get("profile_schema_version") or 1),
+        version_label=row.get("version_label") or "",
+        notes=row.get("notes") or "",
+        version_date=date.fromisoformat(str(row.get("version_date"))[:10]),
+        created_at=_parse_dt(row.get("created_at", "")),
+        request_id=row.get("request_id") or "",
+        request_hash=row.get("request_hash") or "",
     )
 
 

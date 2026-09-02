@@ -2,10 +2,10 @@ import type { HubJob, JobTask } from "@/lib/api";
 import { compareByDueThenTitle, openTasks, taskBoardSection, type TaskDueUrgency } from "@/lib/jobPipeline";
 
 export const TASK_SECTIONS: { key: TaskDueUrgency; label: string }[] = [
-  { key: "overdue", label: "Overdue" },
   { key: "today", label: "Today" },
   { key: "upcoming", label: "Upcoming" },
   { key: "none", label: "No date" },
+  { key: "overdue", label: "Overdue" },
 ];
 
 export function jobMatchesTaskSearch(
