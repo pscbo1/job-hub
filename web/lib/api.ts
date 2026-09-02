@@ -2880,6 +2880,8 @@ export async function getInterviewQuestions(
 export interface CompanySource {
   id: string;
   company: string;
+  kind?: "company" | "vertical";
+  name?: string;
   collect_cn: boolean;
   collect_en: boolean;
   enabled: boolean;
@@ -2903,6 +2905,28 @@ export interface CompanySourceWrite {
   careers_url?: string;
 }
 
+
+export interface VerticalChannel {
+  id: string;
+  name: string;
+  kind?: "vertical";
+  channel_type: string;
+  handle: string;
+  enabled: boolean;
+  tags: string[];
+  note: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VerticalChannelWrite {
+  name: string;
+  channel_type?: string;
+  handle?: string;
+  enabled?: boolean;
+  tags?: string[];
+  note?: string;
+}
 export interface NotebookPage {
   id: string;
   title: string;
@@ -2955,6 +2979,54 @@ export async function patchCompanySource(
   }
 }
 
+
+export function getVerticalChannels(opts?: {
+  tag?: string;
+  channel_type?: string;
+}): Promise<{ channels: VerticalChannel[]; tags: string[] }> {
+  if (demo.DEMO) return Promise.resolve(demo.listDemoVerticalChannels(opts));
+  const params = new URLSearchParams();
+  if (opts?.tag) params.set("tag", opts.tag);
+  if (opts?.channel_type) params.set("channel_type", opts.channel_type);
+  const q = params.toString() ? `?${params.toString()}` : "";
+  return getJSON<{ channels: VerticalChannel[]; tags: string[] }>(`/api/vertical-channels${q}`, {
+    channels: [],
+    tags: [],
+  });
+}
+
+export async function createVerticalChannel(body: VerticalChannelWrite): Promise<VerticalChannel | null> {
+  if (demo.DEMO) return demo.createDemoVerticalChannel(body);
+  try {
+    const res = await fetch(`${API_BASE}/api/vertical-channels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as VerticalChannel;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchVerticalChannel(
+  id: string,
+  body: Partial<VerticalChannelWrite>,
+): Promise<VerticalChannel | null> {
+  if (demo.DEMO) return demo.patchDemoVerticalChannel(id, body);
+  try {
+    const res = await fetch(`${API_BASE}/api/vertical-channels/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as VerticalChannel;
+  } catch {
+    return null;
+  }
+}
 export function getNotebookPages(opts?: {
   q?: string;
   topic?: string;

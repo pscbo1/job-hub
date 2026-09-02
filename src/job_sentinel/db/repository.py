@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 
     from sqlite_utils.db import Table
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 _TABLE = "job_postings"
 _META_TABLE = "sentinel_meta"
 _APP_TABLE = "applications"
@@ -741,6 +741,9 @@ class JobRepository:
             CREATE TABLE IF NOT EXISTS source_registry (
                 id TEXT PRIMARY KEY,
                 company TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'company',
+                channel_type TEXT NOT NULL DEFAULT '',
+                handle TEXT NOT NULL DEFAULT '',
                 collect_cn INTEGER NOT NULL DEFAULT 0,
                 collect_en INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
@@ -758,11 +761,28 @@ class JobRepository:
             )
             """
         )
+        self._ensure_source_registry_kind_columns()
         table = self._table(_SOURCE_REGISTRY_TABLE)
         table.create_index(["company"], if_not_exists=True)
+        table.create_index(["kind"], if_not_exists=True)
         from job_sentinel.ingestion.source_registry import seed_source_registry
 
         seed_source_registry(self)
+
+    def _ensure_source_registry_kind_columns(self) -> None:
+        names = {col.name for col in self._table(_SOURCE_REGISTRY_TABLE).columns}
+        if "kind" not in names:
+            self._db.execute(
+                "ALTER TABLE source_registry ADD COLUMN kind TEXT NOT NULL DEFAULT 'company'"
+            )
+        if "channel_type" not in names:
+            self._db.execute(
+                "ALTER TABLE source_registry ADD COLUMN channel_type TEXT NOT NULL DEFAULT ''"
+            )
+        if "handle" not in names:
+            self._db.execute(
+                "ALTER TABLE source_registry ADD COLUMN handle TEXT NOT NULL DEFAULT ''"
+            )
 
     def _ensure_notebook_pages_table(self) -> None:
         self._db.execute(
@@ -1165,6 +1185,8 @@ class JobRepository:
         if from_version < 21:
             self._ensure_source_registry_table()
             self._ensure_notebook_pages_table()
+        if from_version < 22:
+            self._ensure_source_registry_table()
         self._set_meta("schema_version", str(SCHEMA_VERSION))
 
     # ─────────────────────────────────────────────────────────────────────
@@ -3013,9 +3035,17 @@ class JobRepository:
         return True
 
     def list_company_sources(self) -> list[CompanySource]:
-        rows = self._table(_SOURCE_REGISTRY_TABLE).rows_where(
-            "1 = 1", [], order_by="company COLLATE NOCASE ASC"
-        )
+        return self.list_source_registry(kind="company")
+
+    def list_source_registry(self, *, kind: str | None = None) -> list[CompanySource]:
+        if kind:
+            rows = self._table(_SOURCE_REGISTRY_TABLE).rows_where(
+                "kind = ?", [kind], order_by="company COLLATE NOCASE ASC"
+            )
+        else:
+            rows = self._table(_SOURCE_REGISTRY_TABLE).rows_where(
+                "1 = 1", [], order_by="company COLLATE NOCASE ASC"
+            )
         return [_company_source_from_row(dict(row)) for row in rows]
 
     def get_company_source(self, source_id: str) -> CompanySource | None:
@@ -3060,6 +3090,12 @@ class JobRepository:
             payload["ats"] = fields["ats"] or None
         if "slug" in fields:
             payload["slug"] = fields["slug"] or None
+        if "kind" in fields:
+            payload["kind"] = str(fields["kind"] or "company")
+        if "channel_type" in fields:
+            payload["channel_type"] = str(fields["channel_type"] or "")
+        if "handle" in fields:
+            payload["handle"] = str(fields["handle"] or "")
         if not payload:
             return self.get_company_source(source_id)
         payload["updated_at"] = _now_iso()
@@ -3127,6 +3163,9 @@ def _company_source_to_row(row: CompanySource) -> dict[str, Any]:
     return {
         "id": row.id,
         "company": row.company,
+        "kind": row.kind,
+        "channel_type": row.channel_type,
+        "handle": row.handle,
         "collect_cn": 1 if row.collect_cn else 0,
         "collect_en": 1 if row.collect_en else 0,
         "enabled": 1 if row.enabled else 0,
@@ -3150,6 +3189,9 @@ def _company_source_from_row(row: dict[str, Any]) -> CompanySource:
     return CompanySource(
         id=str(row["id"]),
         company=str(row.get("company") or ""),
+        kind="vertical" if str(row.get("kind") or "company") == "vertical" else "company",
+        channel_type=str(row.get("channel_type") or ""),
+        handle=str(row.get("handle") or ""),
         collect_cn=_as_bool(row.get("collect_cn")),
         collect_en=_as_bool(row.get("collect_en")),
         enabled=_as_bool(row.get("enabled", 1)),

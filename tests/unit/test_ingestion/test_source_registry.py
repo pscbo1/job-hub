@@ -11,7 +11,9 @@ from job_sentinel.db.repository import JobRepository
 from job_sentinel.ingestion.collect_sources import list_collect_sources, resolve_collect_sources
 from job_sentinel.ingestion.source_registry import (
     create_company_source,
+    create_vertical_channel,
     list_company_sources,
+    list_vertical_channels,
     seed_source_registry,
     update_company_source,
 )
@@ -114,3 +116,78 @@ def test_company_sources_api_and_collect_catalog(tmp_path: Path) -> None:
     assert nava_id not in collect_ids
     assert "dimagi" in collect_ids
     assert "zhaopin" not in collect_ids
+
+
+def test_vertical_channels_stay_out_of_company_and_collect(tmp_path: Path) -> None:
+    repo = JobRepository(tmp_path / "jobs.db")
+    try:
+        seed_source_registry(repo)
+        registry_ids = {row.id for row in repo.list_source_registry()}
+        assert "impactpool" not in registry_ids
+        assert "zhaopin" not in registry_ids
+        wechat = create_vertical_channel(
+            repo,
+            name="Research Circle",
+            channel_type="wechat",
+            handle="research_jobs",
+            tags=["research"],
+            note="Directory only",
+        )
+        create_vertical_channel(
+            repo,
+            name="Civic Discord",
+            channel_type="community",
+            tags=["civic"],
+        )
+        company_ids = {row.id for row in list_company_sources(repo)}
+        assert wechat.id not in company_ids
+        assert all(row.kind == "company" for row in list_company_sources(repo))
+        wechat_only = list_vertical_channels(repo, channel_type="wechat")
+        assert [row.id for row in wechat_only] == [wechat.id]
+        tagged = list_vertical_channels(repo, tag="research")
+        assert [row.id for row in tagged] == [wechat.id]
+        collect_ids = {spec.id for spec in list_collect_sources(repo=repo, enabled_only=False)}
+        assert wechat.id not in collect_ids
+        assert "impactpool" in collect_ids
+    finally:
+        repo.close()
+
+    client = TestClient(create_app(profile_path=tmp_path / "p.yaml", db_path=tmp_path / "api.db"))
+    created = client.post(
+        "/api/vertical-channels",
+        json={
+            "name": "Research Circle",
+            "channel_type": "wechat",
+            "handle": "research_jobs",
+            "tags": ["research"],
+            "note": "Directory only",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    channel_id = created.json()["id"]
+    assert created.json()["name"] == "Research Circle"
+    assert created.json()["kind"] == "vertical"
+    companies = client.get("/api/company-sources")
+    assert companies.status_code == 200
+    company_ids = {row["id"] for row in companies.json()["sources"]}
+    assert channel_id not in company_ids
+    assert all(row.get("kind") != "vertical" for row in companies.json()["sources"])
+    listed = client.get("/api/vertical-channels")
+    assert channel_id in {row["id"] for row in listed.json()["channels"]}
+    wechat = client.get("/api/vertical-channels", params={"channel_type": "wechat"})
+    assert {row["id"] for row in wechat.json()["channels"]} == {channel_id}
+    tagged = client.get("/api/vertical-channels", params={"tag": "research"})
+    assert channel_id in {row["id"] for row in tagged.json()["channels"]}
+    collect = client.get("/api/collect/sources")
+    collect_ids = {row["id"] for row in collect.json()["sources"]}
+    assert channel_id not in collect_ids
+    assert "impactpool" in collect_ids
+    assert client.patch(f"/api/company-sources/{channel_id}", json={"enabled": False}).status_code == 404
+    missing = client.post("/api/vertical-channels", json={"name": "   "})
+    assert missing.status_code == 400
+    bad_type = client.post(
+        "/api/vertical-channels",
+        json={"name": "Nope", "channel_type": "telegram"},
+    )
+    assert bad_type.status_code == 400

@@ -900,10 +900,13 @@ class ScrapeResult(BaseModel):
 
 
 class CompanySource(BaseModel):
-    """Company career row in ``source_registry``. Not a job listing."""
+    """One ``source_registry`` row. ``kind`` is company or vertical — never mixed in UI."""
 
     id: str
     company: str
+    kind: Literal["company", "vertical"] = "company"
+    channel_type: str = ""
+    handle: str = ""
     collect_cn: bool = False
     collect_en: bool = False
     enabled: bool = True
@@ -919,7 +922,7 @@ class CompanySource(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
-    @field_validator("company", "note", "collector_id", "integration", mode="before")
+    @field_validator("company", "note", "collector_id", "integration", "handle", mode="before")
     @classmethod
     def _strip_text(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v

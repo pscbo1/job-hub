@@ -1125,6 +1125,7 @@ export function demoChatReply(): { reply: string; source: "rules" } {
 type DemoCompanySource = {
   id: string;
   company: string;
+  kind: "company";
   collect_cn: boolean;
   collect_en: boolean;
   enabled: boolean;
@@ -1133,6 +1134,17 @@ type DemoCompanySource = {
   note: string;
   careers_url: string;
   runnable: boolean;
+};
+
+type DemoVerticalChannel = {
+  id: string;
+  name: string;
+  kind: "vertical";
+  channel_type: string;
+  handle: string;
+  enabled: boolean;
+  tags: string[];
+  note: string;
 };
 
 type DemoNotebookPage = {
@@ -1149,6 +1161,7 @@ let demoCompanySources: DemoCompanySource[] = [
   {
     id: "dimagi",
     company: "Dimagi",
+    kind: "company",
     collect_cn: false,
     collect_en: true,
     enabled: true,
@@ -1161,6 +1174,7 @@ let demoCompanySources: DemoCompanySource[] = [
   {
     id: "tencent",
     company: "Tencent",
+    kind: "company",
     collect_cn: true,
     collect_en: false,
     enabled: true,
@@ -1169,6 +1183,29 @@ let demoCompanySources: DemoCompanySource[] = [
     note: "CN careers board",
     careers_url: "",
     runnable: true,
+  },
+];
+
+let demoVerticalChannels: DemoVerticalChannel[] = [
+  {
+    id: "research-circle",
+    name: "Research Circle",
+    kind: "vertical",
+    channel_type: "wechat",
+    handle: "research_jobs",
+    enabled: true,
+    tags: ["research"],
+    note: "WeChat job posts — directory only. Auto Collect does not scrape this.",
+  },
+  {
+    id: "civic-discord",
+    name: "Civic Discord",
+    kind: "vertical",
+    channel_type: "community",
+    handle: "https://discord.gg/example",
+    enabled: true,
+    tags: ["civic"],
+    note: "Community referrals",
   },
 ];
 
@@ -1219,6 +1256,7 @@ export function createDemoCompanySource(body: {
   const row: DemoCompanySource = {
     id,
     company: body.company.trim(),
+    kind: "company",
     collect_cn: Boolean(body.collect_cn),
     collect_en: body.collect_en !== false || Boolean(body.collect_cn) ? Boolean(body.collect_en) : true,
     enabled: body.enabled !== false,
@@ -1250,6 +1288,62 @@ export function patchDemoCompanySource(
   if (!current) return null;
   const next = { ...current, ...body };
   demoCompanySources = demoCompanySources.map((row) => (row.id === id ? next : row));
+  return { ...next };
+}
+
+export function listDemoVerticalChannels(opts?: {
+  tag?: string;
+  channel_type?: string;
+}): { channels: DemoVerticalChannel[]; tags: string[] } {
+  const tags = [...new Set(demoVerticalChannels.flatMap((row) => row.tags))];
+  const wantedTag = opts?.tag?.trim().toLowerCase() ?? "";
+  const wantedType = opts?.channel_type?.trim().toLowerCase() ?? "";
+  const channels = demoVerticalChannels.filter((row) => {
+    if (wantedType && row.channel_type.toLowerCase() !== wantedType) return false;
+    if (wantedTag && !row.tags.some((item) => item.toLowerCase() === wantedTag)) return false;
+    return true;
+  });
+  return { channels: channels.map((row) => ({ ...row })), tags };
+}
+
+export function createDemoVerticalChannel(body: {
+  name: string;
+  channel_type?: string;
+  handle?: string;
+  enabled?: boolean;
+  tags?: string[];
+  note?: string;
+}): DemoVerticalChannel {
+  const id = body.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `channel-${Date.now()}`;
+  const row: DemoVerticalChannel = {
+    id,
+    name: body.name.trim(),
+    kind: "vertical",
+    channel_type: body.channel_type ?? "other",
+    handle: body.handle ?? "",
+    enabled: body.enabled !== false,
+    tags: body.tags ?? [],
+    note: body.note ?? "",
+  };
+  demoVerticalChannels = [...demoVerticalChannels, row];
+  return { ...row };
+}
+
+export function patchDemoVerticalChannel(
+  id: string,
+  body: Partial<{
+    name: string;
+    channel_type: string;
+    handle: string;
+    enabled: boolean;
+    tags: string[];
+    note: string;
+  }>,
+): DemoVerticalChannel | null {
+  const current = demoVerticalChannels.find((row) => row.id === id);
+  if (!current) return null;
+  const next = { ...current, ...body };
+  demoVerticalChannels = demoVerticalChannels.map((row) => (row.id === id ? next : row));
   return { ...next };
 }
 

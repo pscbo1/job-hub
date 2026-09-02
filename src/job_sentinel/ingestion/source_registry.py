@@ -1,7 +1,8 @@
-"""Company career rows in ``source_registry``.
+"""Company and vertical rows in ``source_registry``.
 
 YAML ``company_ats.yaml`` (plus built-in career pages like Tencent) seeds the
-table once. After that Collect reads the table; new companies are DB-only.
+company class once. Vertical channels are a separate class — never mixed into
+the company table or Auto Collect. After seed, new rows are DB-only.
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
 _SEED_META_KEY = "source_registry_seeded"
 _ID_SAFE = re.compile(r"[^a-z0-9]+")
 MAX_COMPANY_TAGS = 20
+VERTICAL_CHANNEL_TYPES = frozenset({"wechat", "community", "other"})
+COMPANY_KIND = "company"
+VERTICAL_KIND = "vertical"
 
 
 class SourceRegistryError(ValueError):
@@ -57,7 +61,7 @@ def list_company_sources(
     tag: str | None = None,
 ) -> list[CompanySource]:
     seed_source_registry(repo)
-    rows = repo.list_company_sources()
+    rows = [row for row in repo.list_company_sources() if row.kind == COMPANY_KIND]
     wanted = (tag or "").strip()
     if not wanted:
         return rows
@@ -72,7 +76,107 @@ def unique_company_tags(rows: Sequence[CompanySource]) -> list[str]:
 def list_company_collect_sources(repo: JobRepository) -> list[CollectSource]:
     """CollectSource rows for career pages currently in the table."""
     seed_source_registry(repo)
-    return [_company_to_collect(row) for row in repo.list_company_sources()]
+    return [
+        _company_to_collect(row)
+        for row in repo.list_company_sources()
+        if row.kind == COMPANY_KIND
+    ]
+
+
+def list_vertical_channels(
+    repo: JobRepository,
+    *,
+    tag: str | None = None,
+    channel_type: str | None = None,
+) -> list[CompanySource]:
+    seed_source_registry(repo)
+    rows = [row for row in repo.list_source_registry(kind=VERTICAL_KIND)]
+    wanted_type = (channel_type or "").strip().casefold()
+    if wanted_type:
+        rows = [row for row in rows if row.channel_type.casefold() == wanted_type]
+    wanted_tag = (tag or "").strip()
+    if wanted_tag:
+        key = wanted_tag.casefold()
+        rows = [row for row in rows if any(item.casefold() == key for item in row.tags)]
+    return rows
+
+
+def create_vertical_channel(
+    repo: JobRepository,
+    *,
+    name: str,
+    channel_type: str = "other",
+    handle: str = "",
+    enabled: bool = True,
+    tags: Sequence[object] = (),
+    note: str = "",
+) -> CompanySource:
+    seed_source_registry(repo)
+    label = name.strip()
+    if not label:
+        raise SourceRegistryError("Channel name is required")
+    typed = _require_channel_type(channel_type)
+    source_id = _unique_company_id(repo, label, fallback="channel")
+    row = CompanySource(
+        id=source_id,
+        company=label,
+        kind=VERTICAL_KIND,
+        channel_type=typed,
+        handle=handle.strip(),
+        collect_cn=False,
+        collect_en=False,
+        enabled=enabled,
+        include_in_run=False,
+        tags=normalize_application_tags(tags)[:MAX_COMPANY_TAGS],
+        note=note.strip(),
+        runnable=False,
+        collector_id=source_id,
+        integration="ats_board",
+    )
+    return repo.insert_company_source(row)
+
+
+def update_vertical_channel(
+    repo: JobRepository,
+    source_id: str,
+    **fields: Any,
+) -> CompanySource:
+    seed_source_registry(repo)
+    current = repo.get_company_source(source_id)
+    if current is None or current.kind != VERTICAL_KIND:
+        raise SourceRegistryError("Vertical channel not found", status_code=404)
+    updates: dict[str, Any] = {}
+    if "name" in fields and fields["name"] is not None:
+        label = str(fields["name"]).strip()
+        if not label:
+            raise SourceRegistryError("Channel name is required")
+        updates["company"] = label
+    if "company" in fields and fields["company"] is not None:
+        label = str(fields["company"]).strip()
+        if not label:
+            raise SourceRegistryError("Channel name is required")
+        updates["company"] = label
+    if "channel_type" in fields and fields["channel_type"] is not None:
+        updates["channel_type"] = _require_channel_type(str(fields["channel_type"]))
+    if "handle" in fields and fields["handle"] is not None:
+        updates["handle"] = str(fields["handle"]).strip()
+    if "enabled" in fields and fields["enabled"] is not None:
+        updates["enabled"] = bool(fields["enabled"])
+    if "tags" in fields and fields["tags"] is not None:
+        updates["tags"] = normalize_application_tags(fields["tags"])[:MAX_COMPANY_TAGS]
+    if "note" in fields and fields["note"] is not None:
+        updates["note"] = str(fields["note"]).strip()
+    updated = repo.update_company_source(source_id, **updates)
+    if updated is None:
+        raise SourceRegistryError("Vertical channel not found", status_code=404)
+    return updated
+
+
+def _require_channel_type(raw: str) -> str:
+    value = raw.strip().casefold() or "other"
+    if value not in VERTICAL_CHANNEL_TYPES:
+        raise SourceRegistryError("Type must be wechat, community, or other")
+    return value
 
 
 def create_company_source(
@@ -97,6 +201,7 @@ def create_company_source(
     row = CompanySource(
         id=source_id,
         company=name,
+        kind=COMPANY_KIND,
         collect_cn=cn,
         collect_en=en,
         enabled=enabled,
@@ -120,7 +225,7 @@ def update_company_source(
 ) -> CompanySource:
     seed_source_registry(repo)
     current = repo.get_company_source(source_id)
-    if current is None:
+    if current is None or current.kind != COMPANY_KIND:
         raise SourceRegistryError("Company source not found", status_code=404)
     updates: dict[str, Any] = {}
     if "company" in fields and fields["company"] is not None:
@@ -166,8 +271,8 @@ def _require_markets(collect_cn: bool, collect_en: bool) -> tuple[bool, bool]:
     return collect_cn, collect_en
 
 
-def _unique_company_id(repo: JobRepository, company: str) -> str:
-    base = _ID_SAFE.sub("-", company.strip().lower()).strip("-") or "company"
+def _unique_company_id(repo: JobRepository, company: str, *, fallback: str = "company") -> str:
+    base = _ID_SAFE.sub("-", company.strip().lower()).strip("-") or fallback
     candidate = base
     n = 2
     while repo.get_company_source(candidate) is not None:
@@ -193,6 +298,7 @@ def _collect_to_company(spec: CollectSource) -> CompanySource:
     return CompanySource(
         id=spec.id,
         company=(spec.company or spec.label).strip() or spec.id,
+        kind=COMPANY_KIND,
         collect_cn=cn,
         collect_en=en,
         enabled=spec.enabled,
@@ -215,6 +321,8 @@ def _as_integration(value: str) -> IntegrationMethod:
 
 
 def _company_to_collect(row: CompanySource) -> CollectSource:
+    if row.kind != COMPANY_KIND:
+        raise SourceRegistryError("Vertical channels are not collectable")
     return CollectSource(
         id=row.id,
         label=f"{row.company} Careers",

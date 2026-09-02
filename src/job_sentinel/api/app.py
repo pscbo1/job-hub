@@ -291,6 +291,34 @@ class CompanySourcePatchRequest(BaseModel):
         return v.strip() if isinstance(v, str) else v
 
 
+class VerticalChannelCreateRequest(BaseModel):
+    name: str
+    channel_type: str = "other"
+    handle: str = ""
+    enabled: bool = True
+    tags: list[str] = Field(default_factory=list)
+    note: str = ""
+
+    @field_validator("name", "channel_type", "handle", "note", mode="before")
+    @classmethod
+    def _strip_vertical_text(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+
+class VerticalChannelPatchRequest(BaseModel):
+    name: str | None = None
+    channel_type: str | None = None
+    handle: str | None = None
+    enabled: bool | None = None
+    tags: list[str] | None = None
+    note: str | None = None
+
+    @field_validator("name", "channel_type", "handle", "note", mode="before")
+    @classmethod
+    def _strip_vertical_optional(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+
 class NotebookPageWriteRequest(BaseModel):
     title: str | None = None
     markdown_body: str | None = None
@@ -1486,6 +1514,10 @@ def create_app(
         payload.pop("collector_id", None)
         payload.pop("integration", None)
         payload["careers_url"] = payload.get("careers_url") or ""
+        payload["name"] = payload.get("company") or ""
+        payload["kind"] = payload.get("kind") or "company"
+        payload["channel_type"] = payload.get("channel_type") or ""
+        payload["handle"] = payload.get("handle") or ""
         return payload
 
     def _registry_http(exc: Exception) -> HTTPException:
@@ -1548,6 +1580,72 @@ def create_app(
         repo = JobRepository(db_path)
         try:
             row = update_company_source(repo, source_id, **req.model_dump(exclude_unset=True))
+        except SourceRegistryError as exc:
+            raise _registry_http(exc) from exc
+        finally:
+            repo.close()
+        return _company_source_payload(row)
+
+    @app.get("/api/vertical-channels")
+    def list_vertical_channels(
+        tag: str | None = None,
+        channel_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Vertical channel class. Not companies and not Auto Collect."""
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.source_registry import (
+            list_vertical_channels as list_rows,
+            unique_company_tags,
+        )
+
+        repo = JobRepository(db_path)
+        try:
+            all_rows = list_rows(repo)
+            tags = unique_company_tags(all_rows)
+            rows = list_rows(repo, tag=tag, channel_type=channel_type)
+        finally:
+            repo.close()
+        return {"channels": [_company_source_payload(row) for row in rows], "tags": tags}
+
+    @app.post("/api/vertical-channels")
+    def create_vertical_channel_route(req: VerticalChannelCreateRequest) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.source_registry import (
+            SourceRegistryError,
+            create_vertical_channel,
+        )
+
+        repo = JobRepository(db_path)
+        try:
+            row = create_vertical_channel(
+                repo,
+                name=req.name,
+                channel_type=req.channel_type,
+                handle=req.handle,
+                enabled=req.enabled,
+                tags=req.tags,
+                note=req.note,
+            )
+        except SourceRegistryError as exc:
+            raise _registry_http(exc) from exc
+        finally:
+            repo.close()
+        return _company_source_payload(row)
+
+    @app.patch("/api/vertical-channels/{source_id}")
+    def patch_vertical_channel_route(
+        source_id: str,
+        req: VerticalChannelPatchRequest,
+    ) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.ingestion.source_registry import (
+            SourceRegistryError,
+            update_vertical_channel,
+        )
+
+        repo = JobRepository(db_path)
+        try:
+            row = update_vertical_channel(repo, source_id, **req.model_dump(exclude_unset=True))
         except SourceRegistryError as exc:
             raise _registry_http(exc) from exc
         finally:
