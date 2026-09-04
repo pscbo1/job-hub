@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Trust & Security",
   description:
-    "Job Sentinel's security posture: local-first by design, no telemetry, hardened supply chain, and responsible disclosure.",
+    "Job Hub's security posture: local-first by design, no telemetry, hardened supply chain, and responsible disclosure.",
 };
 
 export default function TrustCenter() {
@@ -59,12 +59,12 @@ export default function TrustCenter() {
       <h2>Responsible disclosure</h2>
       <p>
         Found a vulnerability? Please report it privately via our{" "}
-        <a href="https://github.com/harshitwandhare/job-sentinel/security" target="_blank" rel="noopener noreferrer">
+        <a href="https://github.com/pscbo1/job-hub/security" target="_blank" rel="noopener noreferrer">
           GitHub Security
         </a>{" "}
         page or by emailing{" "}
         <a href="mailto:harshitwandhare45@gmail.com">harshitwandhare45@gmail.com</a> — see{" "}
-        <a href="https://github.com/harshitwandhare/job-sentinel/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">
+        <a href="https://github.com/pscbo1/job-hub/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">
           SECURITY.md
         </a>
         . Please don&rsquo;t open public issues for security reports.
@@ -74,8 +74,8 @@ export default function TrustCenter() {
       <p>
         You don&rsquo;t have to take our word for any of this. The entire codebase is public and
         MIT-licensed — read it, run it, and verify the privacy claims yourself at{" "}
-        <a href="https://github.com/harshitwandhare/job-sentinel" target="_blank" rel="noopener noreferrer">
-          github.com/harshitwandhare/job-sentinel
+        <a href="https://github.com/pscbo1/job-hub" target="_blank" rel="noopener noreferrer">
+          github.com/pscbo1/job-hub
         </a>
         . For our regulatory posture, see the{" "}
         <a href="/legal/compliance">Compliance</a> page.

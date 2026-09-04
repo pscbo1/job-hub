@@ -64,7 +64,7 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
       href: "/dashboard",
       keywords: "overview funnel stats home",
     },
-    { label: "Chat", hint: "Ask Sentinel about your jobs", href: "/chat" },
+    { label: "Ask AI", hint: "Ask AI about your jobs", href: "/chat" },
     {
       label: "Settings",
       hint: "LLM providers, API keys, model config",

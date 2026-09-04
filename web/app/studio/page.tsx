@@ -48,7 +48,7 @@ export default function StudioPage() {
     if (!r)
       setMessage(
         "Could not reach the local engine — tailoring and PDF builds run on your machine. " +
-          "Run `job-sentinel web` locally (setup guide: github.com/harshitwandhare/job-sentinel).",
+          "Run `job-sentinel web` locally (setup guide: github.com/pscbo1/job-hub).",
       );
     setBusy(null);
   }

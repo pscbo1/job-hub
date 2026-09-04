@@ -4,7 +4,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Legal & Trust Center",
   description:
-    "Job Sentinel's legal and trust documents — privacy, terms, security, and compliance for a local-first, open-source platform.",
+    "Job Hub's legal and trust documents — privacy, terms, security, and compliance for a local-first, open-source platform.",
 };
 
 const CARDS = [
@@ -35,7 +35,7 @@ export default function LegalOverview() {
     <>
       <h2 className="!mt-0">Legal &amp; Trust Center</h2>
       <p>
-        Job Sentinel is an <strong>open-source, local-first</strong> career platform. That
+        Job Hub is an <strong>open-source, local-first</strong> career platform. That
         architecture shapes everything here: there is no central server holding your résumé,
         applications, or job history — it lives on your own machine, and you can read every line
         of the code that touches it. These pages spell out exactly how that works.
@@ -68,7 +68,7 @@ export default function LegalOverview() {
           own key only if you choose to, and only your prompts go to that provider.
         </li>
         <li>
-          <strong>You decide where to apply.</strong> Job Sentinel never auto-submits applications.
+          <strong>You decide where to apply.</strong> Job Hub never auto-submits applications.
         </li>
       </ul>
 

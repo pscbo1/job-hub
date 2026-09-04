@@ -46,13 +46,13 @@ export function Hero() {
         <div>
           <motion.div {...enter(0)} className="mb-7 flex items-center gap-4">
             <img
-              src="/brand/sentinel.png"
-              alt="Job Sentinel"
+              src="/brand/job-hub.png"
+              alt="Job Hub"
               className="h-16 w-16 rounded-2xl border border-white/15 bg-night object-cover shadow-2xl shadow-brand/20"
             />
             <div>
               <p className="text-sm font-medium uppercase tracking-[0.18em] text-brand-400">
-                Job Sentinel
+                Job Hub
               </p>
               <p className="mt-1 text-sm text-stone-400">Local-first career automation</p>
             </div>
@@ -80,7 +80,7 @@ export function Hero() {
           </motion.h1>
 
           <motion.p {...enter(0.2)} className="mt-6 max-w-xl text-lg leading-relaxed text-stone-300">
-            Job Sentinel watches your portals, tracks every posting and deadline, and generates
+            Job Hub watches your portals, tracks every posting and deadline, and generates
             ATS-ready résumés and cover letters tailored to each role by a{" "}
             <strong className="font-semibold text-white">local LLM</strong>. No API keys. No data
             leaving your machine.

@@ -13,10 +13,10 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://github.com/harshitwandhare/job-sentinel"),
+  metadataBase: new URL("https://github.com/pscbo1/job-hub"),
   title: {
-    default: "Job Sentinel — local-first job monitoring & AI résumé studio",
-    template: "%s · Job Sentinel",
+    default: "Job Hub — local-first job monitoring & AI résumé studio",
+    template: "%s · Job Hub",
   },
   description:
     "Monitor job portals, track every posting, and generate ATS-ready résumés tailored " +
@@ -29,10 +29,10 @@ export const metadata: Metadata = {
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
   openGraph: {
-    title: "Job Sentinel",
+    title: "Job Hub",
     description:
       "Local-first job monitoring, tracking, and AI resume tooling for your own machine.",
-    images: [{ url: "/brand/sentinel.png", width: 1024, height: 1024, alt: "Job Sentinel logo" }],
+    images: [{ url: "/brand/job-hub.png", width: 512, height: 512, alt: "Job Hub logo" }],
   },
 };
 
@@ -58,7 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="bg-brand px-4 py-1.5 text-center text-xs font-medium text-white">
             Live demo — showing sample data.{" "}
             <a
-              href="https://github.com/harshitwandhare/job-sentinel#-quick-start"
+              href="https://github.com/pscbo1/job-hub#-quick-start"
               target="_blank"
               rel="noopener noreferrer"
               className="underline underline-offset-2"
@@ -80,22 +80,22 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
               <p className="flex max-w-xs items-center gap-2 text-sm text-muted">
                 <img
-                  src="/brand/sentinel.png"
+                  src="/brand/job-hub.png"
                   alt=""
                   className="h-7 w-7 shrink-0 rounded-md object-cover"
                   aria-hidden="true"
                 />
                 <span>
-                  <span className="font-semibold text-ink">Job Sentinel</span> — local-first, open
+                  <span className="font-semibold text-ink">Job Hub</span> — local-first, open
                   source. Your data stays on your machine.
                 </span>
               </p>
               <div className="grid grid-cols-2 gap-x-10 gap-y-2 text-sm sm:grid-cols-3">
                 <div className="flex flex-col gap-2">
                   <span className="text-xs font-medium uppercase tracking-wider text-muted/60">Product</span>
-                  <a href="https://github.com/harshitwandhare/job-sentinel" className="text-muted hover:text-ink">GitHub</a>
+                  <a href="https://github.com/pscbo1/job-hub" className="text-muted hover:text-ink">GitHub</a>
                   <a href="https://pypi.org/project/job-sentinel/" className="text-muted hover:text-ink">PyPI</a>
-                  <a href="https://harshitwandhare.github.io/job-sentinel/" className="text-muted hover:text-ink">Docs</a>
+                  <a href="https://github.com/pscbo1/job-hub" className="text-muted hover:text-ink">Docs</a>
                 </div>
                 <div className="flex flex-col gap-2">
                   <span className="text-xs font-medium uppercase tracking-wider text-muted/60">Legal</span>
@@ -107,13 +107,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <span className="text-xs font-medium uppercase tracking-wider text-muted/60">Resources</span>
                   <a href="/legal/trust" className="text-muted hover:text-ink">Trust &amp; Security</a>
                   <a href="/legal" className="text-muted hover:text-ink">Legal center</a>
-                  <a href="https://github.com/harshitwandhare/job-sentinel/security" className="text-muted hover:text-ink">Report an issue</a>
+                  <a href="https://github.com/pscbo1/job-hub/issues" className="text-muted hover:text-ink">Report an issue</a>
                 </div>
               </div>
             </div>
             <div className="mt-8 flex flex-col items-center justify-between gap-2 border-t border-line pt-6 text-xs text-muted sm:flex-row">
-              <span>© 2026 Job Sentinel · MIT License</span>
-              <span>Built by Harshit Wandhare · Private by design — no telemetry, no tracking.</span>
+              <span>© 2026 Job Hub · MIT License</span>
+              <span>Private by design — no telemetry, no tracking.</span>
             </div>
           </div>
             </footer>

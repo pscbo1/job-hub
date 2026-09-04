@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Privacy Policy",
   description:
-    "Job Sentinel is local-first: the self-hosted app keeps your data on your machine, and the hosted demo collects no personal data.",
+    "Job Hub is local-first: the self-hosted app keeps your data on your machine, and the hosted demo collects no personal data.",
 };
 
 export default function PrivacyPolicy() {
@@ -13,14 +13,14 @@ export default function PrivacyPolicy() {
       <p className="text-sm text-muted">Effective: 14 June 2026</p>
 
       <p>
-        Job Sentinel (&ldquo;the Project&rdquo;, &ldquo;we&rdquo;) is an open-source, local-first
-        application maintained by Harshit Wandhare. This policy explains what data is — and isn&rsquo;t
-        — handled, across the two ways you can use Job Sentinel.
+        Job Hub (&ldquo;the Project&rdquo;, &ldquo;we&rdquo;) is an open-source, local-first
+        application (MIT fork of Job Sentinel by Harshit Wandhare). This policy explains what data is — and isn&rsquo;t
+        — handled, across the two ways you can use Job Hub.
       </p>
 
       <h2>1. The self-hosted app (the product)</h2>
       <p>
-        When you run Job Sentinel on your own machine, <strong>we operate no servers and receive
+        When you run Job Hub on your own machine, <strong>we operate no servers and receive
         none of your data.</strong> Your profile, tracked jobs, applications, generated résumés,
         portal credentials, and any local AI model all live in local files (e.g. a SQLite database
         and a <code>.env</code> file) on your hardware. We cannot see them, and nothing is
@@ -90,7 +90,7 @@ export default function PrivacyPolicy() {
 
       <h2>5. Children</h2>
       <p>
-        Job Sentinel is not directed to children under 16 and we do not knowingly collect their data.
+        Job Hub is not directed to children under 16 and we do not knowingly collect their data.
       </p>
 
       <h2>6. Changes &amp; contact</h2>

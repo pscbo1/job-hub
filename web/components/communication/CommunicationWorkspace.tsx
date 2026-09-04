@@ -250,6 +250,7 @@ export function CommunicationWorkspace() {
     <main className="mx-auto max-w-6xl px-5 py-12">
       <CommunicationHeader
         settingsOpen={settingsOpen}
+        onRefresh={() => void load()}
         onToggleSettings={() => setSettingsOpen((value) => !value)}
         onManual={() => setManualOpen(true)}
       />

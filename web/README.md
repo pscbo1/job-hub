@@ -1,6 +1,6 @@
-# Job Sentinel — Web UI
+# Job Hub — Web UI
 
-A local-first web surface over the Job Sentinel engine, built with **Next.js 15
+A local-first web surface over the local engine, built with **Next.js 15
 (App Router) + React 19 + TypeScript + Tailwind + framer-motion**. It talks to
 the local FastAPI backend through one typed client (`lib/api.ts`) — there's no
 business logic here, only views. Every call degrades gracefully to an empty

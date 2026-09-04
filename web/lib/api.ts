@@ -1,5 +1,5 @@
 ﻿/**
- * Typed client for the local Job Sentinel API (see src/job_sentinel/api/app.py).
+ * Typed client for the local API (see src/job_sentinel/api/app.py).
  * Every call degrades gracefully: on any failure it returns a safe empty value
  * instead of throwing, so pages render an empty state rather than a crash.
  *

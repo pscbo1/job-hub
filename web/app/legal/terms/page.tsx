@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Terms of Service",
   description:
-    "Terms for using Job Sentinel — MIT-licensed software provided as-is, acceptable use, and your responsibilities.",
+    "Terms for using Job Hub — MIT-licensed software provided as-is, acceptable use, and your responsibilities.",
 };
 
 export default function TermsOfService() {
@@ -13,15 +13,15 @@ export default function TermsOfService() {
       <p className="text-sm text-muted">Effective: 14 June 2026</p>
 
       <p>
-        These terms govern your use of the Job Sentinel software and the hosted demo (together,
+        These terms govern your use of the Job Hub software and the hosted demo (together,
         &ldquo;the Service&rdquo;). By using the Service you agree to them. If you don&rsquo;t agree,
         don&rsquo;t use it.
       </p>
 
       <h2>1. The software &amp; license</h2>
       <p>
-        Job Sentinel is open-source software released under the{" "}
-        <a href="https://github.com/harshitwandhare/job-sentinel/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+        Job Hub is open-source software released under the{" "}
+        <a href="https://github.com/pscbo1/job-hub/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
           MIT License
         </a>
         . Your rights to use, copy, modify, and distribute the code are defined by that license, which
@@ -58,7 +58,7 @@ export default function TermsOfService() {
 
       <h2>4. Human-in-the-loop; no auto-apply</h2>
       <p>
-        Job Sentinel helps you find, track, and tailor — it <strong>does not auto-submit
+        Job Hub helps you find, track, and tailor — it <strong>does not auto-submit
         applications</strong> on your behalf. You decide where and what you apply to, and you are
         responsible for the accuracy and truthfulness of everything you submit.
       </p>

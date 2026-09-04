@@ -1,8 +1,10 @@
 <p align="center">
-  <img src=".github/assets/sentinel.png" alt="Job Sentinel logo" width="140" />
+  <img src=".github/assets/job-hub.png" alt="Job Hub logo" width="140" />
 </p>
 
-# Job Sentinel
+# Job Hub
+
+MIT fork of [Job Sentinel](https://github.com/harshitwandhare/job-sentinel) by Harshit Wandhare.
 
 > **Local-first career platform: multi-source job search, AI profile↔job match, application tracker, and ATS-tuned résumé generation, all on your own hardware.**
 

@@ -167,12 +167,7 @@ export function ConversationDetail({
           <Archive className="h-4 w-4" />
           {COMMUNICATION_COPY.archive}
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          className="text-red-700 hover:bg-red-50"
-          onClick={() => onAction("delete")}
-        >
+        <Button type="button" variant="outline" onClick={() => onAction("delete")}>
           <Trash2 className="h-4 w-4" />
           {COMMUNICATION_COPY.delete}
         </Button>

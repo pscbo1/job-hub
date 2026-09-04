@@ -27,7 +27,7 @@ const SECONDARY = [
   { href: "/interview", label: "Interview practice" },
   { href: "/career-archive", label: "Profile & resume" },
   { href: "/notebook", label: "Notebook" },
-  { href: "/chat", label: "Ask Sentinel" },
+  { href: "/chat", label: "Ask AI" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -208,7 +208,7 @@ export function Nav() {
       >
         <Link href="/" className="mb-5 flex items-center gap-2 px-1 font-semibold tracking-tight text-ink">
           <img
-            src="/brand/sentinel.png"
+            src="/brand/job-hub.png"
             alt=""
             className="h-8 w-8 rounded-lg border border-white/10 bg-night object-cover shadow-sm"
             aria-hidden="true"
@@ -294,7 +294,7 @@ export function Nav() {
             )}
           >
             <img
-              src="/brand/sentinel.png"
+              src="/brand/job-hub.png"
               alt=""
               className="h-8 w-8 rounded-lg border border-white/10 bg-night object-cover shadow-sm"
               aria-hidden="true"

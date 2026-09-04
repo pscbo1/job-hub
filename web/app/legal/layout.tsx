@@ -33,14 +33,14 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
         <a href="mailto:harshitwandhare45@gmail.com" className="text-brand hover:underline">
           harshitwandhare45@gmail.com
         </a>
-        . Job Sentinel is open source — you can read every line at{" "}
+        . Job Hub is open source — you can read every line at{" "}
         <a
-          href="https://github.com/harshitwandhare/job-sentinel"
+          href="https://github.com/pscbo1/job-hub"
           className="text-brand hover:underline"
           target="_blank"
           rel="noopener noreferrer"
         >
-          github.com/harshitwandhare/job-sentinel
+          github.com/pscbo1/job-hub
         </a>
         .
       </p>

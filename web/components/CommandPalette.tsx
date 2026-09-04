@@ -83,7 +83,7 @@ const ITEMS: Item[] = [
     label: "Docs",
     hint: "Setup, adapters, architecture",
     icon: BookOpen,
-    href: "https://harshitwandhare.github.io/job-sentinel/",
+    href: "https://github.com/pscbo1/job-hub",
     group: "Resources",
     external: true,
     keywords: "documentation guide help",
