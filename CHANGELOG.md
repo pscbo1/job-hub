@@ -23,6 +23,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ### Changed
 
+- **UX unify.** Work pages share one chrome: `text-3xl font-bold` titles, one muted subtitle, shared Button variants (one green primary per region; Keep dark; Archive outline; Delete danger), and Applications-style empty states. Communication is header → filters → Needs action / Saved conversations → list+detail, with Gmail, domestic capture, and rules in Settings. Today uses the shared API base and no longer treats existing records as an empty workspace. Nav GitHub points at `pscbo1/job-hub`; Command Palette uses Today and Overview.
 - New jobs have no Save/Reference until the user acts. Applied / Interview / Offer / Closed live only on Application. Closed is history.
 - Application close reasons remain optional (`not_selected` / `no_response` / `withdrew` / `other`). No required Close modal. No Rejected stage.
 - Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.
