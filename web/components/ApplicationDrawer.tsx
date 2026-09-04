@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { ApplicationAddTask } from "@/components/ApplicationAddTask";
 import { ApplicationTagsEditor } from "@/components/ApplicationTagsEditor";
 import { MaterialsArea, NotesPanel } from "@/components/ApplicationWorkspace";
@@ -269,14 +270,9 @@ export function ApplicationDrawer({
           <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm">
             Could not save {DRAWER_SAVE_STEP_LABELS[saveError]}. This application and unsaved drafts were kept.
             <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={saveBusy}
-                onClick={() => void saveShown()}
-                className="h-8 rounded-lg bg-ink px-3 text-xs text-white disabled:opacity-50"
-              >
+              <Button type="button" size="sm" disabled={saveBusy} onClick={() => void saveShown()}>
                 Retry
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -284,25 +280,15 @@ export function ApplicationDrawer({
           <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm">
             Unsaved changes on this application.
             <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={saveBusy}
-                onClick={() => void saveAndSwitch()}
-                className="h-8 rounded-lg bg-ink px-3 text-xs text-white disabled:opacity-50"
-              >
+              <Button type="button" size="sm" disabled={saveBusy} onClick={() => void saveAndSwitch()}>
                 {DIRTY_SWITCH_LABELS.save}
-              </button>
-              <button
-                type="button"
-                disabled={saveBusy}
-                onClick={discardAndSwitch}
-                className="h-8 rounded-lg border border-line px-3 text-xs disabled:opacity-50"
-              >
+              </Button>
+              <Button type="button" variant="outline" size="sm" disabled={saveBusy} onClick={discardAndSwitch}>
                 {DIRTY_SWITCH_LABELS.discard}
-              </button>
-              <button type="button" onClick={stay} className="h-8 rounded-lg border border-line px-3 text-xs">
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={stay}>
                 {DIRTY_SWITCH_LABELS.stay}
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -310,8 +296,9 @@ export function ApplicationDrawer({
           <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm">
             Unsaved changes. Save, discard, or stay on this application.
             <div className="mt-2 flex flex-wrap gap-2">
-              <button
+              <Button
                 type="button"
+                size="sm"
                 disabled={saveBusy}
                 onClick={async () => {
                   if (saveBusy) return;
@@ -321,29 +308,25 @@ export function ApplicationDrawer({
                     onClose();
                   }
                 }}
-                className="h-8 rounded-lg bg-ink px-3 text-xs text-white disabled:opacity-50"
               >
                 Save and close
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 disabled={saveBusy}
                 onClick={() => {
                   if (saveBusy) return;
                   setCloseArmed(false);
                   onClose();
                 }}
-                className="h-8 rounded-lg border border-line px-3 text-xs disabled:opacity-50"
               >
                 {DIRTY_SWITCH_LABELS.discard}
-              </button>
-              <button
-                type="button"
-                onClick={() => setCloseArmed(false)}
-                className="h-8 rounded-lg border border-line px-3 text-xs"
-              >
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setCloseArmed(false)}>
                 {DIRTY_SWITCH_LABELS.stay}
-              </button>
+              </Button>
             </div>
           </div>
         )}

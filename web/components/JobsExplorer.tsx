@@ -14,7 +14,10 @@ import {
   useJobPoolActions,
 } from "@/components/JobPoolActions";
 import { PopoverSelect } from "@/components/ui/popover-select";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
 import {
   getArchiveSettings,
   putArchiveSettings,
@@ -199,20 +202,12 @@ export function JobsExplorer({
     <div className="space-y-4">
       <div className="sticky top-14 z-10 -mx-1 space-y-3 rounded-2xl border border-line bg-bg/90 p-3 backdrop-blur-md md:top-0">
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowMore((v) => !v)}
-            className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-muted hover:border-ink/30 hover:text-ink"
-          >
-            Filter ▾
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSettings((v) => !v)}
-            className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-muted hover:border-ink/30 hover:text-ink"
-          >
+          <Button type="button" variant="outline" size="sm" onClick={() => setShowMore((v) => !v)}>
+            Filter
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowSettings((v) => !v)}>
             More
-          </button>
+          </Button>
           {pool === "excluded" && (
             <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900">
               Viewing excluded
@@ -221,13 +216,12 @@ export function JobsExplorer({
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-0 flex-1">
-            <input
+            <Input
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search title, company, location…"
               aria-label="Search jobs"
-              className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm placeholder:text-muted/70 focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             />
           </div>
         </div>
@@ -437,16 +431,22 @@ export function JobsExplorer({
       </div>
 
       {visible.length === 0 ? (
-        <Card>
-          <CardTitle>Nothing matches</CardTitle>
-          <CardSub className="mt-2">
-            {jobs.length === 0
-              ? pool === "excluded"
-                ? "No excluded jobs for this date range."
-                : "No jobs in the pool yet. Use Collect Jobs, or import with job-sentinel ingest."
-              : "Try a different search or filter."}
-          </CardSub>
-        </Card>
+        <EmptyState
+          title="Nothing matches"
+          action={
+            jobs.length === 0 && pool !== "excluded" ? (
+              <a href="/search" className={buttonVariants()}>
+                Collect Jobs
+              </a>
+            ) : undefined
+          }
+        >
+          {jobs.length === 0
+            ? pool === "excluded"
+              ? "No excluded jobs for this date range."
+              : "No jobs in the pool yet. Use Collect Jobs, or import with job-sentinel ingest."
+            : "Try a different search or filter."}
+        </EmptyState>
       ) : (
         <AnimatePresence initial={false} mode="popLayout">
           {visible.map((j, idx) => {

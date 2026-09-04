@@ -411,15 +411,16 @@ export default function SettingsPage() {
         <h2 className="mb-3 text-base font-semibold text-ink">Quick setup</h2>
         <div className="flex flex-wrap gap-2">
           {PRESETS.map((preset) => (
-            <button
+            <Button
               key={preset.provider}
               type="button"
+              variant="outline"
+              size="sm"
               onClick={() => applyPreset(preset, "both")}
               title={preset.note}
-              className="rounded-lg border border-line bg-surface px-3.5 py-2 text-sm text-ink transition-colors hover:border-ink/30 hover:bg-bg active:scale-[0.98]"
             >
               {preset.label}
-            </button>
+            </Button>
           ))}
         </div>
         <p className="mt-2 text-xs text-muted">

@@ -2,7 +2,8 @@
 
 export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; keywords?: string }[] =
   [
-    { label: "Home", hint: "Landing page", href: "/" },
+    { label: "Today", hint: "Suggested next steps", href: "/today", keywords: "today home start next" },
+    { label: "Overview", hint: "Landing page", href: "/", keywords: "home overview landing" },
     {
       label: "Collect Jobs",
       hint: "Collect jobs from Zhaopin, Liepin, Boss",

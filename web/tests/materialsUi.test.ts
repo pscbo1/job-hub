@@ -53,11 +53,13 @@ describe("materials list copy", () => {
     expect(MATERIAL_LANE_COPY.files.tab).toBe("Documents");
     expect(MATERIAL_LANE_COPY.files.add).toBe("Add document");
     expect(MATERIAL_LANE_COPY.files.search).toBe("Search documents");
+    expect(MATERIAL_LANE_COPY.files.emptyTitle).toBe("No documents");
     expect(MATERIAL_LANE_COPY.files.empty).toBe("No documents in this tab.");
     expect(MATERIAL_LANE_COPY.files.description).toMatch(/Resumes, cover letters/);
     expect(MATERIAL_LANE_COPY.knowledge.tab).toBe("Templates & Answers");
     expect(MATERIAL_LANE_COPY.knowledge.add).toBe("Add template or answer");
     expect(MATERIAL_LANE_COPY.knowledge.search).toBe("Search templates and answers");
+    expect(MATERIAL_LANE_COPY.knowledge.emptyTitle).toBe("No templates or answers");
     expect(MATERIAL_LANE_COPY.knowledge.empty).toBe("No templates or answers in this tab.");
     expect(MATERIAL_LANE_COPY.knowledge.description).toMatch(/Reusable messages/);
   });

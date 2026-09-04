@@ -31,7 +31,7 @@ const SECONDARY = [
   { href: "/settings", label: "Settings" },
 ];
 
-const REPO = "https://github.com/harshitwandhare/job-sentinel";
+const REPO = "https://github.com/pscbo1/job-hub";
 const NAV_HEIGHT = 56;
 
 /**

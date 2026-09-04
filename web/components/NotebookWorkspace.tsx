@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -77,11 +78,10 @@ export function NotebookWorkspace() {
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-10">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-brand">More</p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink">{NOTEBOOK_COPY.title}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted">{NOTEBOOK_COPY.subtitle}</p>
+          <h1 className="text-3xl font-bold tracking-tight text-ink">{NOTEBOOK_COPY.title}</h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted">{NOTEBOOK_COPY.subtitle}</p>
         </div>
         <Button type="button" onClick={() => void newPage()}>
           {NOTEBOOK_COPY.newPage}
@@ -162,7 +162,7 @@ export function NotebookWorkspace() {
                   onBlur={(event) => void save({ title: event.target.value })}
                   className="text-lg font-semibold"
                 />
-                <Button type="button" variant="outline" size="sm" onClick={() => void remove()}>
+                <Button type="button" variant="danger" size="sm" onClick={() => void remove()}>
                   {NOTEBOOK_COPY.delete}
                 </Button>
               </div>
@@ -179,7 +179,18 @@ export function NotebookWorkspace() {
               <p className="text-[11px] text-muted">{saving ? "Saving…" : "Saved when you leave the field."}</p>
             </div>
           ) : (
-            <p className="py-20 text-center text-sm text-muted">{NOTEBOOK_COPY.empty}</p>
+            <EmptyState
+              title={query || topic ? NOTEBOOK_COPY.emptySearchTitle : NOTEBOOK_COPY.emptyTitle}
+              action={
+                query || topic ? undefined : (
+                  <Button type="button" onClick={() => void newPage()}>
+                    {NOTEBOOK_COPY.newPage}
+                  </Button>
+                )
+              }
+            >
+              {query || topic ? NOTEBOOK_COPY.emptySearch : NOTEBOOK_COPY.empty}
+            </EmptyState>
           )}
         </section>
       </div>

@@ -8,7 +8,10 @@ import { JobContact } from "@/components/JobContact";
 import { JobTasks } from "@/components/JobTasks";
 import { SourceActionLink } from "@/components/SourceActionLink";
 import { TaskRemindersPanel } from "@/components/TaskRemindersPanel";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { getApplications, getCollectSources, getHubJob, getJobs, patchHubJob, patchJobTask, type ApplicationStage, type HubJob, type JobTask, updateApplication } from "@/lib/api";
 import { dateInputValue, isDateOverdue, openTasksSorted, taskChipText, taskDueUrgency } from "@/lib/jobPipeline";
@@ -189,30 +192,34 @@ export function TasksExplorer() {
 
   return (
     <div className="space-y-4">
-      <header className="flex flex-wrap items-center gap-3">
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Tasks</h1>
-        <div className="flex rounded-lg border border-line bg-surface p-0.5" role="tablist" aria-label="Task view">
-          <button type="button" role="tab" aria-selected={view === "tasks"} onClick={() => setView("tasks")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "tasks" ? "bg-ink text-white" : "text-muted")}>My tasks</button>
-          <button type="button" role="tab" aria-selected={view === "jobs"} onClick={() => setView("jobs")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "jobs" ? "bg-ink text-white" : "text-muted")}>By job</button>
+      <header className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-ink">Tasks</h1>
+            <p className="mt-1 text-sm text-muted">
+              Open next steps, deadlines, and drafts across your jobs.
+            </p>
+          </div>
+          <TaskRemindersPanel />
         </div>
-        <TaskRemindersPanel />
-        <div className="relative min-w-0 flex-1">
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tasks, role or company…"
-            aria-label="Search tasks, role or company"
-            className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm placeholder:text-muted/70 focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex rounded-lg border border-line bg-surface p-0.5" role="tablist" aria-label="Task view">
+            <button type="button" role="tab" aria-selected={view === "tasks"} onClick={() => setView("tasks")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "tasks" ? "bg-ink text-white" : "text-muted")}>My tasks</button>
+            <button type="button" role="tab" aria-selected={view === "jobs"} onClick={() => setView("jobs")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "jobs" ? "bg-ink text-white" : "text-muted")}>By job</button>
+          </div>
+          <div className="relative min-w-0 flex-1">
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search tasks, role or company…"
+              aria-label="Search tasks, role or company"
+            />
+          </div>
+          <Button type="button" variant="outline" onClick={() => setShowFilter((v) => !v)}>
+            Filter ▾
+          </Button>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowFilter((v) => !v)}
-          className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink"
-        >
-          Filter ▾
-        </button>
       </header>
       {missingTask && <p className="text-sm text-amber-800">{missingTask}</p>}
       {showFilter && (
@@ -291,13 +298,17 @@ export function TasksExplorer() {
         </div>
       )}
       {visible.length === 0 ? (
-        <Card>
-          <CardTitle>No tasks</CardTitle>
-          <CardSub className="mt-2">
-            Tasks appear when a job has a checklist item. Next steps are optional actions attached
-            to a task and can be filtered separately.
-          </CardSub>
-        </Card>
+        <EmptyState
+          title="No tasks"
+          action={
+            <a href="/jobs" className={buttonVariants({ variant: "dark" })}>
+              Open Discover
+            </a>
+          }
+        >
+          Tasks appear when a job has a checklist item. Next steps are optional actions attached
+          to a task and can be filtered separately.
+        </EmptyState>
       ) : view === "tasks" ? (
         <div className="overflow-x-auto rounded-lg border border-line bg-surface">
           <table className="w-full min-w-[760px] text-left text-sm">
