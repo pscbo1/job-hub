@@ -134,7 +134,7 @@ export default function ChatPage() {
     <div className="mx-auto flex h-[calc(100vh-7rem)] max-w-3xl flex-col px-5 py-8">
       <header className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-ink">Ask Sentinel</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-ink">Ask AI</h1>
           <p className="mt-1 text-sm text-muted">
             Deadlines, jobs, your profile, ATS scoring — or anything, via your local model.
           </p>
@@ -204,7 +204,7 @@ export default function ChatPage() {
         ))}
 
         {busy && (
-          <div className="flex items-end gap-2.5" aria-label="Sentinel is thinking">
+          <div className="flex items-end gap-2.5" aria-label="AI is thinking">
             <AssistantMark />
             <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md border border-line bg-bg px-4 py-3">
               {[0, 1, 2].map((i) => (
@@ -223,7 +223,7 @@ export default function ChatPage() {
             Couldn&apos;t reach the local engine — the assistant runs on your machine. Start it
             with <code className="font-mono">job-sentinel web</code>, or see the{" "}
             <a
-              href="https://github.com/harshitwandhare/job-sentinel#-quick-start"
+              href="https://github.com/pscbo1/job-hub#-quick-start"
               target="_blank"
               rel="noopener noreferrer"
               className="text-brand underline-offset-2 hover:underline"
@@ -244,7 +244,7 @@ export default function ChatPage() {
         }}
       >
         <label htmlFor="chat-input" className="sr-only">
-          Message Sentinel
+          Message AI
         </label>
         <textarea
           id="chat-input"

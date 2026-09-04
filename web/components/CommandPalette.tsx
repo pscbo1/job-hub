@@ -4,10 +4,13 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   BookOpen,
   Briefcase,
+  Building2,
+  Calendar,
   ClipboardList,
   CornerDownLeft,
   Files,
   Home,
+  Inbox,
   LayoutDashboard,
   LogIn,
   MessageSquare,
@@ -46,13 +49,17 @@ interface Item {
 
 const NAV_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   "/": Home,
+  "/today": Calendar,
   "/dashboard": LayoutDashboard,
   "/search": Search,
   "/chat": MessageSquare,
   "/jobs": Briefcase,
   "/applications": ClipboardList,
+  "/communication": Inbox,
   "/tasks": Package,
   "/materials": Files,
+  "/notebook": BookOpen,
+  "/company-sources": Building2,
   "/settings": Settings,
   "/login": LogIn,
 };
@@ -67,7 +74,7 @@ const ITEMS: Item[] = [
     label: "GitHub",
     hint: "Star the repo — it keeps the project alive",
     icon: GithubIcon,
-    href: "https://github.com/harshitwandhare/job-sentinel",
+    href: "https://github.com/pscbo1/job-hub",
     group: "Resources",
     external: true,
     keywords: "source star repository",
@@ -76,7 +83,7 @@ const ITEMS: Item[] = [
     label: "Docs",
     hint: "Setup, adapters, architecture",
     icon: BookOpen,
-    href: "https://harshitwandhare.github.io/job-sentinel/",
+    href: "https://github.com/pscbo1/job-hub",
     group: "Resources",
     external: true,
     keywords: "documentation guide help",
@@ -296,7 +303,7 @@ export function CommandPalette() {
                 <span aria-hidden="true" className="text-brand">
                   ◈
                 </span>
-                Job Sentinel
+                Job Hub
               </span>
             </div>
           </motion.div>

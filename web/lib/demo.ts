@@ -77,9 +77,9 @@ export const demoProfile: Profile = {
   ],
   projects: [
     {
-      name: "Job Sentinel",
+      name: "Job Hub",
       description: "Local-first, open-source job-search & résumé platform.",
-      url: "https://github.com/harshitwandhare/job-sentinel",
+      url: "https://github.com/pscbo1/job-hub",
       bullets: [
         "Pluggable job sources, BYO-LLM tailoring, ATS scoring, and an application tracker.",
       ],

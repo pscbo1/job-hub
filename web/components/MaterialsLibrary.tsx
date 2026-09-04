@@ -27,7 +27,11 @@ import {
 import { DIRTY_SWITCH_LABELS, isStaleGeneration } from "@/lib/recordDraft";
 import { cn } from "@/lib/utils";
 import type { Material, MaterialKind, MaterialVersion } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
+import { Textarea } from "@/components/ui/textarea";
 
 type Lane = MaterialLane;
 type SourceKind = "upload" | "link" | "text";
@@ -198,25 +202,22 @@ export function MaterialsLibrary({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Materials</h1>
-          <p className="mt-1 text-sm text-muted">
-            Documents and templates stay independent of application stage.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="rounded-md bg-ink px-3 py-2 text-sm font-medium text-white"
-          onClick={() => {
-            setCreating(true);
-            setCreateDraft(emptyCreate(lane === "knowledge" ? "message_template" : "resume"));
-            setCreateError(null);
-          }}
-        >
-          {MATERIAL_LANE_COPY[lane].add}
-        </button>
-      </div>
+      <PageHeader
+        title="Materials"
+        subtitle="Documents and templates stay independent of application stage."
+        actions={
+          <Button
+            type="button"
+            onClick={() => {
+              setCreating(true);
+              setCreateDraft(emptyCreate(lane === "knowledge" ? "message_template" : "resume"));
+              setCreateError(null);
+            }}
+          >
+            {MATERIAL_LANE_COPY[lane].add}
+          </Button>
+        }
+      />
 
       <div>
         <div className="flex flex-wrap gap-2">
@@ -239,11 +240,10 @@ export function MaterialsLibrary({
         <p className="mt-2 text-sm text-muted">{MATERIAL_LANE_COPY[lane].description}</p>
       </div>
 
-      <input
+      <Input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder={MATERIAL_LANE_COPY[lane].search}
-        className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm"
       />
 
       {notice ? <p className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</p> : null}
@@ -263,6 +263,25 @@ export function MaterialsLibrary({
         />
       ) : null}
 
+      {visible.length === 0 ? (
+        <EmptyState
+          title={MATERIAL_LANE_COPY[lane].emptyTitle}
+          action={
+            <Button
+              type="button"
+              onClick={() => {
+                setCreating(true);
+                setCreateDraft(emptyCreate(lane === "knowledge" ? "message_template" : "resume"));
+                setCreateError(null);
+              }}
+            >
+              {MATERIAL_LANE_COPY[lane].add}
+            </Button>
+          }
+        >
+          {MATERIAL_LANE_COPY[lane].empty}
+        </EmptyState>
+      ) : (
       <div className="overflow-x-auto rounded-lg border border-line">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="bg-bg text-xs uppercase tracking-wide text-muted">
@@ -295,16 +314,10 @@ export function MaterialsLibrary({
                 </tr>
               );
             })}
-            {visible.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-muted">
-                  {MATERIAL_LANE_COPY[lane].empty}
-                </td>
-              </tr>
-            ) : null}
           </tbody>
         </table>
       </div>
+      )}
 
       {selected ? (
         <MaterialDetail
@@ -353,11 +366,11 @@ function CreateForm({
       <h2 className="text-sm font-semibold">{MATERIAL_LANE_COPY[lane].createTitle}</h2>
       <label className="block text-sm">
         Name
-        <input
+        <Input
           required
           value={draft.title}
           onChange={(event) => onChange({ ...draft, title: event.target.value })}
-          className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2"
+          className="mt-1"
         />
       </label>
       <label className="block text-sm">
@@ -383,27 +396,27 @@ function CreateForm({
       </label>
       <label className="block text-sm">
         Purpose (optional)
-        <input
+        <Input
           value={draft.purpose}
           onChange={(event) => onChange({ ...draft, purpose: event.target.value })}
-          className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2"
+          className="mt-1"
           placeholder="cover letter, screening"
         />
       </label>
       <label className="block text-sm">
         Notes (optional)
-        <textarea
+        <Textarea
           value={draft.notes}
           onChange={(event) => onChange({ ...draft, notes: event.target.value })}
-          className="mt-1 min-h-[72px] w-full rounded-md border border-line bg-surface px-3 py-2"
+          className="mt-1 min-h-[72px]"
         />
       </label>
       <label className="block text-sm">
         Version label (optional)
-        <input
+        <Input
           value={draft.version_label}
           onChange={(event) => onChange({ ...draft, version_label: event.target.value })}
-          className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2"
+          className="mt-1"
         />
       </label>
       <div className="grid gap-3 sm:grid-cols-3">
@@ -414,11 +427,11 @@ function CreateForm({
       {isKnowledgeKind(draft.kind) ? (
         <label className="block text-sm">
           Content
-          <textarea
+          <Textarea
             required
             value={draft.content}
             onChange={(event) => onChange({ ...draft, content: event.target.value, source: "text" })}
-            className="mt-1 min-h-[160px] w-full rounded-md border border-line bg-surface px-3 py-2 font-mono text-sm"
+            className="mt-1 min-h-[160px] font-mono text-sm"
           />
         </label>
       ) : (
@@ -433,16 +446,12 @@ function CreateForm({
       )}
       {error ? <p className="text-sm text-rose-700">{error}</p> : null}
       <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-md bg-ink px-3 py-1.5 text-sm text-white disabled:opacity-50"
-        >
+        <Button type="submit" size="sm" disabled={busy}>
           {busy ? "Saving…" : "Save"}
-        </button>
-        <button type="button" onClick={onCancel} className="rounded-md border border-line px-3 py-1.5 text-sm">
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -656,22 +665,23 @@ function MaterialDetail({
         <div className="mb-4 rounded-md border border-amber-400 bg-amber-50 p-3 text-sm dark:bg-amber-950/40">
           Unsaved notes on another material.
           <div className="mt-2 flex gap-2">
-            <button type="button" className="rounded-md bg-ink px-2 py-1 text-white" onClick={() => void keep()}>
+            <Button type="button" size="sm" onClick={() => void keep()}>
               {DIRTY_SWITCH_LABELS.save}
-            </button>
-            <button type="button" className="rounded-md border border-line px-2 py-1" onClick={discard}>
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={discard}>
               {DIRTY_SWITCH_LABELS.discard}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="rounded-md border border-line px-2 py-1"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 onStay(held);
                 setPending(null);
               }}
             >
               {DIRTY_SWITCH_LABELS.stay}
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -680,9 +690,9 @@ function MaterialDetail({
           <p className="text-xs uppercase tracking-wide text-muted">{formatKind(held.kind)}</p>
           <h2 className="text-lg font-semibold">{held.title}</h2>
         </div>
-        <button type="button" onClick={onClose} className="rounded-md border border-line px-2 py-1 text-sm">
+        <Button type="button" variant="outline" size="sm" onClick={onClose}>
           Close
-        </button>
+        </Button>
       </div>
       <p className="mt-2 text-sm text-muted">{held.purpose.join(", ") || "No purpose set"}</p>
       <label className="mt-3 block text-sm">
@@ -705,29 +715,30 @@ function MaterialDetail({
       </label>
       {isKnowledgeKind(held.kind) ? (
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={() => void copyLatest()} className="rounded-md border border-line px-3 py-1.5 text-sm">
+          <Button type="button" variant="outline" size="sm" onClick={() => void copyLatest()}>
             {copied ? "Copied" : "Copy"}
-          </button>
+          </Button>
           {(packetMode || applicationId) && held.kind === "application_answer" ? (
-            <button type="button" className="rounded-md border border-line px-3 py-1.5 text-sm" onClick={() => void addAnswerToPacket()}>
+            <Button type="button" variant="outline" size="sm" onClick={() => void addAnswerToPacket()}>
               Add to Packet
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}
 
       <div className="mt-5 flex items-center justify-between">
         <h3 className="text-sm font-semibold">Versions</h3>
-        <button
+        <Button
           type="button"
-          className="rounded-md border border-line px-3 py-1.5 text-sm"
+          variant="outline"
+          size="sm"
           onClick={() => {
             setAdding(true);
             setError(null);
           }}
         >
           {isKnowledgeKind(held.kind) ? "Add version" : "Upload new version"}
-        </button>
+        </Button>
       </div>
       {adding ? (
         <form
@@ -762,16 +773,12 @@ function MaterialDetail({
           />
           {error ? <p className="text-sm text-rose-700">{error}</p> : null}
           <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={busy}
-              className="rounded-md bg-ink px-3 py-1.5 text-sm text-white disabled:opacity-50"
-            >
+            <Button type="submit" size="sm" disabled={busy}>
               {busy ? "Saving…" : "Save version"}
-            </button>
-            <button type="button" onClick={() => setAdding(false)} className="rounded-md border border-line px-3 py-1.5 text-sm">
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setAdding(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       ) : null}
@@ -809,9 +816,11 @@ function MaterialDetail({
             </li>
           ))}
       </ul>
-      <button
+      <Button
         type="button"
-        className="mt-6 text-sm text-rose-700"
+        variant="outline"
+        size="sm"
+        className="mt-6"
         onClick={async () => {
           await archiveMaterial(held.id);
           onClose();
@@ -819,7 +828,7 @@ function MaterialDetail({
         }}
       >
         Archive material
-      </button>
+      </Button>
       <p className="mt-3 text-xs text-muted">
         New library versions do not change existing application bindings.
       </p>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Job Sentinel — Clip to Track",
+  "name": "Job Hub — Clip to Track",
   "version": "0.1.0",
-  "description": "One-click job clip: extract a posting's details and save it straight to your local Job Sentinel tracker.",
+  "description": "One-click job clip: extract a posting's details and save it straight to your local Job Hub tracker.",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

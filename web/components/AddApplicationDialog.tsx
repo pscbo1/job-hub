@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import {
   createManualApplication,
   startApplicationForJob,
@@ -167,21 +168,12 @@ export function AddApplicationDialog({
               <p className="mt-1 text-sm text-muted">Your entered details have not been saved.</p>
             </div>
             <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                autoFocus
-                onClick={() => setConfirmDiscard(false)}
-                className="h-9 rounded-lg border border-line px-3 text-sm text-ink"
-              >
+              <Button type="button" variant="outline" autoFocus onClick={() => setConfirmDiscard(false)}>
                 Keep editing
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="h-9 rounded-lg bg-ink px-3 text-sm font-medium text-white"
-              >
+              </Button>
+              <Button type="button" variant="danger" onClick={onClose}>
                 Discard
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -286,22 +278,12 @@ export function AddApplicationDialog({
                   <p className="text-sm text-amber-900">{formError}</p>
                   {duplicate && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void openExisting()}
-                        className="h-9 rounded-lg bg-ink px-3 text-sm font-medium text-white disabled:opacity-50"
-                      >
+                      <Button type="button" variant="dark" size="sm" disabled={busy} onClick={() => void openExisting()}>
                         Use existing
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void submit(true)}
-                        className="h-9 rounded-lg border border-line bg-surface px-3 text-sm text-ink disabled:opacity-50"
-                      >
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void submit(true)}>
                         Create separately
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -323,22 +305,12 @@ export function AddApplicationDialog({
                 </button>
               </p>
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={requestClose}
-                  className="h-9 rounded-lg border border-line px-3 text-sm text-ink disabled:opacity-50"
-                >
+                <Button type="button" variant="outline" disabled={busy} onClick={requestClose}>
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void submit()}
-                  className="h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white disabled:opacity-60"
-                >
+                </Button>
+                <Button type="button" disabled={busy} onClick={() => void submit()}>
                   {busy ? "Creating…" : "Create draft"}
-                </button>
+                </Button>
               </div>
             </footer>
           </>

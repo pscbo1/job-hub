@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Job Sentinel are documented here.
+All notable changes to Job Hub are documented here.
 
 This project follows [Conventional Commits](https://conventionalcommits.org)
 and [Keep a Changelog](https://keepachangelog.com) format.
@@ -23,6 +23,8 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ### Changed
 
+- **UX unify.** Work pages share one chrome and one layout: title + subtitle on the left, one primary action on the right, filters under the header, then the main workspace. Communication triages in a list|detail split with Keep / Archive / Delete on the detail action bar (Delete is outline, same weight as Archive — not a red danger CTA); Gmail, capture, and rules stay in a Settings drawer. Today uses the shared API base and no longer treats existing records as an empty workspace. Nav GitHub points at `pscbo1/job-hub`; Command Palette uses Today and Overview.
+- **Job Hub branding.** User-visible chrome, favicons, extension name, and Ask AI labels use Job Hub; the CLI remains `job-sentinel`.
 - New jobs have no Save/Reference until the user acts. Applied / Interview / Offer / Closed live only on Application. Closed is history.
 - Application close reasons remain optional (`not_selected` / `no_response` / `withdrew` / `other`). No required Close modal. No Rejected stage.
 - Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.

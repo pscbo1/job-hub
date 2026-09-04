@@ -314,7 +314,7 @@ btnTrack.addEventListener("click", async () => {
     const isNetworkError = err instanceof TypeError && err.message.toLowerCase().includes("fetch");
     if (isNetworkError) {
       trackError.textContent =
-        'Job Sentinel is not running. Start it with: job-sentinel web';
+        'Job Hub is not running. Start it with: job-sentinel web';
     } else {
       trackError.textContent = `Error: ${err.message}`;
     }

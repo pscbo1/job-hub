@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createNotebookPage,
@@ -77,16 +79,15 @@ export function NotebookWorkspace() {
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-10">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-brand">More</p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink">{NOTEBOOK_COPY.title}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted">{NOTEBOOK_COPY.subtitle}</p>
-        </div>
-        <Button type="button" onClick={() => void newPage()}>
-          {NOTEBOOK_COPY.newPage}
-        </Button>
-      </header>
+      <PageHeader
+        title={NOTEBOOK_COPY.title}
+        subtitle={NOTEBOOK_COPY.subtitle}
+        actions={
+          <Button type="button" onClick={() => void newPage()}>
+            {NOTEBOOK_COPY.newPage}
+          </Button>
+        }
+      />
 
       <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <aside className="rounded-2xl border border-line bg-surface p-3">
@@ -162,7 +163,7 @@ export function NotebookWorkspace() {
                   onBlur={(event) => void save({ title: event.target.value })}
                   className="text-lg font-semibold"
                 />
-                <Button type="button" variant="outline" size="sm" onClick={() => void remove()}>
+                <Button type="button" variant="danger" size="sm" onClick={() => void remove()}>
                   {NOTEBOOK_COPY.delete}
                 </Button>
               </div>
@@ -179,7 +180,9 @@ export function NotebookWorkspace() {
               <p className="text-[11px] text-muted">{saving ? "Saving…" : "Saved when you leave the field."}</p>
             </div>
           ) : (
-            <p className="py-20 text-center text-sm text-muted">{NOTEBOOK_COPY.empty}</p>
+            <EmptyState title={query || topic ? NOTEBOOK_COPY.emptySearchTitle : NOTEBOOK_COPY.emptyTitle}>
+              {query || topic ? NOTEBOOK_COPY.emptySearch : NOTEBOOK_COPY.empty}
+            </EmptyState>
           )}
         </section>
       </div>

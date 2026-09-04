@@ -1,5 +1,5 @@
 ﻿/**
- * Typed client for the local Job Sentinel API (see src/job_sentinel/api/app.py).
+ * Typed client for the local API (see src/job_sentinel/api/app.py).
  * Every call degrades gracefully: on any failure it returns a safe empty value
  * instead of throwing, so pages render an empty state rather than a crash.
  *
@@ -13,7 +13,7 @@ import { parseMarketId, sourceInMarket } from "@/lib/markets";
 import type { CommonSearchFilters, SearchPreset } from "@/lib/searchCapabilities";
 import { jobBelongsOnTasks } from "@/lib/taskBoard";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
 export interface Link {
   label: string;

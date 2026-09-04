@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Job Sentinel",
-    short_name: "Sentinel",
+    name: "Job Hub",
+    short_name: "Job Hub",
     description: "Local-first job monitoring and AI resume tooling.",
     start_url: "/jobs",
     display: "standalone",

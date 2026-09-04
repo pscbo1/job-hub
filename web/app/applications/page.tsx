@@ -9,9 +9,12 @@ import { ApplicationViewOptions } from "@/components/ApplicationViewOptions";
 import { type Column, DataTable } from "@/components/DataTable";
 import { LocalSetupGuide } from "@/components/LocalSetupGuide";
 import { SubmitConfirm } from "@/components/SubmitConfirm";
-import { Card, CardSub, CardTitle } from "@/components/ui/card";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import {
+  API_BASE,
   type Application,
   type ApplicationStage,
   type HubJob,
@@ -43,8 +46,6 @@ import { cn } from "@/lib/utils";
 
 import styles from "./page.module.css";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
-
 function ExportMenu({ count }: { count: number }) {
   const [open, setOpen] = useState(false);
 
@@ -60,13 +61,15 @@ function ExportMenu({ count }: { count: number }) {
 
   return (
     <div className="relative">
-      <button
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
         onClick={() => setOpen((o) => !o)}
-        className="flex h-9 items-center gap-1.5 rounded-lg border border-line bg-surface px-3 text-sm text-ink shadow-sm hover:border-ink/30 transition-colors"
         aria-label="Export applications"
       >
         Export
-      </button>
+      </Button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
@@ -443,29 +446,20 @@ export default function ApplicationsPage() {
 
   return (
     <div className={cn("mx-auto max-w-[1280px] px-5 py-12", styles.page)}>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
-          <p className="mt-1 text-sm text-muted">
-            Track applications, next steps, and the materials you send.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <a
-            href="/applications/materials"
-            className="h-9 rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink shadow-sm hover:border-ink/30"
-          >
-            Manage materials
-          </a>
-          <button
-            type="button"
-            onClick={openAdd}
-            className="h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white shadow-sm"
-          >
-            Add application
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        title="Applications"
+        subtitle="Track applications, next steps, and the materials you send."
+        actions={
+          <>
+            <a href="/applications/materials" className={buttonVariants({ variant: "ghost" })}>
+              Manage materials
+            </a>
+            <Button type="button" onClick={openAdd}>
+              Add application
+            </Button>
+          </>
+        }
+      />
 
       <div className={cn("mb-4", styles.toolbar)}>
         <div className={styles.searchGroup}>
@@ -509,13 +503,9 @@ export default function ApplicationsPage() {
         </div>
         <div className={styles.actions}>
           {staleOnly && selected.length > 0 && (
-            <button
-              type="button"
-              onClick={() => void onCloseSelected()}
-              className="h-9 whitespace-nowrap rounded-lg border border-ink bg-ink px-3 text-sm text-white"
-            >
+            <Button type="button" variant="dark" size="sm" onClick={() => void onCloseSelected()}>
               Close selected ({selected.length})
-            </button>
+            </Button>
           )}
           <span className={cn("text-sm text-muted", styles.count)}>{visible.length} shown</span>
           <ApplicationViewOptions
@@ -594,21 +584,16 @@ export default function ApplicationsPage() {
         initialSortKey="title"
         initialSortDir="asc"
         empty={
-          <Card className="grid min-h-[12rem] place-items-center text-center">
-            <div className="max-w-xs space-y-1">
-              <CardTitle>No applications</CardTitle>
-              <CardSub>
-                Add an opportunity you found, or start an application from Discover.
-              </CardSub>
-              <button
-                type="button"
-                onClick={openAdd}
-                className="mt-3 h-9 rounded-lg bg-brand px-4 text-sm font-medium text-white"
-              >
+          <EmptyState
+            title="No applications"
+            action={
+              <Button type="button" onClick={openAdd}>
                 Add application
-              </button>
-            </div>
-          </Card>
+              </Button>
+            }
+          >
+            Add an opportunity you found, or start an application from Discover.
+          </EmptyState>
         }
       />
 

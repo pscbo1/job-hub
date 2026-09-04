@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   createCompanySource,
   getCompanySources,
@@ -144,21 +146,24 @@ export function CompanySourcesPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-5 py-10">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-brand">Collect</p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink">{MANAGE_SOURCES_COPY.title}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted">{MANAGE_SOURCES_COPY.subtitle}</p>
-        </div>
-        <div className="flex gap-2">
-          <Link href="/search" className="inline-flex h-10 items-center rounded-lg border border-line px-3 text-sm text-ink">
-            Back to Collect
-          </Link>
+      <PageHeader
+        title={MANAGE_SOURCES_COPY.title}
+        subtitle={
+          <>
+            {MANAGE_SOURCES_COPY.subtitle}
+            <span className="mt-1 block">
+              <Link href="/search" className="text-muted hover:text-ink">
+                Back to Collect
+              </Link>
+            </span>
+          </>
+        }
+        actions={
           <Button type="button" onClick={() => setAdding((value) => !value)}>
             {tab === "companies" ? COMPANY_SOURCES_COPY.add : VERTICAL_CHANNELS_COPY.add}
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <div className="flex gap-1 border-b border-line" role="tablist" aria-label="Manage sources sheets">
         {(["companies", "verticals"] as const).map((item) => (
@@ -190,6 +195,7 @@ export function CompanySourcesPage() {
           message={message}
           visible={companies}
           onSave={save}
+          onStartAdd={() => setAdding(true)}
         />
       ) : (
         <VerticalsSheet
@@ -203,6 +209,7 @@ export function CompanySourcesPage() {
           message={message}
           visible={channels}
           onSave={save}
+          onStartAdd={() => setAdding(true)}
         />
       )}
     </div>
@@ -220,6 +227,7 @@ function CompaniesSheet({
   message,
   visible,
   onSave,
+  onStartAdd,
 }: {
   adding: boolean;
   draft: {
@@ -239,6 +247,7 @@ function CompaniesSheet({
   message: string;
   visible: CompanySource[];
   onSave: (id: string, body: Partial<CompanySource>) => void;
+  onStartAdd: () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -392,7 +401,17 @@ function CompaniesSheet({
           </tbody>
         </table>
         {visible.length === 0 && (
-          <p className="px-3 py-8 text-center text-sm text-muted">{COMPANY_SOURCES_COPY.empty}</p>
+          <EmptyState
+            className="rounded-none border-0 shadow-none"
+            title="No companies yet"
+            action={
+              <Button type="button" onClick={onStartAdd}>
+                {COMPANY_SOURCES_COPY.add}
+              </Button>
+            }
+          >
+            {COMPANY_SOURCES_COPY.empty}
+          </EmptyState>
         )}
       </div>
     </div>
@@ -410,6 +429,7 @@ function VerticalsSheet({
   message,
   visible,
   onSave,
+  onStartAdd,
 }: {
   adding: boolean;
   draft: {
@@ -428,6 +448,7 @@ function VerticalsSheet({
   message: string;
   visible: CompanySource[];
   onSave: (id: string, body: Partial<CompanySource>) => void;
+  onStartAdd: () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -573,7 +594,17 @@ function VerticalsSheet({
           </tbody>
         </table>
         {visible.length === 0 && (
-          <p className="px-3 py-8 text-center text-sm text-muted">{VERTICAL_CHANNELS_COPY.empty}</p>
+          <EmptyState
+            className="rounded-none border-0 shadow-none"
+            title="No vertical channels yet"
+            action={
+              <Button type="button" onClick={onStartAdd}>
+                {VERTICAL_CHANNELS_COPY.add}
+              </Button>
+            }
+          >
+            {VERTICAL_CHANNELS_COPY.empty}
+          </EmptyState>
         )}
       </div>
     </div>

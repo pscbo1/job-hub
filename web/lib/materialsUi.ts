@@ -33,6 +33,7 @@ export const MATERIAL_LANE_COPY: Record<
     description: string;
     add: string;
     search: string;
+    emptyTitle: string;
     empty: string;
     createTitle: string;
   }
@@ -42,6 +43,7 @@ export const MATERIAL_LANE_COPY: Record<
     description: "Resumes, cover letters, portfolios, and supporting documents.",
     add: "Add document",
     search: "Search documents",
+    emptyTitle: "No documents",
     empty: "No documents in this tab.",
     createTitle: "Add document",
   },
@@ -50,6 +52,7 @@ export const MATERIAL_LANE_COPY: Record<
     description: "Reusable messages and application answers.",
     add: "Add template or answer",
     search: "Search templates and answers",
+    emptyTitle: "No templates or answers",
     empty: "No templates or answers in this tab.",
     createTitle: "Add template or answer",
   },

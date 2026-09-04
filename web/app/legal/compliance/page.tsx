@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Compliance",
   description:
-    "How Job Sentinel relates to GDPR/CCPA, the EU AI Act, and NYC Local Law 144 — a candidate-side tool, not a high-risk hiring system.",
+    "How Job Hub relates to GDPR/CCPA, the EU AI Act, and NYC Local Law 144 — a candidate-side tool, not a high-risk hiring system.",
 };
 
 export default function Compliance() {
@@ -11,13 +11,13 @@ export default function Compliance() {
     <>
       <h2 className="!mt-0">Compliance</h2>
       <p>
-        Job Sentinel&rsquo;s compliance posture follows directly from what it is: a{" "}
+        Job Hub&rsquo;s compliance posture follows directly from what it is: a{" "}
         <strong>candidate-side, local-first assistant</strong>. This is the honest map of what applies
         and why.
       </p>
 
       <h2>What kind of tool this is (and isn&rsquo;t)</h2>
-      <p>Job Sentinel helps a <strong>job seeker</strong>:</p>
+      <p>Job Hub helps a <strong>job seeker</strong>:</p>
       <ul>
         <li>monitor portals and search public job sources,</li>
         <li>track their own applications, and</li>
@@ -49,7 +49,7 @@ export default function Compliance() {
       <p>These principles apply to personal data, and the local-first design satisfies them by construction:</p>
       <table>
         <thead>
-          <tr><th>Principle</th><th>How Job Sentinel meets it</th></tr>
+          <tr><th>Principle</th><th>How Job Hub meets it</th></tr>
         </thead>
         <tbody>
           <tr><td>Data minimization</td><td>Only what you enter or fetch is stored — locally.</td></tr>

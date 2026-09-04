@@ -36,8 +36,12 @@ describe("command palette product cut", () => {
     expect(hrefs).not.toContain("/studio");
     expect(hrefs).not.toContain("/profile");
     expect(hrefs).not.toContain("/resumes");
+    expect(hrefs).toContain("/today");
     expect(hrefs).toContain("/tasks");
     expect(hrefs).toContain("/materials");
+    expect(labels).toContain("today");
+    expect(labels).toContain("overview");
+    expect(labels).not.toContain("home");
     expect(hrefs).not.toContain("/my-jobs");
     const applications = COMMAND_PALETTE_NAV.findIndex((item) => item.href === "/applications");
     const tasks = COMMAND_PALETTE_NAV.findIndex((item) => item.href === "/tasks");

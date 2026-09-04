@@ -1,6 +1,6 @@
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 
-const REPO = "https://github.com/harshitwandhare/job-sentinel";
+const REPO = "https://github.com/pscbo1/job-hub";
 
 /**
  * Shown wherever the local engine isn't reachable. On the hosted demo this is
@@ -15,7 +15,7 @@ export function LocalSetupGuide({ context = "This feature" }: { context?: string
       <div>
         <CardTitle>Run the engine locally</CardTitle>
         <CardSub className="mt-1">
-          {context} needs the local engine. Job Sentinel is{" "}
+          {context} needs the local engine. Job Hub is{" "}
           <strong>local-first by design</strong> — your portal credentials, scraped data, and
           the AI model never leave your machine, so the hosted demo only shows the surface.
         </CardSub>
@@ -25,7 +25,7 @@ export function LocalSetupGuide({ context = "This feature" }: { context?: string
         <li>
           Clone &amp; install:{" "}
           <code className="rounded bg-night px-1.5 py-0.5 font-mono text-xs text-brand-400">
-            git clone {REPO}.git && cd job-sentinel && uv sync --all-extras
+            git clone {REPO}.git && cd job-hub && uv sync --all-extras
           </code>
         </li>
         <li>
@@ -65,7 +65,7 @@ export function LocalSetupGuide({ context = "This feature" }: { context?: string
           Full setup guide →
         </a>
         <a
-          href="https://harshitwandhare.github.io/job-sentinel/"
+          href="https://github.com/pscbo1/job-hub"
           target="_blank"
           rel="noopener noreferrer"
           className="rounded-lg border border-line px-4 py-2 font-medium text-ink transition-colors hover:border-ink/30 hover:bg-surface"

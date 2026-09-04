@@ -10,7 +10,7 @@ export default function OfflinePage() {
       <p className="text-6xl font-bold text-stone-300">⚡</p>
       <h1 className="mt-4 text-2xl font-semibold text-ink">You&apos;re offline</h1>
       <p className="mt-2 text-muted">
-        Job Sentinel runs against your local API, which isn&apos;t reachable right now.
+        Job Hub runs against your local API, which isn&apos;t reachable right now.
         Reconnect and try again — your data never left your machine.
       </p>
       <div className="mt-6 flex justify-center">
