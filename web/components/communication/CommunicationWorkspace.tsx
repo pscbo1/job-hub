@@ -67,6 +67,9 @@ export function CommunicationWorkspace() {
           ? (data.items ?? []).find((x: Conversation) => x.id === current.id)
           : ((data.items ?? [])[0] ?? null),
       );
+    } catch {
+      setItems([]);
+      setSelected(null);
     } finally {
       setLoading(false);
     }
@@ -89,7 +92,8 @@ export function CommunicationWorkspace() {
             Object.keys(current).map((key) => [key, data[key] ?? current[key as keyof typeof current]]),
           ),
         }));
-      });
+      })
+      .catch(() => undefined);
     void fetch(`${API_BASE}/api/communication/accounts`)
       .then((res) => res.json())
       .then((data) => {
@@ -98,12 +102,14 @@ export function CommunicationWorkspace() {
           setGmailReady(Boolean(gmail.ready));
           setGmailConnected(Boolean(gmail.connected));
         }
-      });
+      })
+      .catch(() => undefined);
     void fetch(`${API_BASE}/api/communication/platforms`)
       .then((res) => res.json())
       .then((data) =>
         setPlatforms((data.items ?? []).filter((item: Platform) => item.mode !== "manual_only")),
-      );
+      )
+      .catch(() => undefined);
   }, []);
 
   async function saveSettings() {
