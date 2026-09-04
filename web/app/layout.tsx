@@ -113,7 +113,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
             <div className="mt-8 flex flex-col items-center justify-between gap-2 border-t border-line pt-6 text-xs text-muted sm:flex-row">
               <span>© 2026 Job Hub · MIT License</span>
-              <span>Private by design — no telemetry, no tracking.</span>
+              <span>
+                Based on{" "}
+                <a
+                  href="https://github.com/harshitwandhare/job-sentinel"
+                  className="underline underline-offset-2 hover:text-ink"
+                >
+                  Job Sentinel
+                </a>{" "}
+                by Harshit Wandhare ·{" "}
+                <a href="https://github.com/pscbo1/job-hub/blob/main/LICENSE" className="underline underline-offset-2 hover:text-ink">
+                  LICENSE
+                </a>
+              </span>
             </div>
           </div>
             </footer>
