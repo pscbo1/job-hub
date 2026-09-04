@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import subprocess
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+import httpx
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -33,6 +36,19 @@ from pydantic import BaseModel, Field, field_validator
 from job_sentinel.api.chat import ChatMessage, ChatReply
 from job_sentinel.api.chat import answer as chat_answer
 from job_sentinel.api.ops import OpsConfigError, OpsConflictError, get_runner
+from job_sentinel.communication.models import (
+    BrowserCapturePreviewRequest,
+    CommunicationActionRequest,
+    CommunicationConversation,
+    CommunicationMessage,
+    CommunicationPatch,
+    CommunicationTaskLink,
+    CommunicationJobCreate,
+    GmailSyncRequest,
+    ManualConversationCreate,
+    ManualRecordCreate,
+    ConversationLifecycle,
+)
 from job_sentinel.core.models import (
     Application,
     ApplicationCommNote,
@@ -72,6 +88,8 @@ _LOCAL_ORIGIN_REGEX = (
     r"|chrome-extension://[a-p]{32}"
     r"|moz-extension://[0-9a-f-]+"
 )
+_COMM_UNDO: dict[str, tuple[str, str, int]] = {}
+_GMAIL_FLOWS: dict[str, dict[str, str]] = {}
 
 
 def _application_payload(repo: Any, app: Application) -> dict[str, Any]:
@@ -1581,7 +1599,9 @@ def create_app(
         return _company_source_payload(row)
 
     @app.patch("/api/company-sources/{source_id}")
-    def patch_company_source_route(source_id: str, req: CompanySourcePatchRequest) -> dict[str, Any]:
+    def patch_company_source_route(
+        source_id: str, req: CompanySourcePatchRequest
+    ) -> dict[str, Any]:
         from job_sentinel.db.repository import JobRepository
         from job_sentinel.ingestion.source_registry import (
             SourceRegistryError,
@@ -2343,7 +2363,11 @@ def create_app(
         if not normalized or len(name.strip()) > 80:
             raise HTTPException(
                 status_code=422,
-                detail={"code": "invalid_request", "message": "Preset name is required (max 80 characters).", "context": {}},
+                detail={
+                    "code": "invalid_request",
+                    "message": "Preset name is required (max 80 characters).",
+                    "context": {},
+                },
             )
         seen: set[tuple[str, str | None]] = set()
         material_versions: dict[str, str] = {}
@@ -2352,23 +2376,60 @@ def create_app(
         for item in items:
             version = repo.get_material_version(item.material_version_id)
             if version is None:
-                raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Material version not found", "context": {}})
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "code": "not_found",
+                        "message": "Material version not found",
+                        "context": {},
+                    },
+                )
             key = (item.material_version_id, item.block_key)
             if key in seen:
-                raise HTTPException(status_code=422, detail={"code": "invalid_item", "message": "Duplicate preset item", "context": {}})
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "invalid_item",
+                        "message": "Duplicate preset item",
+                        "context": {},
+                    },
+                )
             seen.add(key)
             previous = material_versions.get(version.material_id)
             if previous is not None and previous != version.id:
-                raise HTTPException(status_code=422, detail={"code": "invalid_item", "message": "A preset may use one version per material", "context": {}})
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "invalid_item",
+                        "message": "A preset may use one version per material",
+                        "context": {},
+                    },
+                )
             material_versions[version.material_id] = version.id
             if item.block_key:
                 material = repo.get_material(version.material_id, include_archived=True)
                 if material is None:
-                    raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Material not found", "context": {}})
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "code": "not_found",
+                            "message": "Material not found",
+                            "context": {},
+                        },
+                    )
                 service = _materials()[1]
                 hydrated = service.hydrate_version(version)
-                if item.block_key not in {block.key for block in parse_material_blocks(version.id, hydrated.text)}:
-                    raise HTTPException(status_code=422, detail={"code": "invalid_item", "message": "Block does not belong to version", "context": {}})
+                if item.block_key not in {
+                    block.key for block in parse_material_blocks(version.id, hydrated.text)
+                }:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "code": "invalid_item",
+                            "message": "Block does not belong to version",
+                            "context": {},
+                        },
+                    )
         return normalized
 
     @app.post("/api/material-use-presets")
@@ -2376,8 +2437,17 @@ def create_app(
         repo, _service = _materials()
         try:
             normalized = _validate_preset(repo, req.name, req.items)
-            if any(row.name.strip().casefold() == normalized for row in repo.list_material_presets()):
-                raise HTTPException(status_code=409, detail={"code": "preset_name_conflict", "message": "Preset name already exists", "context": {}})
+            if any(
+                row.name.strip().casefold() == normalized for row in repo.list_material_presets()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "preset_name_conflict",
+                        "message": "Preset name already exists",
+                        "context": {},
+                    },
+                )
             preset = MaterialUsePreset(name=req.name.strip(), items=req.items)
             repo.create_material_preset(preset)
             return preset.model_dump(mode="json")
@@ -2385,19 +2455,44 @@ def create_app(
             repo.close()
 
     @app.patch("/api/material-use-presets/{preset_id}")
-    def patch_material_use_preset(preset_id: str, req: MaterialPresetPatchRequest) -> dict[str, Any]:
+    def patch_material_use_preset(
+        preset_id: str, req: MaterialPresetPatchRequest
+    ) -> dict[str, Any]:
         repo, _service = _materials()
         try:
             preset = repo.get_material_preset(preset_id)
             if preset is None:
-                raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Preset not found", "context": {}})
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "not_found", "message": "Preset not found", "context": {}},
+                )
             normalized = _validate_preset(repo, req.name, req.items)
             for row in repo.list_material_presets():
                 if row.id != preset_id and row.name.strip().casefold() == normalized:
-                    raise HTTPException(status_code=409, detail={"code": "preset_name_conflict", "message": "Preset name already exists", "context": {}})
-            updated = repo.update_material_preset(preset_id, name=req.name.strip(), normalized_name=normalized, items=req.items, expected_revision=req.expected_revision)
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "preset_name_conflict",
+                            "message": "Preset name already exists",
+                            "context": {},
+                        },
+                    )
+            updated = repo.update_material_preset(
+                preset_id,
+                name=req.name.strip(),
+                normalized_name=normalized,
+                items=req.items,
+                expected_revision=req.expected_revision,
+            )
             if updated is None:
-                raise HTTPException(status_code=409, detail={"code": "revision_conflict", "message": "Preset changed in another window", "context": {}})
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "revision_conflict",
+                        "message": "Preset changed in another window",
+                        "context": {},
+                    },
+                )
             return updated.model_dump(mode="json")
         finally:
             repo.close()
@@ -2408,9 +2503,19 @@ def create_app(
         try:
             deleted = repo.delete_material_preset(preset_id, expected_revision)
             if deleted is False:
-                raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Preset not found", "context": {}})
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "not_found", "message": "Preset not found", "context": {}},
+                )
             if deleted is None:
-                raise HTTPException(status_code=409, detail={"code": "revision_conflict", "message": "Preset changed in another window", "context": {}})
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "revision_conflict",
+                        "message": "Preset changed in another window",
+                        "context": {},
+                    },
+                )
             return {"ok": True}
         finally:
             repo.close()
@@ -2421,7 +2526,9 @@ def create_app(
 
         repo, service = _materials()
         try:
-            replay = bool(req.request_id and repo.find_material_version_by_request_id(req.request_id))
+            replay = bool(
+                req.request_id and repo.find_material_version_by_request_id(req.request_id)
+            )
             material = service.create_material(
                 title=req.title,
                 kind=req.kind,
@@ -2544,7 +2651,9 @@ def create_app(
 
         repo, service = _materials()
         try:
-            replay = bool(req.request_id and repo.find_material_version_by_request_id(req.request_id))
+            replay = bool(
+                req.request_id and repo.find_material_version_by_request_id(req.request_id)
+            )
             version = service.add_version(
                 material_id,
                 url=req.url,
@@ -2765,7 +2874,11 @@ def create_app(
         except TrackingError as exc:
             raise HTTPException(
                 status_code=exc.status_code,
-                detail={"code": exc.code or "request_failed", "message": exc.message, "context": {}},
+                detail={
+                    "code": exc.code or "request_failed",
+                    "message": exc.message,
+                    "context": {},
+                },
             ) from exc
         finally:
             repo.close()
@@ -2790,7 +2903,12 @@ def create_app(
                     "note": submission.notes,
                 }
             ]
-            rows.extend(row.model_dump(mode="json", exclude={"id", "submission_id", "idempotency_key", "request_hash"}) for row in repo.list_submission_material_revisions(sub_id))
+            rows.extend(
+                row.model_dump(
+                    mode="json", exclude={"id", "submission_id", "idempotency_key", "request_hash"}
+                )
+                for row in repo.list_submission_material_revisions(sub_id)
+            )
             return {"revisions": rows}
         finally:
             repo.close()
@@ -3549,6 +3667,625 @@ def create_app(
         file_resp.headers["X-Document-Id"] = doc_id
         return file_resp
 
+    # ── Communication Hub (Slice 1 workspace + Slice 2 Gmail read-only sync) ──
+    @app.get("/api/communication/conversations")
+    def list_communication(
+        view: str = "pending", sources: str = "", market: str = "all", q: str = ""
+    ) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            repo.archive_expired_communication()
+            selected = [item.strip() for item in sources.split(",") if item.strip()] or None
+            rows = repo.list_communication_conversations(
+                view=view, sources=selected, market=market, query=q
+            )
+            return {"items": [item.model_dump(mode="json") for item in rows], "count": len(rows)}
+        finally:
+            repo.close()
+
+    @app.get("/api/communication/conversations/{conversation_id}")
+    def get_communication(conversation_id: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            item = repo.get_communication_conversation(conversation_id)
+            if item is None or item.lifecycle.value != "active":
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            return item.model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/conversations", status_code=201)
+    def create_communication(req: ManualConversationCreate) -> dict[str, Any]:
+        import uuid
+        from job_sentinel.db.repository import JobRepository
+
+        now = req.occurred_at or datetime.now(UTC)
+        conversation_id = uuid.uuid4().hex
+        message = CommunicationMessage(
+            id=uuid.uuid4().hex,
+            conversation_id=conversation_id,
+            body=req.summary,
+            summary=req.summary,
+            source=req.source,
+            channel=req.channel,
+            occurred_at=now,
+            is_actionable=req.needs_action,
+        )
+        item = CommunicationConversation(
+            id=conversation_id,
+            company=req.company,
+            role=req.role,
+            contact=req.contact,
+            source=req.source,
+            external_thread_id=req.external_thread_id,
+            market=req.market,
+            channel=req.channel,
+            job_id=req.job_id,
+            application_id=req.application_id,
+            retained=not req.needs_action,
+            messages=[message],
+            created_at=now,
+            updated_at=now,
+        )
+        repo = JobRepository(db_path)
+        try:
+            return repo.create_communication_conversation(
+                item, request_id=req.request_id
+            ).model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.patch("/api/communication/conversations/{conversation_id}")
+    def patch_communication(conversation_id: str, req: CommunicationPatch) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            item = repo.get_communication_conversation(conversation_id)
+            if (
+                item is None
+                or item.version != req.expected_version
+                or item.lifecycle.value != "active"
+            ):
+                raise HTTPException(status_code=409, detail="Conversation changed or hidden")
+            fields: list[str] = []
+            values: list[object] = []
+            for key in (
+                "job_id",
+                "application_id",
+                "stage",
+                "retained",
+                "retention_mode",
+                "retention_days",
+                "retain_until",
+            ):
+                value = getattr(req, key)
+                if value is not None:
+                    fields.append(f"{key}=?")
+                    values.append(
+                        value.value
+                        if hasattr(value, "value")
+                        else (
+                            int(value)
+                            if isinstance(value, bool)
+                            else (value.isoformat() if isinstance(value, datetime) else value)
+                        )
+                    )
+            if fields:
+                fields.extend(["version=version+1", "updated_at=?"])
+                values.extend([datetime.now(UTC).isoformat(), conversation_id])
+                repo._db.execute(
+                    f"UPDATE communication_conversations SET {','.join(fields)} WHERE id=?", values
+                )
+            return (repo.get_communication_conversation(conversation_id) or item).model_dump(
+                mode="json"
+            )
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/conversations/{conversation_id}/actions")
+    def communication_action(
+        conversation_id: str, req: CommunicationActionRequest
+    ) -> dict[str, Any]:
+        import uuid
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            before = repo.get_communication_conversation(conversation_id)
+            item = repo.communication_action(
+                conversation_id, req.action, req.visible_message_ids, req.expected_version
+            )
+            if item is None:
+                raise HTTPException(
+                    status_code=409, detail="Conversation changed; refresh and retry"
+                )
+            token = uuid.uuid4().hex
+            if before and req.action in {"archive", "delete"}:
+                _COMM_UNDO[token] = (conversation_id, before.lifecycle.value, before.version)
+            return {
+                "conversation": item.model_dump(mode="json"),
+                "undo_token": token if token in _COMM_UNDO else None,
+            }
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/actions/{token}/undo")
+    def undo_communication(token: str) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        saved = _COMM_UNDO.pop(token, None)
+        if not saved:
+            raise HTTPException(status_code=410, detail="Undo expired")
+        conversation_id, _lifecycle, version = saved
+        repo = JobRepository(db_path)
+        try:
+            repo._db.execute(
+                "UPDATE communication_conversations SET lifecycle='active',version=version+1,updated_at=? WHERE id=? AND version=?",
+                [datetime.now(UTC).isoformat(), conversation_id, version + 1],
+            )
+            item = repo.get_communication_conversation(conversation_id)
+            if not item:
+                raise HTTPException(status_code=409, detail="Conversation changed")
+            return item.model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/conversations/{conversation_id}/tasks")
+    def create_communication_task(
+        conversation_id: str, req: JobTaskCreateRequest
+    ) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            conversation = repo.get_communication_conversation(conversation_id)
+            if not conversation or conversation.lifecycle.value != "active":
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            if not conversation.job_id:
+                raise HTTPException(
+                    status_code=422, detail="Associate a Job before creating a task"
+                )
+            task = repo.create_job_task(
+                conversation.job_id,
+                title=req.title,
+                due_at=req.due_at,
+                notes=req.notes,
+                source_url=req.source_url,
+                application_id=conversation.application_id,
+            )
+            if task is None:
+                raise HTTPException(status_code=422, detail="Unable to create task for this Job")
+            return task.model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/conversations/{conversation_id}/tasks/link")
+    def link_communication_task(conversation_id: str, req: CommunicationTaskLink) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            conversation = repo.get_communication_conversation(conversation_id)
+            task = repo.get_job_task(req.task_id)
+            if not conversation or conversation.lifecycle.value != "active":
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            if not task or task.job_id != conversation.job_id:
+                raise HTTPException(status_code=422, detail="Task must belong to the linked Job")
+            if task.application_id and task.application_id != conversation.application_id:
+                raise HTTPException(status_code=409, detail="Task is linked to another application")
+            updated = repo.update_job_task(
+                task.job_id, task.id, {"application_id": conversation.application_id}
+            )
+            return (updated or task).model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.delete("/api/communication/conversations/{conversation_id}/tasks/{task_id}")
+    def unlink_communication_task(conversation_id: str, task_id: str) -> dict[str, bool]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            conversation = repo.get_communication_conversation(conversation_id)
+            task = repo.get_job_task(task_id)
+            if not conversation or not task or task.job_id != conversation.job_id:
+                raise HTTPException(status_code=404, detail="Task link not found")
+            repo.update_job_task(task.job_id, task.id, {"application_id": None})
+            return {"ok": True}
+        finally:
+            repo.close()
+
+    @app.get("/api/communication/accounts")
+    def communication_accounts() -> dict[str, Any]:
+        """Expose connection readiness without ever returning credentials."""
+        import os
+
+        gmail_credentials = Path(os.environ.get("GMAIL_CREDENTIALS_PATH", "").strip())
+        return {
+            "items": [
+                {
+                    "id": "gmail-primary",
+                    "source": "email",
+                    "label": "Gmail",
+                    "connected": bool(
+                        gmail_credentials.is_file() and (auth_dir / "gmail_token.json").is_file()
+                    ),
+                    "ready": gmail_credentials.is_file(),
+                    "scope": "gmail.readonly",
+                },
+            ]
+        }
+
+    @app.get("/api/communication/platforms")
+    def communication_platforms() -> dict[str, Any]:
+        from job_sentinel.communication.platforms import platform_manifest
+
+        return {"items": platform_manifest()}
+
+    @app.post("/api/communication/platforms/{platform_id}/preview")
+    def preview_browser_capture(
+        platform_id: str, req: BrowserCapturePreviewRequest
+    ) -> dict[str, Any]:
+        """Normalize user-invoked visible browser text without persisting it."""
+        from job_sentinel.communication.domestic import classify_capture
+
+        if platform_id in {"liepin", "zhilian"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Liepin and Zhaopin messages are available through the app; use Manual record.",
+            )
+        if platform_id != req.platform:
+            raise HTTPException(status_code=400, detail="Platform does not match capture")
+        text = req.visible_text.strip()
+        quality = classify_capture(text)
+        if not quality["is_actionable"]:
+            raise HTTPException(
+                status_code=422,
+                detail={"message": "Capture filtered", "reasons": quality["filter_reasons"]},
+            )
+        return {
+            "platform": req.platform,
+            "source": req.platform,
+            "channel": req.platform.upper(),
+            "company": req.company,
+            "role": req.role,
+            "contact": req.contact,
+            "external_thread_id": req.external_thread_id,
+            "summary": text[:240],
+            "visible_text": text,
+            "persisted": False,
+            **quality,
+        }
+
+    @app.get("/api/communication/platforms/{platform_id}/browser/tabs")
+    def domestic_browser_tabs(platform_id: str) -> dict[str, Any]:
+        from job_sentinel.communication.domestic import browser_tabs
+        from playwright.sync_api import Error as PlaywrightError
+
+        try:
+            return {"platform": platform_id, "items": browser_tabs(platform_id)}
+        except (OSError, RuntimeError, ValueError, PlaywrightError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/communication/platforms/{platform_id}/browser/start")
+    def start_domestic_browser(platform_id: str) -> dict[str, Any]:
+        if platform_id not in {"boss", "liepin", "zhilian"}:
+            raise HTTPException(status_code=404, detail="Unsupported domestic platform")
+        chrome = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+        profile = Path(r"E:\Projects\job-hub-pr3\.communication-chrome")
+        if not chrome.exists():
+            raise HTTPException(status_code=503, detail="Chrome is not installed at the configured path")
+        url = {
+            "boss": "https://www.zhipin.com/web/geek/chat",
+            "liepin": "https://www.liepin.com/",
+            "zhilian": "https://www.zhaopin.com/",
+        }[platform_id]
+        try:
+            subprocess.Popen(
+                [str(chrome), "--remote-debugging-port=9222", f"--user-data-dir={profile}",
+                 "--no-first-run", "--no-default-browser-check", "--start-minimized", url],
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            )
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail=f"Unable to start browser: {exc}") from exc
+        return {"started": True, "platform": platform_id, "requires_login": True}
+
+    @app.post("/api/communication/platforms/{platform_id}/browser/capture")
+    def domestic_browser_capture(platform_id: str) -> dict[str, Any]:
+        from job_sentinel.communication.domestic import classify_capture, parse_chat_list, visible_capture
+        from playwright.sync_api import Error as PlaywrightError
+
+        if platform_id in {"liepin", "zhilian"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Liepin and Zhaopin messages are available through the app; use Manual record.",
+            )
+        try:
+            capture = visible_capture(platform_id)
+        except (OSError, RuntimeError, ValueError, PlaywrightError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            settings = repo.get_communication_settings()
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/conversations/{conversation_id}/records", status_code=201)
+    def append_communication_record(conversation_id: str, req: ManualRecordCreate) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            current = repo.get_communication_conversation(conversation_id)
+            if current is None or current.lifecycle.value != "active":
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            occurred = req.occurred_at or datetime.now(UTC)
+            message = CommunicationMessage(
+                id=uuid.uuid4().hex,
+                conversation_id=conversation_id,
+                body=req.summary,
+                summary=req.summary,
+                source=current.source,
+                channel=req.channel,
+                occurred_at=occurred,
+                is_actionable=req.needs_action,
+            )
+            item = repo.append_communication_record(
+                conversation_id, message, request_id=req.request_id
+            )
+            if item is None:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            return item.model_dump(mode="json")
+        finally:
+            repo.close()
+
+    @app.get("/api/communication/jobs")
+    def communication_jobs(q: str = "", limit: int = 50) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            jobs = repo.list_hub_jobs(limit=max(1, min(limit, 100)), q=q.strip())
+            return {"items": [job.model_dump(mode="json") for job in jobs]}
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/jobs", status_code=201)
+    def create_communication_job(req: CommunicationJobCreate) -> dict[str, Any]:
+        from job_sentinel.db.repository import JobRepository
+
+        now = datetime.now(UTC)
+        job = Job(
+            source="manual",
+            source_job_id=uuid.uuid4().hex,
+            job_url=req.job_url,
+            canonical_url=req.job_url,
+            title=req.role,
+            company=req.company,
+            location=req.location,
+            market=req.market,
+            discovered_at=now,
+            last_seen_at=now,
+            updated_at=now,
+        )
+        repo = JobRepository(db_path)
+        try:
+            return repo.upsert_job(job).model_dump(mode="json")
+        finally:
+            repo.close()
+        skip_words = settings.get("skip_words", "")
+        # Page-level checks only reject platform-wide noise; user skip words
+        # are applied per parsed conversation so one low-quality item cannot
+        # hide all of the useful chats on the page.
+        quality = classify_capture(capture["visible_text"])
+        if not quality["is_actionable"]:
+            raise HTTPException(
+                status_code=422,
+                detail={"message": "Capture filtered", "reasons": quality["filter_reasons"]},
+            )
+        entries = [entry for entry in parse_chat_list(capture["visible_text"]) if classify_capture(entry["preview"], skip_words)["is_actionable"]]
+        return {**capture, **quality, "entries": entries, "persisted": False}
+
+    @app.get("/api/communication/settings")
+    def get_communication_settings() -> dict[str, str]:
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            return repo.get_communication_settings()
+        finally:
+            repo.close()
+
+    @app.patch("/api/communication/settings")
+    def patch_communication_settings(values: dict[str, str]) -> dict[str, str]:
+        allowed = {
+            "default_sources",
+            "default_market",
+            "retention_mode",
+            "keep_words",
+            "skip_words",
+            "stale_days",
+            "skip_companies",
+            "label_linkedin_noise",
+            "hide_gig_noise",
+        }
+        unknown = set(values) - allowed
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"Unknown setting: {sorted(unknown)[0]}")
+        from job_sentinel.db.repository import JobRepository
+
+        repo = JobRepository(db_path)
+        try:
+            return repo.update_communication_settings(values)
+        finally:
+            repo.close()
+
+    @app.post("/api/communication/accounts/gmail-primary/connect")
+    def connect_gmail_account(request: Request) -> dict[str, Any]:
+        import os
+
+        from job_sentinel.communication.gmail import GmailOAuth
+
+        credentials = Path(os.environ.get("GMAIL_CREDENTIALS_PATH", "").strip())
+        try:
+            flow = GmailOAuth(credentials, auth_dir / "gmail_token.json").begin(
+                str(request.base_url).rstrip("/")
+                + "/api/communication/accounts/gmail-primary/callback"
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        flow_id = uuid.uuid4().hex
+        _GMAIL_FLOWS[flow_id] = flow
+        return {"flow_id": flow_id, **flow}
+
+    @app.post("/api/communication/accounts/gmail-primary/disconnect")
+    def disconnect_gmail_account() -> dict[str, bool]:
+        token_path = auth_dir / "gmail_token.json"
+        try:
+            token_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail="Unable to clear Gmail connection") from exc
+        return {"connected": False}
+
+    @app.get("/api/communication/accounts/gmail-primary/callback")
+    def gmail_callback(code: str = "", state: str = "", error: str = "") -> dict[str, Any]:
+        import os
+
+        from job_sentinel.communication.gmail import GmailOAuth
+
+        if error:
+            raise HTTPException(status_code=400, detail=f"Google authorization failed: {error}")
+        match = next(
+            ((key, flow) for key, flow in _GMAIL_FLOWS.items() if flow.get("state") == state), None
+        )
+        if not match or not code:
+            raise HTTPException(status_code=400, detail="Invalid or expired Gmail OAuth callback")
+        flow_id, flow = match
+        try:
+            token = GmailOAuth(
+                Path(os.environ.get("GMAIL_CREDENTIALS_PATH", "").strip()),
+                auth_dir / "gmail_token.json",
+            ).exchange_code(code, flow["redirect_uri"])
+        except (OSError, ValueError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Gmail authorization failed: {exc}"
+            ) from exc
+        _GMAIL_FLOWS.pop(flow_id, None)
+        return {"connected": True, "scope": token.get("scope", "gmail.readonly")}
+
+    @app.post("/api/communication/accounts/gmail-primary/sync")
+    def sync_gmail_account(req: GmailSyncRequest) -> dict[str, Any]:
+        import os
+
+        from job_sentinel.db.repository import JobRepository
+        from job_sentinel.communication.gmail import (
+            assess_message_risk,
+            GmailOAuth,
+            gmail_conversation_from_message,
+            gmail_list_request,
+            gmail_message_request,
+            gmail_message_to_message,
+            message_matches_filters,
+        )
+
+        credentials = Path(os.environ.get("GMAIL_CREDENTIALS_PATH", "").strip())
+        oauth = GmailOAuth(credentials, auth_dir / "gmail_token.json")
+        try:
+            token = oauth.access_token()
+        except (OSError, ValueError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        repo = JobRepository(db_path)
+        try:
+            repo.archive_expired_communication()
+            settings = repo.get_communication_settings()
+            try:
+                stale_days = max(1, int(settings.get("stale_days", "30")))
+            except ValueError:
+                stale_days = 30
+            last_sync = settings.get("gmail_last_sync_at", "").strip()
+            if req.query:
+                query = req.query
+            elif last_sync:
+                try:
+                    query = f"after:{int(datetime.fromisoformat(last_sync).timestamp())}"
+                except ValueError:
+                    query = f"newer_than:{stale_days}d"
+            else:
+                query = f"newer_than:{stale_days}d"
+            listed: list[dict[str, Any]] = []
+            page_token: str | None = None
+            while len(listed) < req.max_messages:
+                listing = gmail_list_request(token, query=query, page_token=page_token)
+                listing.raise_for_status()
+                page = listing.json()
+                listed.extend(list(page.get("messages") or []))
+                page_token = str(page.get("nextPageToken") or "") or None
+                if not page_token:
+                    break
+            listed = listed[: req.max_messages]
+            ingested = 0
+            skipped = 0
+            for item in listed:
+                message_id = str(item.get("id") or "")
+                if not message_id:
+                    continue
+                detail = gmail_message_request(token, message_id)
+                detail.raise_for_status()
+                payload = dict(detail.json())
+                if not message_matches_filters(
+                    payload,
+                    keep_words=settings.get("keep_words", ""),
+                    skip_words=settings.get("skip_words", ""),
+                    stale_days=stale_days,
+                    skip_companies=settings.get("skip_companies", ""),
+                    label_linkedin_noise=settings.get("label_linkedin_noise", "true").lower()
+                    == "true",
+                    hide_gig_noise=settings.get("hide_gig_noise", "true").lower() == "true",
+                    own_email=settings.get("gmail_account_email", os.environ.get("GMAIL_ACCOUNT_EMAIL", "")),
+                ):
+                    skipped += 1
+                    continue
+                risk_level, risk_reasons = assess_message_risk(payload)
+                thread_id = str(payload.get("threadId") or message_id)
+                conversation_id = f"gmail:{thread_id}"
+                message = gmail_message_to_message(payload, conversation_id)
+                conversation = gmail_conversation_from_message(payload, message, conversation_id)
+                conversation.risk_level = risk_level
+                conversation.risk_reasons = risk_reasons
+                if risk_level == "high":
+                    conversation.lifecycle = ConversationLifecycle.QUARANTINED
+                repo.upsert_communication_email(conversation, message)
+                ingested += 1
+            repo.update_communication_settings(
+                {"gmail_last_sync_at": datetime.now(UTC).isoformat()}
+            )
+            return {
+                "ok": True,
+                "query": query,
+                "listed": len(listed),
+                "ingested": ingested,
+                "skipped": skipped,
+            }
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Gmail API request failed: {exc}") from exc
+        finally:
+            repo.close()
+
+    # Apply Communication retention once when the local service is constructed.
+    from job_sentinel.db.repository import JobRepository
+
+    startup_repo = JobRepository(db_path)
+    try:
+        startup_repo.archive_expired_communication()
+    finally:
+        startup_repo.close()
     return app
 
 

@@ -95,7 +95,7 @@ export default function DashboardPage() {
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Tracked roles" value={total} />
         <Stat label="Active (applied + interview)" value={active} />
-        <Stat label="Offers" value={stats.offer ?? 0} accent="text-emerald-600" />
+        <Stat label="Offers" value={stats.offer ?? 0} />
         <Stat label="Documents built" value={docs.length} />
       </div>
 

@@ -41,6 +41,7 @@ classifiers = [
 ]
 
 dependencies = [
+  "msal>=1.30",
   # ── Browser automation ─────────────────────────────────────────────────
   "playwright>=1.44",
 

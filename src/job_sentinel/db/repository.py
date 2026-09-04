@@ -24,13 +24,21 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlite_utils
 from loguru import logger
 from pydantic import ValidationError
 
+from job_sentinel.communication.models import (
+    CommunicationConversation,
+    CommunicationMarket,
+    CommunicationMessage,
+    CommunicationSource,
+    ConversationLifecycle,
+    ConversationStage,
+)
 from job_sentinel.core.models import (
     Application,
     ApplicationCommNote,
@@ -62,8 +70,8 @@ from job_sentinel.core.models import (
     normalize_registry_kind,
     source_job_id_from_canonical_url,
 )
-from job_sentinel.sponsorship.models import SponsorshipInfo
 from job_sentinel.profile.models import Profile, ProfileVersion
+from job_sentinel.sponsorship.models import SponsorshipInfo
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -95,6 +103,9 @@ _SUBMISSION_REVISIONS_TABLE = "submission_material_revisions"
 _PROFILE_VERSIONS_TABLE = "profile_versions"
 _SOURCE_REGISTRY_TABLE = "source_registry"
 _NOTEBOOK_PAGES_TABLE = "notebook_pages"
+_COMM_CONVERSATIONS_TABLE = "communication_conversations"
+_COMM_MESSAGES_TABLE = "communication_messages"
+_COMM_SETTINGS_TABLE = "communication_settings"
 _DROP_JOB_COLUMNS = frozenset({"applied_at", "close_reason"})
 _UNSET: Any = object()
 _APP_ACTIVE_SQL = "(deleted_at IS NULL OR deleted_at = '')"
@@ -214,6 +225,264 @@ class JobRepository:
         self._ensure_profile_versions_table()
         self._ensure_source_registry_table()
         self._ensure_notebook_pages_table()
+        self._ensure_communication_tables()
+
+    def _ensure_communication_tables(self) -> None:
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS communication_conversations (
+                id TEXT PRIMARY KEY, company TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT '',
+                contact TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, market TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT '', external_thread_id TEXT, lifecycle TEXT NOT NULL,
+                retained INTEGER NOT NULL DEFAULT 0, stage TEXT NOT NULL, job_id TEXT,
+                application_id TEXT, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL, request_id TEXT UNIQUE,
+                retention_mode TEXT NOT NULL DEFAULT '14_days', retention_days INTEGER, retain_until TEXT,
+                risk_level TEXT NOT NULL DEFAULT 'none', risk_reasons TEXT NOT NULL DEFAULT '[]'
+            )
+            """
+        )
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS communication_messages (
+                id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, channel TEXT NOT NULL DEFAULT '',
+                external_message_id TEXT, occurred_at TEXT NOT NULL, source_unread INTEGER NOT NULL DEFAULT 0,
+                seen_at TEXT, handled_at TEXT, workspace_visible INTEGER NOT NULL DEFAULT 1,
+                is_actionable INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(source, external_message_id)
+            )
+            """
+        )
+        self._table(_COMM_CONVERSATIONS_TABLE).create_index(["lifecycle", "retained"], if_not_exists=True)
+        names = {col.name for col in self._table(_COMM_CONVERSATIONS_TABLE).columns}
+        if "retention_mode" not in names:
+            self._db.execute("ALTER TABLE communication_conversations ADD COLUMN retention_mode TEXT NOT NULL DEFAULT '14_days'")
+        if "retention_days" not in names:
+            self._db.execute("ALTER TABLE communication_conversations ADD COLUMN retention_days INTEGER")
+        if "retain_until" not in names:
+            self._db.execute("ALTER TABLE communication_conversations ADD COLUMN retain_until TEXT")
+        if "risk_level" not in names:
+            self._db.execute("ALTER TABLE communication_conversations ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'none'")
+        if "risk_reasons" not in names:
+            self._db.execute("ALTER TABLE communication_conversations ADD COLUMN risk_reasons TEXT NOT NULL DEFAULT '[]'")
+        self._table(_COMM_MESSAGES_TABLE).create_index(["conversation_id"], if_not_exists=True)
+        self._db.execute("CREATE TABLE IF NOT EXISTS communication_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+
+    def get_communication_settings(self) -> dict[str, str]:
+        rows = self._db.execute("SELECT key,value FROM communication_settings").fetchall()
+        result = {str(key): str(value) for key, value in rows}
+        result.setdefault("default_sources", "email")
+        result.setdefault("default_market", "all")
+        result.setdefault("retention_mode", "14_days")
+        result.setdefault("keep_words", "")
+        result.setdefault("skip_words", "localization,localized,english teacher,英语教师,英语老师,高中英语,本地化")
+        result.setdefault("stale_days", "30")
+        result.setdefault("skip_companies", "")
+        result.setdefault("label_linkedin_noise", "true")
+        result.setdefault("hide_gig_noise", "true")
+        result.setdefault("gmail_account_email", "")
+        return result
+
+    def update_communication_settings(self, values: dict[str, str]) -> dict[str, str]:
+        for key, value in values.items():
+            self._db.execute("INSERT INTO communication_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [key, value])
+        return self.get_communication_settings()
+
+    def create_communication_conversation(
+        self, conversation: CommunicationConversation, *, request_id: str | None = None
+    ) -> CommunicationConversation:
+        """Persist a Communication conversation and its messages idempotently."""
+        existing = None
+        if request_id:
+            row = self._db.execute(
+                "SELECT id FROM communication_conversations WHERE request_id = ?", [request_id]
+            ).fetchone()
+            existing = row[0] if row else None
+        if existing:
+            return self.get_communication_conversation(str(existing)) or conversation
+        self._db.execute(
+            """INSERT INTO communication_conversations
+            (id,company,role,contact,source,market,channel,external_thread_id,lifecycle,retained,stage,
+             job_id,application_id,version,created_at,updated_at,request_id,retention_mode,retention_days,retain_until,
+             risk_level,risk_reasons)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [conversation.id, conversation.company, conversation.role, conversation.contact,
+             conversation.source.value, conversation.market.value, conversation.channel,
+             conversation.external_thread_id, conversation.lifecycle.value, int(conversation.retained),
+             conversation.stage.value, conversation.job_id, conversation.application_id, conversation.version,
+             conversation.created_at.isoformat(), conversation.updated_at.isoformat(), request_id,
+             conversation.retention_mode, conversation.retention_days,
+             conversation.retain_until.isoformat() if conversation.retain_until else None,
+             conversation.risk_level, json.dumps(conversation.risk_reasons)],
+        )
+        for message in conversation.messages:
+            self._insert_communication_message(message)
+        return conversation
+
+    def upsert_communication_email(
+        self, conversation: CommunicationConversation, message: CommunicationMessage
+    ) -> CommunicationConversation:
+        """Insert a Gmail thread/message while preserving human-set fields."""
+        existing_row = self._db.execute(
+            "SELECT id FROM communication_conversations WHERE source=? AND external_thread_id=?",
+            [conversation.source.value, conversation.external_thread_id],
+        ).fetchone()
+        if existing_row:
+            conversation_id = str(existing_row[0])
+            self._insert_communication_message(message.model_copy(update={"conversation_id": conversation_id}))
+            self._db.execute(
+                "UPDATE communication_conversations SET updated_at=? WHERE id=?",
+                [conversation.updated_at.isoformat(), conversation_id],
+            )
+            return self.get_communication_conversation(conversation_id) or conversation
+        return self.create_communication_conversation(conversation)
+
+    def _insert_communication_message(self, message: CommunicationMessage) -> None:
+        self._db.execute(
+            """INSERT OR IGNORE INTO communication_messages
+            (id,conversation_id,body,summary,source,channel,external_message_id,occurred_at,source_unread,
+             seen_at,handled_at,workspace_visible,is_actionable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [message.id, message.conversation_id, message.body, message.summary, message.source.value,
+             message.channel, message.external_message_id, message.occurred_at.isoformat(),
+             int(message.source_unread), message.seen_at.isoformat() if message.seen_at else None,
+             message.handled_at.isoformat() if message.handled_at else None, int(message.workspace_visible),
+             int(message.is_actionable)],
+        )
+
+    def get_communication_conversation(self, conversation_id: str) -> CommunicationConversation | None:
+        row = self._db.execute(
+            "SELECT * FROM communication_conversations WHERE id = ?", [conversation_id]
+        ).fetchone()
+        if not row:
+            return None
+        columns = [c.name for c in self._table(_COMM_CONVERSATIONS_TABLE).columns]
+        data = dict(zip(columns, row, strict=False))
+        messages = self._communication_messages(conversation_id, visible_only=False)
+        tasks = []
+        if data.get("job_id"):
+            tasks = [task.model_dump(mode="json") for task in self.list_job_tasks(str(data["job_id"])) if task.application_id == data.get("application_id") or task.application_id is None]
+        return CommunicationConversation(
+            id=data["id"], company=data["company"], role=data["role"], contact=data["contact"],
+            source=CommunicationSource(data["source"]), market=CommunicationMarket(data["market"]),
+            channel=data["channel"], external_thread_id=data.get("external_thread_id"),
+            lifecycle=ConversationLifecycle(data["lifecycle"]), retained=bool(data["retained"]),
+            stage=ConversationStage(data["stage"]), job_id=data.get("job_id"),
+            application_id=data.get("application_id"), version=int(data["version"]),
+            created_at=_parse_dt(data["created_at"]), updated_at=_parse_dt(data["updated_at"]), messages=messages, tasks=tasks,
+            retention_mode=data.get("retention_mode") or "14_days", retention_days=data.get("retention_days"),
+            retain_until=_parse_optional_dt(data.get("retain_until")),
+            risk_level=data.get("risk_level") or "none",
+            risk_reasons=_parse_string_list(data.get("risk_reasons")),
+        )
+
+    def _communication_messages(self, conversation_id: str, *, visible_only: bool = True) -> list[CommunicationMessage]:
+        sql = "SELECT * FROM communication_messages WHERE conversation_id = ?"
+        if visible_only:
+            sql += " AND workspace_visible = 1"
+        sql += " ORDER BY occurred_at DESC"
+        rows = self._db.execute(sql, [conversation_id]).fetchall()
+        columns = [c.name for c in self._table(_COMM_MESSAGES_TABLE).columns]
+        result = []
+        for row in rows:
+            d = dict(zip(columns, row, strict=False))
+            result.append(CommunicationMessage(
+                id=d["id"], conversation_id=d["conversation_id"], body=d["body"], summary=d["summary"],
+                source=CommunicationSource(d["source"]), channel=d["channel"],
+                external_message_id=d.get("external_message_id"), occurred_at=_parse_dt(d["occurred_at"]),
+                source_unread=bool(d["source_unread"]), seen_at=_parse_optional_dt(d.get("seen_at")),
+                handled_at=_parse_optional_dt(d.get("handled_at")), workspace_visible=bool(d["workspace_visible"]),
+                is_actionable=bool(d["is_actionable"])))
+        return result
+
+    def list_communication_conversations(
+        self, *, view: str = "pending", sources: list[str] | None = None,
+        market: str = "all", query: str = ""
+    ) -> list[CommunicationConversation]:
+        clauses = ["c.lifecycle = 'active'"]
+        params: list[object] = []
+        if view == "pending":
+            clauses.append("EXISTS (SELECT 1 FROM communication_messages m WHERE m.conversation_id=c.id AND m.workspace_visible=1 AND m.handled_at IS NULL AND m.is_actionable=1)")
+        elif view == "retained":
+            clauses.append("c.retained = 1")
+        if sources:
+            marks = ",".join("?" for _ in sources); clauses.append(f"c.source IN ({marks})"); params.extend(sources)
+        if market != "all": clauses.append("c.market = ?"); params.append(market)
+        if query:
+            clauses.append("(LOWER(c.company) LIKE ? OR LOWER(c.role) LIKE ?)"); q = f"%{query.lower()}%"; params.extend([q, q])
+        rows = self._db.execute(f"SELECT c.id FROM communication_conversations c WHERE {' AND '.join(clauses)} ORDER BY c.updated_at DESC", params).fetchall()
+        return [item for row in rows if (item := self.get_communication_conversation(str(row[0])))]
+
+    def communication_action(self, conversation_id: str, action: str, visible_ids: list[str], expected_version: int) -> CommunicationConversation | None:
+        current = self.get_communication_conversation(conversation_id)
+        if not current or current.version != expected_version:
+            return None
+        now = datetime.now(UTC).isoformat()
+        if action in {"keep", "handled", "archive", "delete"}:
+            if visible_ids:
+                marks = ",".join("?" for _ in visible_ids)
+                self._db.execute(f"UPDATE communication_messages SET handled_at = COALESCE(handled_at, ?), workspace_visible = CASE WHEN ? IN ('archive','delete') THEN 0 ELSE workspace_visible END WHERE conversation_id = ? AND id IN ({marks})", [now, action, conversation_id, *visible_ids])
+            if action == "keep": self._db.execute("UPDATE communication_conversations SET retained=1,version=version+1,updated_at=? WHERE id=?", [now, conversation_id])
+            elif action == "handled":
+                lifecycle = "active" if current.retained else "archived"
+                self._db.execute("UPDATE communication_conversations SET lifecycle=?,version=version+1,updated_at=? WHERE id=?", [lifecycle, now, conversation_id])
+            else:
+                lifecycle = "deleted" if action == "delete" else "archived"
+                self._db.execute("UPDATE communication_conversations SET lifecycle=?,retained=0,version=version+1,updated_at=? WHERE id=?", [lifecycle, now, conversation_id])
+        return self.get_communication_conversation(conversation_id)
+
+    def append_communication_record(
+        self, conversation_id: str, message: CommunicationMessage, *, request_id: str | None = None
+    ) -> CommunicationConversation | None:
+        current = self.get_communication_conversation(conversation_id)
+        if current is None or current.lifecycle != ConversationLifecycle.ACTIVE:
+            return None
+        if request_id:
+            prior = self._db.execute(
+                "SELECT id FROM communication_messages WHERE external_message_id = ?",
+                [f"manual:{request_id}"],
+            ).fetchone()
+            if prior:
+                return current
+        self._insert_communication_message(
+            message.model_copy(update={"external_message_id": f"manual:{request_id}" if request_id else message.external_message_id})
+        )
+        self._db.execute(
+            "UPDATE communication_conversations SET updated_at=?,version=version+1 WHERE id=?",
+            [message.occurred_at.isoformat(), conversation_id],
+        )
+        return self.get_communication_conversation(conversation_id)
+
+    def archive_expired_communication(self, *, now: datetime | None = None) -> int:
+        """Archive retained conversations past their quiet retention window."""
+        moment = now or datetime.now(UTC)
+        count = 0
+        rows = self._db.execute(
+            "SELECT id,retention_mode,retention_days,retain_until,updated_at FROM communication_conversations "
+            "WHERE lifecycle='active' AND retained=1"
+        ).fetchall()
+        for row in rows:
+            mode = str(row[1] or "14_days")
+            if mode == "manual":
+                continue
+            until = _parse_optional_dt(row[3])
+            if mode == "until_date":
+                expired = until is not None and until <= moment
+            else:
+                days = 30 if mode == "30_days" else (int(row[2]) if mode == "custom_days" and row[2] else 14)
+                updated = _parse_dt(row[4])
+                expired = updated + timedelta(days=max(1, days)) <= moment
+            if not expired:
+                continue
+            conversation = self.get_communication_conversation(str(row[0]))
+            if conversation and any(not bool(task.get("done")) for task in conversation.tasks):
+                continue
+            self._db.execute(
+                "UPDATE communication_conversations SET lifecycle='archived',version=version+1,updated_at=? WHERE id=?",
+                [moment.isoformat(), str(row[0])],
+            )
+            count += 1
+        return count
 
     def _ensure_applications_table(self) -> None:
         if _APP_TABLE not in self._db.table_names():
@@ -1715,6 +1984,9 @@ class JobRepository:
         if "source_url" in fields:
             url = fields["source_url"]
             payload["source_url"] = str(url).strip() if url else None
+        if "application_id" in fields:
+            application_id = fields["application_id"]
+            payload["application_id"] = str(application_id).strip() if application_id else None
         conn = self._db.conn
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -3825,6 +4097,19 @@ def _event_from_row(row: dict[str, Any]) -> ApplicationEvent:
 
 
 def _purpose_from_row(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return [raw] if raw.strip() else []
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    return []
+
+
+def _parse_string_list(raw: object) -> list[str]:
     if isinstance(raw, list):
         return [str(item).strip() for item in raw if str(item).strip()]
     if isinstance(raw, str) and raw:

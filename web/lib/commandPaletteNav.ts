@@ -22,6 +22,12 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
       keywords: "tracker pipeline applied interview offer closed packet",
     },
     {
+      label: "Communication",
+      hint: "Recruiting conversations and follow-up tasks",
+      href: "/communication",
+      keywords: "email boss zhilian messages conversations recruiter",
+    },
+    {
       label: "Materials",
       hint: "Documents, templates, and application answers",
       href: "/materials",

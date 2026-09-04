@@ -13,19 +13,21 @@ import { readLastMarket } from "@/lib/marketPrefs";
 import { cn } from "@/lib/utils";
 
 const PRIMARY: { href: string; label: string; page?: "search" | "jobs" }[] = [
+  { href: "/today", label: "Today" },
   { href: "/search", label: "Collect Jobs", page: "search" },
   { href: "/jobs", label: "Discover", page: "jobs" },
   { href: "/applications", label: "Applications" },
+  { href: "/communication", label: "Communication" },
   { href: "/tasks", label: "Tasks" },
   { href: "/materials", label: "Materials" },
 ];
 
 const SECONDARY = [
-  { href: "/career-archive", label: "Career Archive" },
+  { href: "/", label: "Overview" },
+  { href: "/interview", label: "Interview practice" },
+  { href: "/career-archive", label: "Profile & resume" },
   { href: "/notebook", label: "Notebook" },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/chat", label: "Chat" },
-  { href: "/interview", label: "Interview Prep" },
+  { href: "/chat", label: "Ask Sentinel" },
   { href: "/settings", label: "Settings" },
 ];
 

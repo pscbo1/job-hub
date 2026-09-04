@@ -82,3 +82,7 @@ data/auth_secret
 data/browser-profile/
 data/materials/
 site/
+
+# Local OAuth credentials
+credentials.json
+.communication-chrome/
