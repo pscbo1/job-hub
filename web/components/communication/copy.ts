@@ -1,6 +1,6 @@
 export const COMMUNICATION_COPY = {
   title: "Communication",
-  subtitle: "Review recruiting messages, keep what matters, and turn follow-ups into tasks.",
+  subtitle: "Triage recruiting messages and keep what needs a next step.",
   search: "Search company or role",
   pendingTab: "Needs action",
   retainedTab: "Saved conversations",

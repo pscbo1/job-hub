@@ -30,6 +30,7 @@ import type { Material, MaterialKind, MaterialVersion } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { Textarea } from "@/components/ui/textarea";
 
 type Lane = MaterialLane;
@@ -201,24 +202,22 @@ export function MaterialsLibrary({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-ink">Materials</h1>
-          <p className="mt-1 text-sm text-muted">
-            Documents and templates stay independent of application stage.
-          </p>
-        </div>
-        <Button
-          type="button"
-          onClick={() => {
-            setCreating(true);
-            setCreateDraft(emptyCreate(lane === "knowledge" ? "message_template" : "resume"));
-            setCreateError(null);
-          }}
-        >
-          {MATERIAL_LANE_COPY[lane].add}
-        </Button>
-      </div>
+      <PageHeader
+        title="Materials"
+        subtitle="Documents and templates stay independent of application stage."
+        actions={
+          <Button
+            type="button"
+            onClick={() => {
+              setCreating(true);
+              setCreateDraft(emptyCreate(lane === "knowledge" ? "message_template" : "resume"));
+              setCreateError(null);
+            }}
+          >
+            {MATERIAL_LANE_COPY[lane].add}
+          </Button>
+        }
+      />
 
       <div>
         <div className="flex flex-wrap gap-2">

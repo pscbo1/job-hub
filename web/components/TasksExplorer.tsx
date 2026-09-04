@@ -12,6 +12,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import { getApplications, getCollectSources, getHubJob, getJobs, patchHubJob, patchJobTask, type ApplicationStage, type HubJob, type JobTask, updateApplication } from "@/lib/api";
 import { dateInputValue, isDateOverdue, openTasksSorted, taskChipText, taskDueUrgency } from "@/lib/jobPipeline";
@@ -192,17 +193,14 @@ export function TasksExplorer() {
 
   return (
     <div className="space-y-4">
-      <header className="space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-ink">Tasks</h1>
-            <p className="mt-1 text-sm text-muted">
-              Open next steps, deadlines, and drafts across your jobs.
-            </p>
-          </div>
-          <TaskRemindersPanel />
-        </div>
+      <div className="space-y-4">
+        <PageHeader
+          className="mb-0"
+          title="Tasks"
+          subtitle="Open next steps, deadlines, and drafts across your jobs."
+        />
         <div className="flex flex-wrap items-center gap-3">
+          <TaskRemindersPanel />
           <div className="flex rounded-lg border border-line bg-surface p-0.5" role="tablist" aria-label="Task view">
             <button type="button" role="tab" aria-selected={view === "tasks"} onClick={() => setView("tasks")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "tasks" ? "bg-ink text-white" : "text-muted")}>My tasks</button>
             <button type="button" role="tab" aria-selected={view === "jobs"} onClick={() => setView("jobs")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "jobs" ? "bg-ink text-white" : "text-muted")}>By job</button>
@@ -220,7 +218,7 @@ export function TasksExplorer() {
             Filter ▾
           </Button>
         </div>
-      </header>
+      </div>
       {missingTask && <p className="text-sm text-amber-800">{missingTask}</p>}
       {showFilter && (
         <div className="flex flex-wrap items-center gap-3 border-y border-line bg-bg px-1 py-3">

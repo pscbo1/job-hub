@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 
 import { JobsExplorer } from "@/components/JobsExplorer";
 import { MarketSwitch } from "@/components/MarketSwitch";
+import { PageHeader } from "@/components/ui/page-header";
 import { getCollectSources, getJobs } from "@/lib/api";
 import {
   parseCountryParam,
@@ -62,14 +63,11 @@ export default async function MarketJobsPage({
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-5 py-12">
-      <div className="space-y-3">
-        <MarketSwitch current={market} page="jobs" />
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Discover</h1>
-        <p className="mt-1 text-sm text-muted">
-          {marketLabel(market)} jobs from collectors. Save, mark Reference, or start an application.
-          New jobs have no tracking until you act.
-        </p>
-      </div>
+      <PageHeader
+        title="Discover"
+        subtitle={`${marketLabel(market)} jobs from collectors. Save, mark Reference, or start an application. New jobs have no tracking until you act.`}
+      />
+      <MarketSwitch current={market} page="jobs" />
 
       <JobsExplorer
         jobs={jobs}

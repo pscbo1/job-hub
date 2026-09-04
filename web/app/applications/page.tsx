@@ -11,6 +11,7 @@ import { LocalSetupGuide } from "@/components/LocalSetupGuide";
 import { SubmitConfirm } from "@/components/SubmitConfirm";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 import { PopoverSelect } from "@/components/ui/popover-select";
 import {
   API_BASE,
@@ -445,22 +446,15 @@ export default function ApplicationsPage() {
 
   return (
     <div className={cn("mx-auto max-w-[1280px] px-5 py-12", styles.page)}>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-ink">Applications</h1>
-          <p className="mt-1 text-sm text-muted">
-            Track applications, next steps, and the materials you send.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <a href="/applications/materials" className={buttonVariants({ variant: "outline" })}>
-            Manage materials
-          </a>
+      <PageHeader
+        title="Applications"
+        subtitle="Track applications, next steps, and the materials you send."
+        actions={
           <Button type="button" onClick={openAdd}>
             Add application
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <div className={cn("mb-4", styles.toolbar)}>
         <div className={styles.searchGroup}>
@@ -508,6 +502,9 @@ export default function ApplicationsPage() {
               Close selected ({selected.length})
             </Button>
           )}
+          <a href="/applications/materials" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+            Manage materials
+          </a>
           <span className={cn("text-sm text-muted", styles.count)}>{visible.length} shown</span>
           <ApplicationViewOptions
             board={board}

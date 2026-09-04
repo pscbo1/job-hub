@@ -11,6 +11,7 @@ import { SearchPresetsBar } from "@/components/SearchPresetsBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardSub, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   collectJobs,
   createSearchPreset,
@@ -440,14 +441,13 @@ export function CollectJobsPage({ market }: { market: MarketId }) {
 
   return (
     <div className="mx-auto max-w-xl px-5 py-12">
-      <header className="mb-6 space-y-3">
+      <PageHeader
+        title="Collect Jobs"
+        subtitle={`Search selected ${market.toUpperCase()} sources and add matching jobs to your Job Pool. Browse and filter them on Job Pool — this page does not search jobs you already collected.`}
+      />
+      <div className="mb-6">
         <MarketSwitch current={market} page="search" />
-        <h1 className="text-3xl font-bold tracking-tight text-ink">Collect Jobs</h1>
-        <p className="mt-1 text-sm text-muted">
-          Search selected {market.toUpperCase()} sources and add matching jobs to your Job Pool.
-          Browse and filter them on Job Pool — this page does not search jobs you already collected.
-        </p>
-      </header>
+      </div>
 
       <Card className="space-y-4">
         <SearchPresetsBar

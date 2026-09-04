@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   createCompanySource,
   getCompanySources,
@@ -145,20 +146,22 @@ export function CompanySourcesPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-5 py-10">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-ink">{MANAGE_SOURCES_COPY.title}</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">{MANAGE_SOURCES_COPY.subtitle}</p>
-        </div>
-        <div className="flex gap-2">
-          <Link href="/search" className={buttonVariants({ variant: "outline" })}>
-            Back to Collect
-          </Link>
+      <PageHeader
+        title={MANAGE_SOURCES_COPY.title}
+        subtitle={
+          <>
+            {MANAGE_SOURCES_COPY.subtitle}{" "}
+            <Link href="/search" className="text-ink underline-offset-2 hover:underline">
+              Back to Collect
+            </Link>
+          </>
+        }
+        actions={
           <Button type="button" onClick={() => setAdding((value) => !value)}>
             {tab === "companies" ? COMPANY_SOURCES_COPY.add : VERTICAL_CHANNELS_COPY.add}
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <div className="flex gap-1 border-b border-line" role="tablist" aria-label="Manage sources sheets">
         {(["companies", "verticals"] as const).map((item) => (

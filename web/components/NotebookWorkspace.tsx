@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createNotebookPage,
@@ -78,24 +79,21 @@ export function NotebookWorkspace() {
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-10">
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-ink">{NOTEBOOK_COPY.title}</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">{NOTEBOOK_COPY.subtitle}</p>
-        </div>
-        <Button type="button" onClick={() => void newPage()}>
-          {NOTEBOOK_COPY.newPage}
-        </Button>
-      </header>
+      <PageHeader title={NOTEBOOK_COPY.title} subtitle={NOTEBOOK_COPY.subtitle} />
 
       <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <aside className="rounded-2xl border border-line bg-surface p-3">
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={NOTEBOOK_COPY.search}
-            className="h-9"
-          />
+          <div className="mb-3 flex items-center gap-2">
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={NOTEBOOK_COPY.search}
+              className="h-8"
+            />
+            <Button type="button" size="sm" onClick={() => void newPage()}>
+              {NOTEBOOK_COPY.newPage}
+            </Button>
+          </div>
           <div className="mt-2 flex gap-1">
             {(["updated", "title"] as const).map((item) => (
               <button
@@ -179,16 +177,7 @@ export function NotebookWorkspace() {
               <p className="text-[11px] text-muted">{saving ? "Saving…" : "Saved when you leave the field."}</p>
             </div>
           ) : (
-            <EmptyState
-              title={query || topic ? NOTEBOOK_COPY.emptySearchTitle : NOTEBOOK_COPY.emptyTitle}
-              action={
-                query || topic ? undefined : (
-                  <Button type="button" onClick={() => void newPage()}>
-                    {NOTEBOOK_COPY.newPage}
-                  </Button>
-                )
-              }
-            >
+            <EmptyState title={query || topic ? NOTEBOOK_COPY.emptySearchTitle : NOTEBOOK_COPY.emptyTitle}>
               {query || topic ? NOTEBOOK_COPY.emptySearch : NOTEBOOK_COPY.empty}
             </EmptyState>
           )}

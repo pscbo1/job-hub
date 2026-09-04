@@ -249,60 +249,10 @@ export function CommunicationWorkspace() {
   return (
     <main className="mx-auto max-w-6xl px-5 py-12">
       <CommunicationHeader
-        syncMessage={syncMessage}
         settingsOpen={settingsOpen}
-        onRefresh={() => void load()}
         onToggleSettings={() => setSettingsOpen((value) => !value)}
         onManual={() => setManualOpen(true)}
       />
-      {settingsOpen ? (
-        <div className="mb-5">
-          <CommunicationSettings
-            market={market}
-            source={source}
-            retentionMode={retentionMode}
-            filterSettings={filterSettings}
-            gmailReady={gmailReady}
-            gmailConnected={gmailConnected}
-            syncing={syncing}
-            platforms={platforms}
-            browserMessage={browserMessage}
-            captureDraft={captureDraft}
-            onMarket={setMarket}
-            onSource={setSource}
-            onRetention={setRetentionMode}
-            onFilter={setFilterSettings}
-            onSave={() => void saveSettings()}
-            onConnectGmail={() => void onConnectGmail()}
-            onSyncGmail={() => void onSyncGmail()}
-            onDisconnectGmail={() => void onDisconnectGmail()}
-            onCapture={(platform) => void onCapturePlatform(platform)}
-            onSaveCapture={() => void onSaveCapture()}
-            onDiscardCapture={() => setCaptureDraft(null)}
-          />
-        </div>
-      ) : null}
-      {manualOpen ? (
-        <div className="mb-5">
-          <ManualRecordPanel
-            manual={manual}
-            manualChannel={manualChannel}
-            manualOtherChannel={manualOtherChannel}
-            newJobOpen={newJobOpen}
-            newJob={newJob}
-            jobOptions={jobOptions}
-            onManual={setManual}
-            onChannel={setManualChannel}
-            onOtherChannel={setManualOtherChannel}
-            onToggleNewJob={() => setNewJobOpen((value) => !value)}
-            onNewJob={setNewJob}
-            onLoadJobs={() => void onLoadJobs()}
-            onCreateJob={() => void onCreateJob()}
-            onSave={() => void onCreateManual()}
-            onCancel={() => setManualOpen(false)}
-          />
-        </div>
-      ) : null}
       <div className="space-y-4">
         <CommunicationFilters
           query={query}
@@ -313,6 +263,7 @@ export function CommunicationWorkspace() {
           onMarket={setMarket}
         />
         <CommunicationTabs view={view} onView={setView} />
+        {syncMessage ? <p className="text-xs text-muted">{syncMessage}</p> : null}
         {!loading && items.length === 0 ? (
           <EmptyState
             title={empty.title}
@@ -325,7 +276,7 @@ export function CommunicationWorkspace() {
             {empty.body}
           </EmptyState>
         ) : (
-          <div className="grid min-h-[32rem] overflow-hidden rounded-lg border border-line bg-surface md:grid-cols-[minmax(220px,32%)_1fr]">
+          <div className="grid min-h-[32rem] overflow-hidden rounded-lg border border-line bg-surface md:grid-cols-[minmax(220px,35%)_1fr]">
             <section className="border-b border-line md:border-b-0 md:border-r md:border-line">
               <ConversationList
                 items={items}
@@ -334,7 +285,7 @@ export function CommunicationWorkspace() {
                 onSelect={setSelected}
               />
             </section>
-            <section className="p-5">
+            <section>
               <ConversationDetail
                 selected={selected}
                 taskTitle={taskTitle}
@@ -360,6 +311,69 @@ export function CommunicationWorkspace() {
           </div>
         )}
       </div>
+      {settingsOpen ? (
+        <div className="fixed inset-0 z-50">
+          <button
+            type="button"
+            className="absolute inset-0 bg-ink/30"
+            aria-label="Close settings"
+            onClick={() => setSettingsOpen(false)}
+          />
+          <aside className="absolute inset-y-0 right-0 w-full max-w-lg overflow-y-auto border-l border-line bg-surface p-5 shadow-xl">
+            <div className="mb-4 flex justify-end">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setSettingsOpen(false)}>
+                Close
+              </Button>
+            </div>
+            <CommunicationSettings
+              market={market}
+              source={source}
+              retentionMode={retentionMode}
+              filterSettings={filterSettings}
+              gmailReady={gmailReady}
+              gmailConnected={gmailConnected}
+              syncing={syncing}
+              platforms={platforms}
+              browserMessage={browserMessage}
+              captureDraft={captureDraft}
+              onMarket={setMarket}
+              onSource={setSource}
+              onRetention={setRetentionMode}
+              onFilter={setFilterSettings}
+              onSave={() => void saveSettings()}
+              onConnectGmail={() => void onConnectGmail()}
+              onSyncGmail={() => void onSyncGmail()}
+              onDisconnectGmail={() => void onDisconnectGmail()}
+              onCapture={(platform) => void onCapturePlatform(platform)}
+              onSaveCapture={() => void onSaveCapture()}
+              onDiscardCapture={() => setCaptureDraft(null)}
+            />
+          </aside>
+        </div>
+      ) : null}
+      {manualOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-ink/35 p-4">
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto">
+            <ManualRecordPanel
+              manual={manual}
+              manualChannel={manualChannel}
+              manualOtherChannel={manualOtherChannel}
+              newJobOpen={newJobOpen}
+              newJob={newJob}
+              jobOptions={jobOptions}
+              onManual={setManual}
+              onChannel={setManualChannel}
+              onOtherChannel={setManualOtherChannel}
+              onToggleNewJob={() => setNewJobOpen((value) => !value)}
+              onNewJob={setNewJob}
+              onLoadJobs={() => void onLoadJobs()}
+              onCreateJob={() => void onCreateJob()}
+              onSave={() => void onCreateManual()}
+              onCancel={() => setManualOpen(false)}
+            />
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

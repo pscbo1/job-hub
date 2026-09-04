@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowRight, BriefcaseBusiness, CheckSquare, Compass } from "lucide-react";
+import { BriefcaseBusiness, CheckSquare, Compass } from "lucide-react";
 
+import { buttonVariants } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { getApplications, getJobs } from "@/lib/api";
-import { todaySuggestions, todayWorkspaceState, type TodayKind } from "@/lib/today";
+import { todaySuggestions, type TodayKind } from "@/lib/today";
 
 const ICONS: Record<TodayKind, typeof BriefcaseBusiness> = {
   collect: BriefcaseBusiness,
@@ -16,12 +18,13 @@ const ICONS: Record<TodayKind, typeof BriefcaseBusiness> = {
 };
 
 export default function TodayPage() {
-  const [suggestions, setSuggestions] = useState(todaySuggestions({
-    hasJobs: false,
-    hasApplications: false,
-    hasTasks: false,
-  }));
-  const [stateLabel, setStateLabel] = useState("Getting started");
+  const [suggestions, setSuggestions] = useState(
+    todaySuggestions({
+      hasJobs: false,
+      hasApplications: false,
+      hasTasks: false,
+    }),
+  );
 
   useEffect(() => {
     const load = async () => {
@@ -35,7 +38,6 @@ export default function TodayPage() {
         hasApplications: applications.length > 0,
         hasTasks: taskJobs.length > 0,
       };
-      setStateLabel(todayWorkspaceState(snapshot).label);
       setSuggestions(todaySuggestions(snapshot));
     };
     void load();
@@ -43,31 +45,24 @@ export default function TodayPage() {
 
   return (
     <main className="mx-auto max-w-5xl px-5 py-12">
-      <header className="mb-8">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight text-ink">Today</h1>
-          <span className="rounded border border-line px-2 py-1 text-xs text-muted">{stateLabel}</span>
-        </div>
-        <p className="mt-2 text-sm text-muted">
-          Suggested next steps. They do not change your records.
-        </p>
-      </header>
+      <PageHeader
+        title="Today"
+        subtitle="Suggested next steps. They do not change your records."
+      />
       <section className="grid gap-3 sm:grid-cols-3">
         {suggestions.map(({ href, label, detail, kind }) => {
           const Icon = ICONS[kind];
           return (
-            <Link
-              key={href}
-              href={href}
-              className="group rounded-lg border border-line bg-surface p-5 transition-colors hover:border-brand/50 hover:bg-brand/[0.03]"
-            >
+            <article key={href} className="flex flex-col rounded-lg border border-line bg-surface p-5">
               <Icon className="h-5 w-5 text-brand" aria-hidden="true" />
-              <h2 className="mt-5 flex items-center gap-2 font-medium text-ink">
-                {label}
-                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" aria-hidden="true" />
-              </h2>
-              <p className="mt-2 text-sm leading-relaxed text-muted">{detail}</p>
-            </Link>
+              <h2 className="mt-5 font-medium text-ink">{label}</h2>
+              <p className="mt-2 flex-1 text-sm leading-relaxed text-muted">{detail}</p>
+              <div className="mt-4 flex justify-end">
+                <Link href={href} className={buttonVariants({ variant: "dark", size: "sm" })}>
+                  Go
+                </Link>
+              </div>
+            </article>
           );
         })}
       </section>
