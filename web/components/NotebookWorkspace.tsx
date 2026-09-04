@@ -162,7 +162,13 @@ export function NotebookWorkspace() {
                   onBlur={(event) => void save({ title: event.target.value })}
                   className="text-lg font-semibold"
                 />
-                <Button type="button" variant="outline" size="sm" onClick={() => void remove()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="border-red-300 text-red-700 hover:border-red-400 hover:bg-red-50"
+                  onClick={() => void remove()}
+                >
                   {NOTEBOOK_COPY.delete}
                 </Button>
               </div>

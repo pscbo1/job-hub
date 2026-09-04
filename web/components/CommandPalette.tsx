@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   BookOpen,
   Briefcase,
+  Calendar,
   ClipboardList,
   CornerDownLeft,
   Files,
@@ -46,6 +47,7 @@ interface Item {
 
 const NAV_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   "/": Home,
+  "/today": Calendar,
   "/dashboard": LayoutDashboard,
   "/search": Search,
   "/chat": MessageSquare,
@@ -67,7 +69,7 @@ const ITEMS: Item[] = [
     label: "GitHub",
     hint: "Star the repo — it keeps the project alive",
     icon: GithubIcon,
-    href: "https://github.com/harshitwandhare/job-sentinel",
+    href: "https://github.com/pscbo1/job-hub",
     group: "Resources",
     external: true,
     keywords: "source star repository",

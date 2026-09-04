@@ -1,7 +1,5 @@
 /** Notebook pages: free writing with #topic hashtags. Not Materials. */
 
-/** Notebook pages: free writing with #topic hashtags. Not Materials. */
-
 export const NOTEBOOK_COPY = {
   title: "Notebook",
   subtitle:

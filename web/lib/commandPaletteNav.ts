@@ -2,7 +2,8 @@
 
 export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; keywords?: string }[] =
   [
-    { label: "Home", hint: "Landing page", href: "/" },
+    { label: "Today", hint: "Smallest next steps for the search", href: "/today", keywords: "today start" },
+    { label: "Overview", hint: "Landing page", href: "/", keywords: "home landing" },
     {
       label: "Collect Jobs",
       hint: "Collect jobs from Zhaopin, Liepin, Boss",
@@ -63,7 +64,7 @@ export const COMMAND_PALETTE_NAV: { label: string; href: string; hint: string; k
       href: "/dashboard",
       keywords: "overview funnel stats home",
     },
-    { label: "Chat", hint: "Ask Sentinel about your jobs", href: "/chat" },
+    { label: "Ask Sentinel", hint: "Ask Sentinel about your jobs", href: "/chat", keywords: "chat" },
     {
       label: "Settings",
       hint: "LLM providers, API keys, model config",
