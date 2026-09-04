@@ -79,21 +79,24 @@ export function NotebookWorkspace() {
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-10">
-      <PageHeader title={NOTEBOOK_COPY.title} subtitle={NOTEBOOK_COPY.subtitle} />
+      <PageHeader
+        title={NOTEBOOK_COPY.title}
+        subtitle={NOTEBOOK_COPY.subtitle}
+        actions={
+          <Button type="button" onClick={() => void newPage()}>
+            {NOTEBOOK_COPY.newPage}
+          </Button>
+        }
+      />
 
       <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <aside className="rounded-2xl border border-line bg-surface p-3">
-          <div className="mb-3 flex items-center gap-2">
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={NOTEBOOK_COPY.search}
-              className="h-8"
-            />
-            <Button type="button" size="sm" onClick={() => void newPage()}>
-              {NOTEBOOK_COPY.newPage}
-            </Button>
-          </div>
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={NOTEBOOK_COPY.search}
+            className="h-9"
+          />
           <div className="mt-2 flex gap-1">
             {(["updated", "title"] as const).map((item) => (
               <button

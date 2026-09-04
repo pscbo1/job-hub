@@ -450,9 +450,14 @@ export default function ApplicationsPage() {
         title="Applications"
         subtitle="Track applications, next steps, and the materials you send."
         actions={
-          <Button type="button" onClick={openAdd}>
-            Add application
-          </Button>
+          <>
+            <a href="/applications/materials" className={buttonVariants({ variant: "ghost" })}>
+              Manage materials
+            </a>
+            <Button type="button" onClick={openAdd}>
+              Add application
+            </Button>
+          </>
         }
       />
 
@@ -502,9 +507,6 @@ export default function ApplicationsPage() {
               Close selected ({selected.length})
             </Button>
           )}
-          <a href="/applications/materials" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-            Manage materials
-          </a>
           <span className={cn("text-sm text-muted", styles.count)}>{visible.length} shown</span>
           <ApplicationViewOptions
             board={board}

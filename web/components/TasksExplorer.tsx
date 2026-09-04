@@ -198,9 +198,9 @@ export function TasksExplorer() {
           className="mb-0"
           title="Tasks"
           subtitle="Open next steps, deadlines, and drafts across your jobs."
+          actions={<TaskRemindersPanel />}
         />
         <div className="flex flex-wrap items-center gap-3">
-          <TaskRemindersPanel />
           <div className="flex rounded-lg border border-line bg-surface p-0.5" role="tablist" aria-label="Task view">
             <button type="button" role="tab" aria-selected={view === "tasks"} onClick={() => setView("tasks")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "tasks" ? "bg-ink text-white" : "text-muted")}>My tasks</button>
             <button type="button" role="tab" aria-selected={view === "jobs"} onClick={() => setView("jobs")} className={cn("rounded-md px-2.5 py-1.5 text-xs", view === "jobs" ? "bg-ink text-white" : "text-muted")}>By job</button>

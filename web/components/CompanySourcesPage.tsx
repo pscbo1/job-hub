@@ -150,10 +150,12 @@ export function CompanySourcesPage() {
         title={MANAGE_SOURCES_COPY.title}
         subtitle={
           <>
-            {MANAGE_SOURCES_COPY.subtitle}{" "}
-            <Link href="/search" className="text-ink underline-offset-2 hover:underline">
-              Back to Collect
-            </Link>
+            {MANAGE_SOURCES_COPY.subtitle}
+            <span className="mt-1 block">
+              <Link href="/search" className="text-muted hover:text-ink">
+                Back to Collect
+              </Link>
+            </span>
           </>
         }
         actions={
