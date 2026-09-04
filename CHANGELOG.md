@@ -23,6 +23,7 @@ Versions follow [Semantic Versioning](https://semver.org):
 
 ### Changed
 
+- **Communication / Today / Nav chrome.** Communication page hierarchy matches Collect / Applications / Tasks: header + filters + Needs action / Saved conversations + list/detail. Gmail, platform capture, and rules live in a collapsed Settings panel. Keep is ink, Archive is outline, Delete is red outline, Undo is ghost. Today uses `NEXT_PUBLIC_API_BASE` and no longer treats Example Labs demo rows as real work, or calls a populated workspace empty. Nav and Command Palette point at `pscbo1/job-hub`; palette includes Today and uses Overview.
 - New jobs have no Save/Reference until the user acts. Applied / Interview / Offer / Closed live only on Application. Closed is history.
 - Application close reasons remain optional (`not_selected` / `no_response` / `withdrew` / `other`). No required Close modal. No Rejected stage.
 - Idle auto-archive (default off, 14 days) sets Job `archived_at` only for Excluded/Dismissed jobs. Archived excluded jobs remain listed under Excluded. Collectors leave `last_activity_at` unset.
