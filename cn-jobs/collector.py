@@ -232,6 +232,8 @@ def run(platform, max_new, write):
         cli = CLI(platform, state, time.monotonic()+int(os.getenv('MAX_SECONDS','600')))
         rows, observed = [], {}
         new_count = 0
+        skipped_details = []
+        consecutive_failures = 0
         error = None
         next_cursor = cursor
         try:
@@ -252,14 +254,33 @@ def run(platform, max_new, write):
                         old = next(r for r in existing[1:] if r and r[0] == key)
                         row = (old + ['']*17)[:17]
                         if not row[10].strip():
-                            row = normalize(platform, card, cli.detail(card), keyword, batch)
+                            try:
+                                row = normalize(platform, card, cli.detail(card), keyword, batch)
+                            except (ValueError, RuntimeError) as exc:
+                                if isinstance(exc, RuntimeError) and str(exc) != 'CLI_PARSE_FAILED':
+                                    raise
+                                skipped_details.append({'key':key,'query':keyword,'city':city,'url':card.get('url',card.get('job_url','')),'stage':'detail','reason':str(exc)[:100]})
+                                consecutive_failures += 1
+                                if consecutive_failures >= 3:
+                                    raise RuntimeError('CONSECUTIVE_DETAIL_PARSE_FAILURES') from exc
+                                continue
                         else:
                             row[11], row[13], row[14] = keyword, now(), batch
                     else:
                         if max_new and new_count >= max_new:
                             break
-                        row = normalize(platform, card, cli.detail(card), keyword, batch)
+                        try:
+                            row = normalize(platform, card, cli.detail(card), keyword, batch)
+                        except (ValueError, RuntimeError) as exc:
+                            if isinstance(exc, RuntimeError) and str(exc) != 'CLI_PARSE_FAILED':
+                                raise
+                            skipped_details.append({'key':key,'query':keyword,'city':city,'url':card.get('url',card.get('job_url','')),'stage':'detail','reason':str(exc)[:100]})
+                            consecutive_failures += 1
+                            if consecutive_failures >= 3:
+                                raise RuntimeError('CONSECUTIVE_DETAIL_PARSE_FAILURES') from exc
+                            continue
                         new_count += 1
+                    consecutive_failures = 0
                     rows.append(row)
                     observed[key] = row
                 next_cursor = (pos+1) % len(queries)
@@ -269,6 +290,7 @@ def run(platform, max_new, write):
             error = type(exc).__name__ + ': ' + str(exc)[:160]
         artifact = state/f'{batch}.json'
         artifact.write_text(json.dumps(rows, ensure_ascii=False, indent=2))
+        (state/f'{batch}-issues.json').write_text(json.dumps(skipped_details, ensure_ascii=False, indent=2))
         os.chmod(artifact, 0o600)
         if client and rows:
             pending.write_text(json.dumps(rows, ensure_ascii=False))
@@ -279,7 +301,7 @@ def run(platform, max_new, write):
             counts = {'new':new_count, 'updated':len(rows)-new_count}
         # Failed queries are retried next run; rotate successful queries to cover all cities/terms.
         cursor_path.write_text(json.dumps(next_cursor))
-        report = {'platform':platform,'batch':batch,'write':write,**counts,'rows':len(rows),'error':error}
+        report = {'platform':platform,'batch':batch,'write':write,**counts,'rows':len(rows),'skipped_details':len(skipped_details),'error':error}
         (state/'last-run.json').write_text(json.dumps(report, ensure_ascii=False))
         print(json.dumps(report, ensure_ascii=False))
         if error:

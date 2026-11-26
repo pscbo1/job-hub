@@ -72,3 +72,26 @@ def test_auth_bootstrap_imports_once_without_overwriting_refreshed_session(tmp_p
     session.write_bytes(b'newer refreshed encrypted bytes')
     bootstrap_boss(tmp_path)
     assert session.read_bytes() == b'newer refreshed encrypted bytes'
+
+
+def test_single_missing_detail_does_not_discard_other_jobs(tmp_path, monkeypatch):
+    import json
+    import collector
+    monkeypatch.setenv('STATE_DIR', str(tmp_path))
+    monkeypatch.setenv('MAX_QUERIES','1')
+    class FakeCLI:
+        def __init__(self, *args): pass
+        def search(self, *args):
+            return [{'id':str(i),'url':f'https://www.liepin.com/job/{i}.shtml','title':'研究助理','company':'公司'} for i in (123,456)]
+        def detail(self, card):
+            if card['id'] == '123':
+                raise RuntimeError('CLI_PARSE_FAILED')
+            return {'description':'真实完整职责'}
+    monkeypatch.setattr(collector, 'CLI', FakeCLI)
+    collector.run('liepin', 0, False)
+    report = json.loads((tmp_path/'last-run.json').read_text())
+    assert report['rows'] == 1
+    assert report['skipped_details'] == 1
+    assert report['error'] is None
+    issues = json.loads(next(tmp_path.glob('*-issues.json')).read_text())
+    assert issues[0]['key'] == 'liepin:123'
