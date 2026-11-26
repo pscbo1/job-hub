@@ -157,7 +157,7 @@ class CLI:
             cmd = ['node', str(ROOT/'vendor/liepin/src/cli.ts')] + args + ['--format','json']
         else:
             cmd = ['boss','--data-dir',str(self.state/'boss'),'--json','--browser-source','httpx-only'] + args
-        result = subprocess.run(cmd, text=True, capture_output=True, timeout=min(60, remaining))
+        result = subprocess.run(cmd, text=True, capture_output=True, timeout=min(120, remaining))
         try:
             body = json.loads(result.stdout if result.stdout.strip() else result.stderr)
         except ValueError:
