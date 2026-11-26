@@ -6,5 +6,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY collector.py .
 COPY vendor ./vendor
-ENV PYTHONUNBUFFERED=1 STATE_DIR=/data MAX_SECONDS=600 MAX_NEW=20
+ENV PYTHONUNBUFFERED=1 STATE_DIR=/data MAX_SECONDS=600 MAX_NEW=0
 CMD ["python", "collector.py"]

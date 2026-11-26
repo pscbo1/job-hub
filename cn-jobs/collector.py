@@ -235,11 +235,11 @@ def run(platform, max_new, write):
         error = None
         next_cursor = cursor
         try:
-            for offset in range(min(int(os.getenv('MAX_QUERIES','3')), len(queries))):
+            for offset in range(min(int(os.getenv('MAX_QUERIES','21')), len(queries))):
                 pos = (cursor + offset) % len(queries)
                 keyword, city = queries[pos]
                 print(json.dumps({'platform':platform,'phase':'search','query':keyword,'city':city}, ensure_ascii=False), flush=True)
-                cards = cli.search(keyword, city, int(os.getenv('SEARCH_LIMIT','10')))
+                cards = cli.search(keyword, city, int(os.getenv('SEARCH_LIMIT','40')))
                 for card in cards:
                     jid = canonical_id(platform, card)
                     key = f'{platform}:{jid}'
@@ -256,14 +256,14 @@ def run(platform, max_new, write):
                         else:
                             row[11], row[13], row[14] = keyword, now(), batch
                     else:
-                        if new_count >= max_new:
+                        if max_new and new_count >= max_new:
                             break
                         row = normalize(platform, card, cli.detail(card), keyword, batch)
                         new_count += 1
                     rows.append(row)
                     observed[key] = row
                 next_cursor = (pos+1) % len(queries)
-                if new_count >= max_new:
+                if max_new and new_count >= max_new:
                     break
         except Exception as exc:
             error = type(exc).__name__ + ': ' + str(exc)[:160]
@@ -289,9 +289,9 @@ def run(platform, max_new, write):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--platform', choices=['boss','liepin'], default=os.getenv('PLATFORM','liepin'))
-    parser.add_argument('--max-new', type=int, default=int(os.getenv('MAX_NEW','20')))
+    parser.add_argument('--max-new', type=int, default=int(os.getenv('MAX_NEW','0')))
     parser.add_argument('--write', action='store_true', default=os.getenv('SHEETS_WRITE_ENABLED') == 'true')
     args = parser.parse_args()
-    if not 1 <= args.max_new <= 50:
-        parser.error('--max-new must be between 1 and 50')
+    if args.max_new < 0:
+        parser.error('--max-new must be non-negative; 0 means no row-count cap')
     run(args.platform, args.max_new, args.write)
