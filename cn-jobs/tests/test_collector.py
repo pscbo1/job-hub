@@ -59,3 +59,16 @@ def test_real_writer_raw_only_A_Q_readback_keeps_QA():
     assert api.grid[1][17:] == old[17:]
     assert api.grid[1][10].startswith('=literal')
     assert api.write_verify([new]) == {'new':0,'updated':1}
+
+
+def test_auth_bootstrap_imports_once_without_overwriting_refreshed_session(tmp_path, monkeypatch):
+    import base64
+    import json
+    from collector import bootstrap_boss
+    bundle = {'machine_id':'stable-test-id', 'salt':base64.b64encode(b'x'*16).decode(), 'session.enc':base64.b64encode(b'encrypted-test-bytes').decode()}
+    monkeypatch.setenv('BOSS_AUTH_JSON', json.dumps(bundle))
+    bootstrap_boss(tmp_path)
+    session = tmp_path/'boss'/'auth'/'session.enc'
+    session.write_bytes(b'newer refreshed encrypted bytes')
+    bootstrap_boss(tmp_path)
+    assert session.read_bytes() == b'newer refreshed encrypted bytes'

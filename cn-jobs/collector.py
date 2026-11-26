@@ -1,5 +1,6 @@
 """Bounded read-only collectors -> A:Q only. No ranking or application actions."""
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -179,18 +180,49 @@ class CLI:
         return self.call(['detail', card['security_id'], '--job-id',card['job_id']])['data']
 
 
+
+def bootstrap_boss(state):
+    """Optional private handoff from the user's local CLI; never log the payload."""
+    payload = os.environ.get('BOSS_AUTH_JSON')
+    if not payload:
+        return
+    auth = json.loads(payload)
+    machine_id = auth['machine_id']
+    if not isinstance(machine_id, str) or not machine_id:
+        raise ValueError('Invalid Boss authentication bundle')
+    os.environ['BOSS_AGENT_MACHINE_ID'] = machine_id
+    digest = hashlib.sha256(payload.encode()).hexdigest()
+    auth_dir = state/'boss'/'auth'
+    auth_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    marker = auth_dir/'import-version'
+    if marker.exists() and marker.read_text() == digest:
+        return
+    files = {name:base64.b64decode(auth[name], validate=True) for name in ('salt','session.enc')}
+    if len(files['salt']) != 16 or not files['session.enc']:
+        raise ValueError('Invalid Boss authentication bundle')
+    for name, data in files.items():
+        path = auth_dir/name
+        path.write_bytes(data)
+        os.chmod(path, 0o600)
+    marker.write_text(digest)
+    os.chmod(marker, 0o600)
+
+
 def run(platform, max_new, write):
     state = Path(os.getenv('STATE_DIR', str(ROOT/'state')))
     state.mkdir(parents=True, exist_ok=True)
     os.chmod(state, 0o700)
     with (state/f'{platform}.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if platform == 'boss':
+            bootstrap_boss(state)
         client = Sheets() if write else None
         # Retry a previous exact batch before any new scrape. Idempotency comes from sheet keys.
         pending = state/f'{platform}-pending.json'
         if client and pending.exists():
             client.write_verify(json.loads(pending.read_text()))
             pending.unlink()
+        print(json.dumps({'platform':platform,'phase':'reading_sheet' if client else 'dry_run'}), flush=True)
         existing = client.read()[0] if client else [HEADERS]
         known = {r[0] for r in existing[1:] if r}
         batch = platform + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -206,6 +238,7 @@ def run(platform, max_new, write):
             for offset in range(min(int(os.getenv('MAX_QUERIES','3')), len(queries))):
                 pos = (cursor + offset) % len(queries)
                 keyword, city = queries[pos]
+                print(json.dumps({'platform':platform,'phase':'search','query':keyword,'city':city}, ensure_ascii=False), flush=True)
                 cards = cli.search(keyword, city, int(os.getenv('SEARCH_LIMIT','10')))
                 for card in cards:
                     jid = canonical_id(platform, card)
